@@ -27,6 +27,26 @@ interface PreviewPaneProps {
 type ViewportPreset = 'desktop' | 'tablet' | 'mobile';
 
 const PREVIEW_LOAD_TIMEOUT_MS = 12_000;
+const SAFE_REQ_ID_REGEX = /^[a-zA-Z0-9_-]{4,64}$/;
+
+function generateBridgeNonce(): string {
+  const bytes = new Uint8Array(16);
+  if (typeof window !== 'undefined' && window.crypto?.getRandomValues) {
+    window.crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i++) {
+      bytes[i] = Math.floor(Math.random() * 256);
+    }
+  }
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function scrubClientPreviewMessage(text: string): string {
+  return text
+    .replace(/(\/preview\/[^/\s?#]+\/t\/)[A-Za-z0-9._-]+/gi, '$1[REDACTED_TOKEN]')
+    .replace(/([?&]pt=)[A-Za-z0-9._-]+/gi, '$1[REDACTED_TOKEN]')
+    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{16,}\b/g, '[REDACTED_TOKEN]');
+}
 
 export function PreviewPane({
   projectId,
@@ -54,36 +74,118 @@ export function PreviewPane({
   const [iframeLoading, setIframeLoading] = useState(!isEmptyApp);
   const [iframeLoaded, setIframeLoaded] = useState(false);
   const [previewReady, setPreviewReady] = useState(false);
+  const [srcDocHtml, setSrcDocHtml] = useState<string | null>(null);
+  const [renderNonce, setRenderNonce] = useState<string>('');
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const bridgeNonceRef = useRef<string>('');
   const tokenRecoveryAttemptedRef = useRef(false);
   const readyNotifiedRef = useRef(false);
 
   const normalizedOrigin = previewOrigin ? previewOrigin.replace(/\/+$/, '') : '';
-  const previewBasePath = previewToken
-    ? `${normalizedOrigin}/preview/${projectId}/t/${previewToken}/`
-    : `${normalizedOrigin}/preview/${projectId}/`;
-  const previewUrl = `${previewBasePath}?v=${reloadKey}`;
+  const previewBasePath = `${normalizedOrigin}/preview/${projectId}/`;
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
+
+    if (isEmptyApp || installingDependencies) {
+      queueMicrotask(() => {
+        if (cancelled) return;
+        setSrcDocHtml(null);
+        setIframeError(null);
+        setErrorStatusCode(null);
+        setPreviewReady(false);
+        setIframeLoaded(false);
+        setIframeLoading(false);
+        readyNotifiedRef.current = false;
+        tokenRecoveryAttemptedRef.current = false;
+      });
+      return () => {
+        cancelled = true;
+        controller.abort();
+      };
+    }
+
+    const nonce = generateBridgeNonce();
+    bridgeNonceRef.current = nonce;
+
     queueMicrotask(() => {
       if (cancelled) return;
+      setRenderNonce(nonce);
+      setSrcDocHtml(null);
       setIframeError(null);
       setErrorStatusCode(null);
       setPreviewReady(false);
       setIframeLoaded(false);
+      setIframeLoading(true);
       readyNotifiedRef.current = false;
       tokenRecoveryAttemptedRef.current = false;
-      if (!isEmptyApp && !installingDependencies) {
-        setIframeLoading(true);
-      } else {
-        setIframeLoading(false);
-      }
     });
+
+    const loadPreviewHtml = async () => {
+      try {
+        const headers: Record<string, string> = {
+          'X-Carmen-Preview-Bridge-Nonce': nonce,
+          'X-Carmen-Preview-Parent-Origin': window.location.origin,
+        };
+        if (previewToken) {
+          headers['X-Carmen-Preview-Token'] = previewToken;
+        }
+
+        const resp = await fetch(`${previewBasePath}?v=${reloadKey}`, {
+          method: 'GET',
+          headers,
+          credentials: previewToken ? 'omit' : 'include',
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+
+        if (cancelled) return;
+
+        if ((resp.status === 401 || resp.status === 403) && onTokenExpired && !tokenRecoveryAttemptedRef.current) {
+          tokenRecoveryAttemptedRef.current = true;
+          void onTokenExpired();
+          return;
+        }
+
+        const html = await resp.text();
+        if (cancelled) return;
+
+        setSrcDocHtml(html);
+
+        // Sync path-scoped HttpOnly preview cookie silently for new-tab launch (never exposed in URL)
+        void fetch(`${previewBasePath}session`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: previewToken ? { 'X-Carmen-Preview-Token': previewToken } : undefined,
+        }).catch(() => {});
+      } catch (err) {
+        if (cancelled || (err instanceof DOMException && err.name === 'AbortError')) return;
+        const rawMsg = err instanceof Error ? err.message : t.previewLoadTimeout;
+        const msg = scrubClientPreviewMessage(rawMsg);
+        setIframeLoading(false);
+        setIframeError(msg);
+        onPreviewStatusChange?.('error', msg);
+      }
+    };
+
+    void loadPreviewHtml();
+
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [reloadKey, projectId, previewToken, isEmptyApp, installingDependencies]);
+  }, [
+    reloadKey,
+    projectId,
+    previewToken,
+    previewBasePath,
+    isEmptyApp,
+    installingDependencies,
+    t.previewLoadTimeout,
+    onTokenExpired,
+    onPreviewStatusChange,
+  ]);
 
   useEffect(() => {
     if (isEmptyApp || previewReady || iframeError || installingDependencies) return;
@@ -124,6 +226,7 @@ export function PreviewPane({
         | {
             type?: string;
             projectId?: string;
+            bridgeNonce?: string;
             message?: string;
             status?: number;
             code?: string;
@@ -135,10 +238,18 @@ export function PreviewPane({
           }
         | null
         | undefined;
-      if (!data || data.projectId !== projectId) return;
+      if (!data || typeof data !== 'object' || Array.isArray(data)) return;
+      if (data.projectId !== projectId) return;
+
+      const activeNonce = bridgeNonceRef.current;
+      if (activeNonce && data.bridgeNonce !== activeNonce) return;
+
+      const replyOrigin = event.origin !== 'null' ? event.origin : '*';
+      const replyBase = { projectId, bridgeNonce: activeNonce };
 
       if (data.type === 'carmen-preview-asset' && typeof data.reqId === 'string' && typeof data.assetPath === 'string') {
         const reqId = data.reqId;
+        if (!SAFE_REQ_ID_REGEX.test(reqId)) return;
         const assetPath = data.assetPath.replace(/^\/+/, '').trim();
         const safeAssetPath =
           Boolean(assetPath) &&
@@ -147,24 +258,29 @@ export function PreviewPane({
           /^[a-zA-Z0-9._/@-]+$/.test(assetPath);
         const replyTarget = iframeRef.current?.contentWindow;
         if (!safeAssetPath) {
-          replyTarget?.postMessage({ type: 'carmen-preview-asset-result', reqId, ok: false, status: 400 }, '*');
+          replyTarget?.postMessage({ ...replyBase, type: 'carmen-preview-asset-result', reqId, ok: false, status: 400 }, replyOrigin);
           return;
         }
-        void fetch(`${previewBasePath}${assetPath}`, { credentials: 'same-origin' })
+        const headers: Record<string, string> = {};
+        if (previewToken) headers['X-Carmen-Preview-Token'] = previewToken;
+        void fetch(`${previewBasePath}${assetPath}`, {
+          headers,
+          credentials: previewToken ? 'omit' : 'include',
+        })
           .then(async (resp) => {
             const ct = resp.headers.get('content-type') || '';
             if (!resp.ok || !ct.startsWith('image/')) {
               iframeRef.current?.contentWindow?.postMessage(
-                { type: 'carmen-preview-asset-result', reqId, ok: false, status: resp.status },
-                '*'
+                { ...replyBase, type: 'carmen-preview-asset-result', reqId, ok: false, status: resp.status },
+                replyOrigin
               );
               return;
             }
             const blob = await resp.blob();
             if (blob.size > 1024 * 1024) {
               iframeRef.current?.contentWindow?.postMessage(
-                { type: 'carmen-preview-asset-result', reqId, ok: false, status: 413 },
-                '*'
+                { ...replyBase, type: 'carmen-preview-asset-result', reqId, ok: false, status: 413 },
+                replyOrigin
               );
               return;
             }
@@ -172,27 +288,28 @@ export function PreviewPane({
             reader.onload = () => {
               iframeRef.current?.contentWindow?.postMessage(
                 {
+                  ...replyBase,
                   type: 'carmen-preview-asset-result',
                   reqId,
                   ok: true,
                   status: resp.status,
                   dataUrl: typeof reader.result === 'string' ? reader.result : '',
                 },
-                '*'
+                replyOrigin
               );
             };
             reader.onerror = () => {
               iframeRef.current?.contentWindow?.postMessage(
-                { type: 'carmen-preview-asset-result', reqId, ok: false, status: 500 },
-                '*'
+                { ...replyBase, type: 'carmen-preview-asset-result', reqId, ok: false, status: 500 },
+                replyOrigin
               );
             };
             reader.readAsDataURL(blob);
           })
           .catch(() => {
             iframeRef.current?.contentWindow?.postMessage(
-              { type: 'carmen-preview-asset-result', reqId, ok: false },
-              '*'
+              { ...replyBase, type: 'carmen-preview-asset-result', reqId, ok: false },
+              replyOrigin
             );
           });
         return;
@@ -200,6 +317,7 @@ export function PreviewPane({
 
       if (data.type === 'carmen-preview-fetch' && typeof data.reqId === 'string' && typeof data.apiPath === 'string') {
         const reqId = data.reqId;
+        if (!SAFE_REQ_ID_REGEX.test(reqId)) return;
         const apiPath = data.apiPath.trim();
         const method = String(data.method || 'GET').toUpperCase();
         const safeApiPath =
@@ -209,40 +327,45 @@ export function PreviewPane({
         const replyTarget = iframeRef.current?.contentWindow;
         if (!safeApiPath || !safeMethod) {
           replyTarget?.postMessage(
-            { type: 'carmen-preview-fetch-result', reqId, error: 'Path atau metode API pratinjau tidak diizinkan.' },
-            '*'
+            { ...replyBase, type: 'carmen-preview-fetch-result', reqId, error: 'Path atau metode API pratinjau tidak diizinkan.' },
+            replyOrigin
           );
           return;
         }
         const targetUrl = `${previewBasePath}${apiPath}`;
         const hasBody = typeof data.body === 'string' && method !== 'GET' && method !== 'HEAD';
+        const headers: Record<string, string> = {};
+        if (previewToken) headers['X-Carmen-Preview-Token'] = previewToken;
+        if (hasBody) headers['Content-Type'] = 'application/json';
         void fetch(targetUrl, {
           method,
-          credentials: 'same-origin',
-          headers: hasBody ? { 'Content-Type': 'application/json' } : undefined,
+          credentials: previewToken ? 'omit' : 'include',
+          headers,
           body: hasBody ? data.body : undefined,
         })
           .then(async (resp) => {
             const text = await resp.text();
             iframeRef.current?.contentWindow?.postMessage(
               {
+                ...replyBase,
                 type: 'carmen-preview-fetch-result',
                 reqId,
                 status: resp.status,
                 contentType: resp.headers.get('content-type') || 'application/json',
                 body: text,
               },
-              '*'
+              replyOrigin
             );
           })
           .catch((err) => {
             iframeRef.current?.contentWindow?.postMessage(
               {
+                ...replyBase,
                 type: 'carmen-preview-fetch-result',
                 reqId,
-                error: err instanceof Error ? err.message : 'Preview API fetch failed',
+                error: err instanceof Error ? scrubClientPreviewMessage(err.message) : 'Preview API fetch failed',
               },
-              '*'
+              replyOrigin
             );
           });
         return;
@@ -268,7 +391,7 @@ export function PreviewPane({
       }
 
       if (typeof data.message === 'string' && data.message.trim()) {
-        const clean = data.message.trim().slice(0, 400);
+        const clean = scrubClientPreviewMessage(data.message.trim()).slice(0, 400);
         setIframeError(clean);
         setErrorStatusCode(typeof data.status === 'number' ? data.status : null);
         void api.reportPreviewError(projectId, clean).catch(() => {});
@@ -277,7 +400,7 @@ export function PreviewPane({
     }
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [projectId, normalizedOrigin, previewBasePath, onTokenExpired, onPreviewStatusChange]);
+  }, [projectId, normalizedOrigin, previewBasePath, previewToken, onTokenExpired, onPreviewStatusChange]);
 
   const activeError = iframeError || runtimeError;
   const showFullErrorStage = Boolean(activeError && !previewReady && !installingDependencies);
@@ -352,6 +475,15 @@ export function PreviewPane({
             href={previewBasePath}
             target="_blank"
             rel="noopener noreferrer"
+            onClick={() => {
+              if (previewToken) {
+                void fetch(`${previewBasePath}session`, {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: { 'X-Carmen-Preview-Token': previewToken },
+                }).catch(() => {});
+              }
+            }}
             aria-label={t.openPreviewNewTabAria}
             title={t.openPreviewNewTabTitle}
             className="h-7 w-7 rounded-[6px] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface-2)] flex items-center justify-center"
@@ -485,19 +617,21 @@ export function PreviewPane({
                   </div>
                 </div>
               )}
-              <iframe
-                ref={iframeRef}
-                key={`${reloadKey}-${previewToken || ''}`}
-                src={previewUrl}
-                onLoad={() => {
-                  setIframeLoading(false);
-                  setIframeLoaded(true);
-                }}
-                title={t.preview}
-                sandbox="allow-scripts allow-forms allow-downloads"
-                referrerPolicy="no-referrer"
-                className="w-full flex-1 border-0 bg-[var(--bg)]"
-              />
+              {srcDocHtml !== null && (
+                <iframe
+                  ref={iframeRef}
+                  key={`${reloadKey}-${renderNonce}`}
+                  srcDoc={srcDocHtml}
+                  onLoad={() => {
+                    setIframeLoading(false);
+                    setIframeLoaded(true);
+                  }}
+                  title={t.preview}
+                  sandbox="allow-scripts allow-forms allow-downloads"
+                  referrerPolicy="no-referrer"
+                  className="w-full flex-1 border-0 bg-[var(--bg)]"
+                />
+              )}
             </div>
           )}
         </div>

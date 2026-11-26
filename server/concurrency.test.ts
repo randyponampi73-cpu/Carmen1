@@ -52,11 +52,12 @@ test.after(async () => {
 
 async function apiJson(
   urlPath: string,
-  options: { method?: string; token?: string; body?: unknown } = {}
+  options: { method?: string; token?: string; previewToken?: string; body?: unknown } = {}
 ) {
   const headers: Record<string, string> = {};
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';
   if (options.token) headers['Authorization'] = `Bearer ${options.token}`;
+  if (options.previewToken) headers['X-Carmen-Preview-Token'] = options.previewToken;
   const res = await fetch(`${baseUrl}${urlPath}`, {
     method: options.method || 'GET',
     headers,
@@ -244,22 +245,26 @@ test('Load test (10 concurrent users): auth, project creation, isolated preview 
       assert.equal(tokRes.status, 200);
       const previewToken = String(tokRes.json.token);
 
-      const insertRes = await apiJson(`/preview/${projectId}/t/${previewToken}/api/items`, {
+      const insertRes = await apiJson(`/preview/${projectId}/api/items`, {
         method: 'POST',
+        previewToken,
         body: { title: marker },
       });
       assert.equal(insertRes.status, 201);
 
-      const queryRes = await apiJson(`/preview/${projectId}/t/${previewToken}/api/items`);
+      const queryRes = await apiJson(`/preview/${projectId}/api/items`, { previewToken });
       assert.equal(queryRes.status, 200);
       const rows = queryRes.json.rows as Array<{ title: string }>;
       assert.equal(rows.length, 1);
       assert.equal(rows[0].title, marker);
 
-      const htmlRes = await fetch(`${baseUrl}/preview/${projectId}/t/${previewToken}/`);
+      const htmlRes = await fetch(`${baseUrl}/preview/${projectId}/`, {
+        headers: { 'X-Carmen-Preview-Token': previewToken },
+      });
       assert.equal(htmlRes.status, 200);
       const htmlBody = await htmlRes.text();
       assert.ok(htmlBody.includes(marker), `Preview for user ${idx} missing own marker`);
+      assert.equal(htmlBody.includes(previewToken), false, 'Preview HTML must never expose previewToken');
 
       const healthRes = await apiJson(`/api/projects/${projectId}/preview-health`, { token });
       assert.equal(healthRes.status, 200);

@@ -38,6 +38,16 @@ export function checkSkillExecutionPermissions(params: {
     };
   }
 
+  if (skill.trustLevel === 'REVOKED') {
+    return {
+      allowed: false,
+      forbidden: true,
+      needsApproval: false,
+      missingPermissions: [],
+      reason: `Skill "${skill.slug}" telah dicabut (REVOKED) dan diblokir dari eksekusi.`,
+    };
+  }
+
   if (skill.trustLevel === 'DRAFT') {
     return {
       allowed: false,

@@ -58,6 +58,8 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     environment:
       NODE_ENV: production
       PORT: 8080
@@ -99,6 +101,8 @@ services:
       dockerfile: Dockerfile.android
     profiles: ["apk-queue"]
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     command: ["npm", "run", "worker:apk"]
     depends_on:
       redis:
@@ -130,6 +134,8 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       app:
         condition: service_healthy
@@ -140,10 +146,16 @@ services:
       - "80:80"
       - "443:443"
       - "443:443/udp"
+      - "${PREVIEW_HTTPS_PORT:-8443}:8443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 80 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
 
 volumes:
   carmen_data:

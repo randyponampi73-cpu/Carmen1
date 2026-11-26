@@ -1443,14 +1443,34 @@ export function serializeJsForHtmlScript(value: unknown): string {
     .replace(/\u2029/g, '\\u2029');
 }
 
-export function injectPreviewRuntimeBridge(html: string, projectId: string, _token: string, previewBasePath: string): string {
+export interface PreviewBridgeOptions {
+  bridgeNonce?: string;
+  parentOrigin?: string;
+  cspMeta?: string;
+  baseTagHref?: string;
+}
+
+export function injectPreviewRuntimeBridge(
+  html: string,
+  projectId: string,
+  _token: string,
+  previewBasePath: string,
+  opts?: PreviewBridgeOptions
+): string {
   const safeProjectId = serializeJsForHtmlScript(projectId);
   const safeBasePath = serializeJsForHtmlScript(previewBasePath);
+  const effectiveBaseHref = opts?.baseTagHref || previewBasePath;
+  const safeAssetBaseHref = serializeJsForHtmlScript(effectiveBaseHref);
+  const safeNonce = serializeJsForHtmlScript(opts?.bridgeNonce || '');
+  const safeParentOrigin = serializeJsForHtmlScript(opts?.parentOrigin || '');
 
-  const bridge = `<script>(function(){var PID=${safeProjectId},BASE=${safeBasePath},sentErr=false,sentReady=false,origFetch=window.fetch,pendingFetches={},pendingAssets={};function post(payload){try{if(window.parent&&window.parent!==window){window.parent.postMessage(payload,'*');}}catch(_){}}function sendErr(msg,extra){sentErr=true;var m=String(msg||'Runtime error').slice(0,500);var p={type:'carmen-preview-error',projectId:PID,message:m};if(extra&&extra.code)p.code=extra.code;if(extra&&typeof extra.status==='number')p.status=extra.status;post(p);}function rewriteRootUrl(val){if(typeof val!=='string')return val;if(val.length>1&&val.charAt(0)==='/'&&val.charAt(1)!=='/'&&val.indexOf('/preview/')!==0&&val.indexOf('/api/')!==0){return BASE+val.slice(1);}return val;}try{var origSetAttr=Element.prototype.setAttribute;Element.prototype.setAttribute=function(name,value){if(typeof name==='string'&&(name==='src'||name==='poster')&&typeof value==='string'){var t=this.tagName;if(t==='IMG'||t==='SOURCE'||t==='VIDEO'||t==='AUDIO'||t==='TRACK'){value=rewriteRootUrl(value);}}return origSetAttr.call(this,name,value);};[typeof HTMLImageElement!=='undefined'?HTMLImageElement.prototype:null,typeof HTMLMediaElement!=='undefined'?HTMLMediaElement.prototype:null,typeof HTMLSourceElement!=='undefined'?HTMLSourceElement.prototype:null].forEach(function(proto){if(!proto)return;var desc=Object.getOwnPropertyDescriptor(proto,'src');if(desc&&desc.set&&desc.get){Object.defineProperty(proto,'src',{configurable:true,enumerable:desc.enumerable,get:function(){return desc.get.call(this);},set:function(v){return desc.set.call(this,rewriteRootUrl(v));}});}});}catch(_){}window.addEventListener('message',function(ev){if(!ev||ev.source!==window.parent)return;var d=ev.data;if(!d||!d.reqId)return;if(d.type==='carmen-preview-fetch-result'){var entry=pendingFetches[d.reqId];if(!entry)return;delete pendingFetches[d.reqId];clearTimeout(entry.timer);if(d.error){entry.reject(new Error(d.error));return;}var headers=new Headers({'Content-Type':d.contentType||'application/json'});entry.resolve(new Response(d.body||'',{status:d.status||200,headers:headers}));return;}if(d.type==='carmen-preview-asset-result'){var aEntry=pendingAssets[d.reqId];if(!aEntry)return;delete pendingAssets[d.reqId];clearTimeout(aEntry.timer);aEntry.resolve(d);}});function proxyFetchThroughParent(apiPath,init){return new Promise(function(resolve,reject){if(!window.parent||window.parent===window){reject(new Error('Parent bridge unavailable'));return;}var reqId='cpf_'+Math.random().toString(36).slice(2)+Date.now().toString(36);var timer=setTimeout(function(){delete pendingFetches[reqId];reject(new Error('Preview API bridge timeout'));},12000);pendingFetches[reqId]={resolve:resolve,reject:reject,timer:timer};var bodyStr;if(init&&typeof init.body==='string'){bodyStr=init.body;}else if(init&&init.body!=null){try{bodyStr=String(init.body);}catch(_){bodyStr='';}}post({type:'carmen-preview-fetch',projectId:PID,reqId:reqId,apiPath:apiPath,method:(init&&init.method)||'GET',body:bodyStr});});}function proxyAssetThroughParent(assetPath){return new Promise(function(resolve){if(!window.parent||window.parent===window){resolve({ok:false});return;}var reqId='cpa_'+Math.random().toString(36).slice(2)+Date.now().toString(36);var timer=setTimeout(function(){delete pendingAssets[reqId];resolve({ok:false});},10000);pendingAssets[reqId]={resolve:resolve,timer:timer};post({type:'carmen-preview-asset',projectId:PID,reqId:reqId,assetPath:assetPath});});}function extractPreviewApiPath(rawUrl){if(typeof rawUrl!=='string')return null;if(rawUrl.indexOf('/api/')===0&&rawUrl.indexOf('/preview/')!==0)return 'api/'+rawUrl.slice(5);if(rawUrl.indexOf('./api/')===0)return 'api/'+rawUrl.slice(6);if(rawUrl.indexOf('api/')===0)return rawUrl;var bIdx=rawUrl.indexOf(BASE+'api/');if(bIdx!==-1)return 'api/'+rawUrl.slice(bIdx+(BASE+'api/').length);return null;}if(typeof origFetch==='function'){window.fetch=function(input,init){var rawUrl=typeof input==='string'?input:(input&&typeof Request!=='undefined'&&input instanceof Request?input.url:'');var apiPath=extractPreviewApiPath(rawUrl);var rewrittenInput=input;try{if(typeof input==='string'&&input.indexOf('/api/')===0&&input.indexOf('/preview/')!==0){rewrittenInput=BASE+input.slice(1);}else if(input&&typeof Request!=='undefined'&&input instanceof Request){var u=input.url;var idx=u.indexOf('/api/');if(idx>0&&u.indexOf('/preview/')===-1&&u.indexOf(window.location.origin)===0){rewrittenInput=new Request(BASE+u.slice(idx+1),input);}}}catch(_){}var p=origFetch.call(this,rewrittenInput,init);if(!apiPath)return p;return p.then(function(resp){var ct=(resp.headers&&resp.headers.get('content-type'))||'';if((resp.redirected&&resp.url&&resp.url.indexOf('/preview/')===-1)||ct.indexOf('text/html')!==-1){return proxyFetchThroughParent(apiPath,init);}return resp;}).catch(function(err){if(window.parent&&window.parent!==window){return proxyFetchThroughParent(apiPath,init);}throw err;});};}window.addEventListener('error',function(e){if(!e)return;if(e.target&&e.target!==window){var tag=String(e.target.tagName||'').toUpperCase();var url=e.target.src||e.target.href||'';if(!url)return;if(tag==='LINK'){var rel=String(e.target.rel||'').toLowerCase();if(rel!=='stylesheet')return;}if(tag==='IMG'&&url.indexOf(BASE)!==-1&&!e.target.getAttribute('data-carmen-retried')&&window.parent&&window.parent!==window){var assetIdx=url.indexOf(BASE);var relAsset=url.slice(assetIdx+BASE.length).split(/[?#]/)[0];if(relAsset){e.target.setAttribute('data-carmen-retried','1');proxyAssetThroughParent(relAsset).then(function(res){if(res&&res.ok&&res.dataUrl){e.target.src=res.dataUrl;return;}sendErr('Gagal memuat resource img: '+url,{status:res&&res.status});});return;}}if(tag==='SCRIPT'||tag==='LINK'||tag==='IMG'){if(typeof origFetch==='function'&&url.indexOf(BASE)!==-1){origFetch.call(window,url).then(function(r){if(!r.ok){return r.text().then(function(txt){sendErr('Gagal memuat '+tag.toLowerCase()+': '+url+' (HTTP '+r.status+')'+(txt?' — '+txt.slice(0,220):''),{status:r.status});});}sendErr('Gagal memuat resource '+tag.toLowerCase()+': '+url);}).catch(function(){sendErr('Gagal memuat resource '+tag.toLowerCase()+': '+url);});}else{sendErr('Gagal memuat resource '+tag.toLowerCase()+': '+url);}return;}}sendErr((e&&e.message)||'Uncaught error');},true);window.addEventListener('unhandledrejection',function(e){var r=e&&e.reason;sendErr((r&&r.message)||String(r||'Unhandled rejection'));});window.addEventListener('securitypolicyviolation',function(e){var dir=(e&&e.violatedDirective)||'CSP';var uri=(e&&e.blockedURI)||'inline';sendErr('CSP memblokir '+dir+': '+uri);});function hasMountedContent(){var root=document.getElementById('root')||document.getElementById('app');if(root&&root.children.length>0)return true;if(document.body){var txt=(document.body.innerText||'').trim();if(txt.length>0)return true;var els=document.body.querySelectorAll('canvas,svg,img,video,iframe,input,button,form,table');if(els.length>0)return true;for(var i=0;i<document.body.children.length;i++){var ch=document.body.children[i];if(ch.tagName!=='SCRIPT'&&ch.tagName!=='STYLE'&&ch.id!=='root'&&ch.id!=='app')return true;}}return false;}function checkMount(){if(sentErr||sentReady)return;if(hasMountedContent()){sentReady=true;post({type:'carmen-preview-ready',projectId:PID});return;}var hasRoot=!!(document.getElementById('root')||document.getElementById('app'));var hasModule=!!document.querySelector('script[type="module"]');if(hasRoot&&hasModule){setTimeout(function(){if(sentErr||sentReady)return;if(hasMountedContent()){sentReady=true;post({type:'carmen-preview-ready',projectId:PID});}else{sendErr('Aplikasi dimuat tetapi tidak merender konten (#root kosong). Periksa error mount React atau console.');}},450);}else{sentReady=true;post({type:'carmen-preview-ready',projectId:PID});}}if(document.readyState==='complete'){setTimeout(checkMount,80);}else{window.addEventListener('load',function(){setTimeout(checkMount,120);});}})();</script>`;
+  const bridge = `<script>(function(){var PID=${safeProjectId},BASE=${safeBasePath},ABS_BASE=${safeAssetBaseHref},NONCE=${safeNonce},PARENT_ORIGIN=${safeParentOrigin},sentErr=false,sentReady=false,origFetch=window.fetch,pendingFetches={},pendingAssets={};function post(payload){try{if(window.parent&&window.parent!==window){if(NONCE&&payload&&typeof payload==='object'){payload.bridgeNonce=NONCE;}var target=(PARENT_ORIGIN&&PARENT_ORIGIN!=='null')?PARENT_ORIGIN:(window.location.origin&&window.location.origin!=='null'?window.location.origin:'*');window.parent.postMessage(payload,target);}}catch(_){}}function sendErr(msg,extra){sentErr=true;var m=String(msg||'Runtime error').slice(0,500);var p={type:'carmen-preview-error',projectId:PID,message:m};if(extra&&extra.code)p.code=extra.code;if(extra&&typeof extra.status==='number')p.status=extra.status;post(p);}function rewriteRootUrl(val){if(typeof val!=='string')return val;if(val.length>1&&val.charAt(0)==='/'&&val.charAt(1)!=='/'&&val.indexOf('/preview/')!==0&&val.indexOf('/api/')!==0){return ABS_BASE+val.slice(1);}return val;}try{var origSetAttr=Element.prototype.setAttribute;Element.prototype.setAttribute=function(name,value){if(typeof name==='string'&&(name==='src'||name==='poster')&&typeof value==='string'){var t=this.tagName;if(t==='IMG'||t==='SOURCE'||t==='VIDEO'||t==='AUDIO'||t==='TRACK'){value=rewriteRootUrl(value);}}return origSetAttr.call(this,name,value);};[typeof HTMLImageElement!=='undefined'?HTMLImageElement.prototype:null,typeof HTMLMediaElement!=='undefined'?HTMLMediaElement.prototype:null,typeof HTMLSourceElement!=='undefined'?HTMLSourceElement.prototype:null].forEach(function(proto){if(!proto)return;var desc=Object.getOwnPropertyDescriptor(proto,'src');if(desc&&desc.set&&desc.get){Object.defineProperty(proto,'src',{configurable:true,enumerable:desc.enumerable,get:function(){return desc.get.call(this);},set:function(v){return desc.set.call(this,rewriteRootUrl(v));}});}});}catch(_){}window.addEventListener('message',function(ev){if(!ev||ev.source!==window.parent)return;if(PARENT_ORIGIN&&ev.origin!==PARENT_ORIGIN)return;var d=ev.data;if(!d||typeof d!=='object'||d.projectId!==PID||!d.reqId)return;if(NONCE&&d.bridgeNonce!==NONCE)return;if(d.type==='carmen-preview-fetch-result'){var entry=pendingFetches[d.reqId];if(!entry)return;delete pendingFetches[d.reqId];clearTimeout(entry.timer);if(d.error){entry.reject(new Error(d.error));return;}var headers=new Headers({'Content-Type':d.contentType||'application/json'});entry.resolve(new Response(d.body||'',{status:d.status||200,headers:headers}));return;}if(d.type==='carmen-preview-asset-result'){var aEntry=pendingAssets[d.reqId];if(!aEntry)return;delete pendingAssets[d.reqId];clearTimeout(aEntry.timer);aEntry.resolve(d);}});function proxyFetchThroughParent(apiPath,init){return new Promise(function(resolve,reject){if(!window.parent||window.parent===window){reject(new Error('Parent bridge unavailable'));return;}var reqId='cpf_'+Math.random().toString(36).slice(2)+Date.now().toString(36);var timer=setTimeout(function(){delete pendingFetches[reqId];reject(new Error('Preview API bridge timeout'));},12000);pendingFetches[reqId]={resolve:resolve,reject:reject,timer:timer};var bodyStr;if(init&&typeof init.body==='string'){bodyStr=init.body;}else if(init&&init.body!=null){try{bodyStr=String(init.body);}catch(_){bodyStr='';}}post({type:'carmen-preview-fetch',projectId:PID,reqId:reqId,apiPath:apiPath,method:(init&&init.method)||'GET',body:bodyStr});});}function proxyAssetThroughParent(assetPath){return new Promise(function(resolve){if(!window.parent||window.parent===window){resolve({ok:false});return;}var reqId='cpa_'+Math.random().toString(36).slice(2)+Date.now().toString(36);var timer=setTimeout(function(){delete pendingAssets[reqId];resolve({ok:false});},10000);pendingAssets[reqId]={resolve:resolve,timer:timer};post({type:'carmen-preview-asset',projectId:PID,reqId:reqId,assetPath:assetPath});});}function extractPreviewApiPath(rawUrl){if(typeof rawUrl!=='string')return null;if(rawUrl.indexOf('/api/')===0&&rawUrl.indexOf('/preview/')!==0)return 'api/'+rawUrl.slice(5);if(rawUrl.indexOf('./api/')===0)return 'api/'+rawUrl.slice(6);if(rawUrl.indexOf('api/')===0)return rawUrl;var bIdx=rawUrl.indexOf(BASE+'api/');if(bIdx!==-1)return 'api/'+rawUrl.slice(bIdx+(BASE+'api/').length);if(ABS_BASE&&ABS_BASE!==BASE){var abIdx=rawUrl.indexOf(ABS_BASE+'api/');if(abIdx!==-1)return 'api/'+rawUrl.slice(abIdx+(ABS_BASE+'api/').length);}return null;}if(typeof origFetch==='function'){window.fetch=function(input,init){var rawUrl=typeof input==='string'?input:(input&&typeof Request!=='undefined'&&input instanceof Request?input.url:'');var apiPath=extractPreviewApiPath(rawUrl);if(apiPath&&window.location&&window.location.protocol==='about:'&&window.parent&&window.parent!==window){return proxyFetchThroughParent(apiPath,init);}var rewrittenInput=input;try{if(typeof input==='string'&&input.indexOf('/api/')===0&&input.indexOf('/preview/')!==0){rewrittenInput=ABS_BASE+input.slice(1);}else if(input&&typeof Request!=='undefined'&&input instanceof Request){var u=input.url;var idx=u.indexOf('/api/');if(idx>0&&u.indexOf('/preview/')===-1&&u.indexOf(window.location.origin)===0){rewrittenInput=new Request(ABS_BASE+u.slice(idx+1),input);}}}catch(_){}var p=origFetch.call(this,rewrittenInput,init);if(!apiPath)return p;return p.then(function(resp){var ct=(resp.headers&&resp.headers.get('content-type'))||'';if((resp.redirected&&resp.url&&resp.url.indexOf('/preview/')===-1)||ct.indexOf('text/html')!==-1){return proxyFetchThroughParent(apiPath,init);}return resp;}).catch(function(err){if(window.parent&&window.parent!==window){return proxyFetchThroughParent(apiPath,init);}throw err;});};}window.addEventListener('error',function(e){if(!e)return;if(e.target&&e.target!==window){var tag=String(e.target.tagName||'').toUpperCase();var url=e.target.src||e.target.href||'';if(!url)return;if(tag==='LINK'){var rel=String(e.target.rel||'').toLowerCase();if(rel!=='stylesheet')return;}if(tag==='IMG'&&(url.indexOf(BASE)!==-1||(ABS_BASE&&url.indexOf(ABS_BASE)!==-1))&&!e.target.getAttribute('data-carmen-retried')&&window.parent&&window.parent!==window){var matchedBase=(ABS_BASE&&url.indexOf(ABS_BASE)!==-1)?ABS_BASE:BASE;var assetIdx=url.indexOf(matchedBase);var relAsset=url.slice(assetIdx+matchedBase.length).split(/[?#]/)[0];if(relAsset){e.target.setAttribute('data-carmen-retried','1');proxyAssetThroughParent(relAsset).then(function(res){if(res&&res.ok&&res.dataUrl){e.target.src=res.dataUrl;return;}sendErr('Gagal memuat resource img: '+url,{status:res&&res.status});});return;}}if(tag==='SCRIPT'||tag==='LINK'||tag==='IMG'){if(typeof origFetch==='function'&&url.indexOf(BASE)!==-1&&window.location&&window.location.protocol!=='about:'){origFetch.call(window,url).then(function(r){if(!r.ok){return r.text().then(function(txt){sendErr('Gagal memuat '+tag.toLowerCase()+': '+url+' (HTTP '+r.status+')'+(txt?' — '+txt.slice(0,220):''),{status:r.status});});}sendErr('Gagal memuat resource '+tag.toLowerCase()+': '+url);}).catch(function(){sendErr('Gagal memuat resource '+tag.toLowerCase()+': '+url);});}else{sendErr('Gagal memuat resource '+tag.toLowerCase()+': '+url);}return;}}sendErr((e&&e.message)||'Uncaught error');},true);window.addEventListener('unhandledrejection',function(e){var r=e&&e.reason;sendErr((r&&r.message)||String(r||'Unhandled rejection'));});window.addEventListener('securitypolicyviolation',function(e){var dir=(e&&e.violatedDirective)||'CSP';var uri=(e&&e.blockedURI)||'inline';sendErr('CSP memblokir '+dir+': '+uri);});function hasMountedContent(){var root=document.getElementById('root')||document.getElementById('app');if(root&&root.children.length>0)return true;if(document.body){var txt=(document.body.innerText||'').trim();if(txt.length>0)return true;var els=document.body.querySelectorAll('canvas,svg,img,video,iframe,input,button,form,table');if(els.length>0)return true;for(var i=0;i<document.body.children.length;i++){var ch=document.body.children[i];if(ch.tagName!=='SCRIPT'&&ch.tagName!=='STYLE'&&ch.id!=='root'&&ch.id!=='app')return true;}}return false;}function checkMount(){if(sentErr||sentReady)return;if(hasMountedContent()){sentReady=true;post({type:'carmen-preview-ready',projectId:PID});return;}var hasRoot=!!(document.getElementById('root')||document.getElementById('app'));var hasModule=!!document.querySelector('script[type="module"]');if(hasRoot&&hasModule){setTimeout(function(){if(sentErr||sentReady)return;if(hasMountedContent()){sentReady=true;post({type:'carmen-preview-ready',projectId:PID});}else{sendErr('Aplikasi dimuat tetapi tidak merender konten (#root kosong). Periksa error mount React atau console.');}},450);}else{sentReady=true;post({type:'carmen-preview-ready',projectId:PID});}}if(document.readyState==='complete'){setTimeout(checkMount,80);}else{window.addEventListener('load',function(){setTimeout(checkMount,120);});}})();</script>`;
 
-  const baseTag = `<base href="${escapeHtml(previewBasePath)}" />`;
-  const headInjection = `${baseTag}${bridge}`;
+  const cspMetaTag = opts?.cspMeta
+    ? `<meta http-equiv="Content-Security-Policy" content="${escapeHtml(opts.cspMeta)}" />`
+    : '';
+  const baseTag = `<base href="${escapeHtml(effectiveBaseHref)}" />`;
+  const headInjection = `${cspMetaTag}${baseTag}${bridge}`;
 
   if (/<head[^>]*>/i.test(html)) {
     return html.replace(/<head[^>]*>/i, (m) => `${m}${headInjection}`);
@@ -1478,15 +1498,23 @@ export function renderPreviewErrorHtml(opts: {
   title: string;
   message: string;
   code?: string;
+  bridgeNonce?: string;
+  parentOrigin?: string;
+  cspMeta?: string;
 }): string {
   const safePid = serializeJsForHtmlScript(opts.projectId);
   const safeMsg = serializeJsForHtmlScript(opts.message);
   const safeCode = serializeJsForHtmlScript(opts.code || '');
+  const safeNonce = serializeJsForHtmlScript(opts.bridgeNonce || '');
+  const safeParentOrigin = serializeJsForHtmlScript(opts.parentOrigin || '');
   const safeStatus = Number(opts.status) || 500;
+  const cspMetaTag = opts.cspMeta
+    ? `\n  <meta http-equiv="Content-Security-Policy" content="${escapeHtml(opts.cspMeta)}" />`
+    : '';
   return `<!doctype html>
 <html lang="id">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8" />${cspMetaTag}
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${escapeHtml(opts.title)}</title>
   <style>
@@ -1500,13 +1528,18 @@ export function renderPreviewErrorHtml(opts: {
   <script>
     try {
       if (window.parent && window.parent !== window) {
-        window.parent.postMessage({
+        var parentOrigin = ${safeParentOrigin};
+        var nonce = ${safeNonce};
+        var msg = {
           type: 'carmen-preview-error',
           projectId: ${safePid},
           status: ${safeStatus},
           code: ${safeCode},
           message: ${safeMsg}
-        }, '*');
+        };
+        if (nonce) msg.bridgeNonce = nonce;
+        var target = (parentOrigin && parentOrigin !== 'null') ? parentOrigin : (window.location.origin && window.location.origin !== 'null' ? window.location.origin : '*');
+        window.parent.postMessage(msg, target);
       }
     } catch (_) {}
   </script>
@@ -1586,15 +1619,17 @@ async function preparePreviewHtmlDocument(opts: {
   token: string;
   useDist: boolean;
   sourceHash: string;
+  bridgeOptions?: PreviewBridgeOptions;
 }): Promise<PreviewStaticResult> {
-  const { projectId, rawHtml, workspaceDir, previewBasePath, token, useDist, sourceHash } = opts;
+  const { projectId, rawHtml, workspaceDir, previewBasePath, token, useDist, sourceHash, bridgeOptions } = opts;
 
   if (rawHtml.includes('<!-- carmen:blank-starter -->')) {
     const html = injectPreviewRuntimeBridge(
       rewriteRootRelativeUrlsInHtml(rawHtml, previewBasePath),
       projectId,
       token,
-      previewBasePath
+      previewBasePath,
+      bridgeOptions
     );
     return { status: 200, contentType: 'text/html; charset=utf-8', body: html };
   }
@@ -1619,11 +1654,13 @@ async function preparePreviewHtmlDocument(opts: {
         contentType: 'text/html; charset=utf-8',
         body: renderPreviewErrorHtml({
           projectId,
-          token,
           status: 404,
           title: 'Stylesheet tidak ditemukan',
           message: `Stylesheet "${norm}" tidak ditemukan pada proyek.`,
           code: 'MISSING_ASSET',
+          bridgeNonce: bridgeOptions?.bridgeNonce,
+          parentOrigin: bridgeOptions?.parentOrigin,
+          cspMeta: bridgeOptions?.cspMeta,
         }),
       };
     }
@@ -1644,11 +1681,13 @@ async function preparePreviewHtmlDocument(opts: {
           contentType: 'text/html; charset=utf-8',
           body: renderPreviewErrorHtml({
             projectId,
-            token,
             status: 500,
             title: 'Gagal mengompilasi CSS pratinjau',
             message: compiledCss.error || `Gagal memproses CSS ${norm}.`,
             code: 'CSS_BUILD_ERROR',
+            bridgeNonce: bridgeOptions?.bridgeNonce,
+            parentOrigin: bridgeOptions?.parentOrigin,
+            cspMeta: bridgeOptions?.cspMeta,
           }),
         };
       }
@@ -1687,11 +1726,13 @@ async function preparePreviewHtmlDocument(opts: {
           contentType: 'text/html; charset=utf-8',
           body: renderPreviewErrorHtml({
             projectId,
-            token,
             status: 404,
             title: 'Script pratinjau tidak ditemukan',
             message: `Script "${norm}" tidak ditemukan pada proyek.`,
             code: 'MISSING_SCRIPT',
+            bridgeNonce: bridgeOptions?.bridgeNonce,
+            parentOrigin: bridgeOptions?.parentOrigin,
+            cspMeta: bridgeOptions?.cspMeta,
           }),
         };
       }
@@ -1711,11 +1752,13 @@ async function preparePreviewHtmlDocument(opts: {
             contentType: 'text/html; charset=utf-8',
             body: renderPreviewErrorHtml({
               projectId,
-              token,
               status: 500,
               title: 'Build pratinjau gagal',
               message: bundled.error || `Gagal mengompilasi modul ${norm}.`,
               code: 'JS_BUILD_ERROR',
+              bridgeNonce: bridgeOptions?.bridgeNonce,
+              parentOrigin: bridgeOptions?.parentOrigin,
+              cspMeta: bridgeOptions?.cspMeta,
             }),
           };
         }
@@ -1744,11 +1787,13 @@ async function preparePreviewHtmlDocument(opts: {
           contentType: 'text/html; charset=utf-8',
           body: renderPreviewErrorHtml({
             projectId,
-            token,
             status: 500,
             title: 'Build modul inline pratinjau gagal',
             message: bundledInline.error || 'Gagal mengompilasi script module inline.',
             code: 'JS_BUILD_ERROR',
+            bridgeNonce: bridgeOptions?.bridgeNonce,
+            parentOrigin: bridgeOptions?.parentOrigin,
+            cspMeta: bridgeOptions?.cspMeta,
           }),
         };
       }
@@ -1781,7 +1826,7 @@ async function preparePreviewHtmlDocument(opts: {
     return `<img${pre}src=${quote}${dataUri}${quote} data-carmen-src=${quote}${escapeHtml(previewBasePath + norm)}${quote}${post}>`;
   });
 
-  html = injectPreviewRuntimeBridge(html, projectId, token, previewBasePath);
+  html = injectPreviewRuntimeBridge(html, projectId, token, previewBasePath, bridgeOptions);
   return {
     status: 200,
     contentType: 'text/html; charset=utf-8',
@@ -1794,8 +1839,9 @@ export async function servePreviewStaticAsset(opts: {
   cleanedSub: string;
   previewBasePath: string;
   token: string;
+  bridgeOptions?: PreviewBridgeOptions;
 }): Promise<PreviewStaticResult> {
-  const { projectId, cleanedSub, previewBasePath, token } = opts;
+  const { projectId, cleanedSub, previewBasePath, token, bridgeOptions } = opts;
   const workspaceDir = getProjectWorkspaceDir(projectId);
   const useDist = isFreshDistAvailable(workspaceDir);
   const sourceHash = await computeProjectSourceHashAsync(projectId);
@@ -1810,11 +1856,13 @@ export async function servePreviewStaticAsset(opts: {
         contentType: 'text/html; charset=utf-8',
         body: renderPreviewErrorHtml({
           projectId,
-          token,
           status: 404,
           title: 'Halaman pratinjau tidak ditemukan',
           message: msg,
           code: 'MISSING_INDEX',
+          bridgeNonce: bridgeOptions?.bridgeNonce,
+          parentOrigin: bridgeOptions?.parentOrigin,
+          cspMeta: bridgeOptions?.cspMeta,
         }),
       };
     }
@@ -1826,6 +1874,7 @@ export async function servePreviewStaticAsset(opts: {
       token,
       useDist,
       sourceHash,
+      bridgeOptions,
     });
   }
 
@@ -1896,6 +1945,7 @@ export async function servePreviewStaticAsset(opts: {
       token,
       useDist,
       sourceHash,
+      bridgeOptions,
     });
   }
 

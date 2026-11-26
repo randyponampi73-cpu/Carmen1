@@ -989,5 +989,64 @@ test('F-19 & F-14: external model-catalog.json loads curated fallback models and
   assert.equal(estimateModelCostUsd('anthropic', 'claude-sonnet-4-5', 0, 0), 0);
 });
 
+test('Phase 5: Gemini stream idle timeout watchdog aborts stalled streams and extraHeaders secrets are scrubbed', async () => {
+  const prevIdle = process.env.CARMEN_STREAM_IDLE_TIMEOUT_MS;
+  process.env.CARMEN_STREAM_IDLE_TIMEOUT_MS = '60';
+  try {
+    const stalledGemini = new GeminiAdapter({
+      clientFactory: () =>
+        ({
+          models: {
+            async generateContentStream(opts: { config?: { abortSignal?: AbortSignal } }) {
+              return {
+                async *[Symbol.asyncIterator]() {
+                  yield { text: 'Halo' };
+                  await new Promise((_resolve, reject) => {
+                    opts.config?.abortSignal?.addEventListener(
+                      'abort',
+                      () => reject(new DOMException('Idle timeout', 'AbortError')),
+                      { once: true }
+                    );
+                  });
+                },
+              };
+            },
+          },
+        }) as never,
+    });
 
+    const events = await collectEvents(
+      stalledGemini.chatStream({
+        config: { providerKeyId: 'kg_idle', provider: 'gemini', label: 'Gemini', apiKey: 'AIzaTestIdleSecret99', tierDeclared: 'free' },
+        modelId: 'gemini-2.5-flash',
+        systemPrompt: 'Sys',
+        messages: [{ role: 'user', content: 'hi' }],
+      })
+    );
+    assert.ok(events.some((e) => e.type === 'text_delta' && e.text === 'Halo'));
+    const err = events.find((e) => e.type === 'error');
+    assert.ok(err && err.type === 'error');
+    assert.equal(err.code, 'PROVIDER_DOWN');
+    assert.match(err.message, /idle/i);
+  } finally {
+    if (prevIdle === undefined) delete process.env.CARMEN_STREAM_IDLE_TIMEOUT_MS;
+    else process.env.CARMEN_STREAM_IDLE_TIMEOUT_MS = prevIdle;
+  }
+
+  const secretHdrValue = 'custom_header_token_secret_xyz_9988';
+  const customWithExtraHeader = new OpenAICompatibleAdapter('custom', async () => {
+    return makeJsonResponse({ error: { message: `Leaked ${secretHdrValue}` } }, 500);
+  });
+  const testRes = await customWithExtraHeader.testConnection({
+    providerKeyId: 'k_extra_hdr',
+    provider: 'custom',
+    label: 'Custom Gateway',
+    apiKey: 'primary_key_1234',
+    tierDeclared: 'unknown',
+    baseUrl: 'https://api.example.test/v1',
+    extraHeaders: { 'X-Gateway-Token': secretHdrValue },
+  });
+  assert.equal(testRes.ok, false);
+  assert.equal(testRes.message.includes(secretHdrValue), false);
+});
 

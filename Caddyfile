@@ -24,7 +24,7 @@
 		}
 	}
 
-	# Token-scoped isolated live previews
+	# Isolated live previews (header or HttpOnly session cookie; URL tokens forbidden)
 	handle /preview/* {
 		reverse_proxy app:8080 {
 			header_up X-Forwarded-Proto {scheme}
@@ -47,6 +47,7 @@
 	header {
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"
+		X-Robots-Tag "noindex"
 		-Server
 	}
 
@@ -58,6 +59,6 @@
 	}
 
 	handle {
-		respond "Preview route required under /preview/<projectId>/t/<token>/" 404
+		respond "Preview route required under /preview/<projectId>/" 404
 	}
 }

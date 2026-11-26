@@ -74,6 +74,10 @@ export type OutboundFetchFn = (
   options: { timeoutMs: number; streamIdleTimeoutMs?: number; maxRedirects: number; enforceCustomUrlPolicy: boolean }
 ) => Promise<Response>;
 
+function getSecretsToScrub(config: ProviderAdapterConfig): string[] {
+  return [config.apiKey, ...Object.values(config.extraHeaders || {})].filter(Boolean);
+}
+
 function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -149,7 +153,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
           return this.buildManualCustomModels(config);
         }
         const retryMs = parseRetryAfterMs(res.headers);
-        const body = scrubSecrets(rawText, [config.apiKey]);
+        const body = scrubSecrets(rawText, getSecretsToScrub(config));
         const norm = normalizeProviderError(res.status, body, retryMs);
         throw new Error(`${norm.code}: ${norm.message}`);
       }
@@ -294,7 +298,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       bodyText: string,
       headers?: Headers
     ): { code: ReturnType<typeof normalizeProviderError>['code']; message: string } => {
-      const scrubbed = scrubSecrets(bodyText, [config.apiKey]).trim();
+      const scrubbed = scrubSecrets(bodyText, getSecretsToScrub(config)).trim();
       let detail = scrubbed;
       try {
         const parsed = JSON.parse(scrubbed) as {
@@ -382,7 +386,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       const fail = formatProviderFailure(res.status, text, res.headers);
       return { ok: false, message: fail.message, errorCode: fail.code };
     } catch (err) {
-      const msg = scrubSecrets(err instanceof Error ? err.message : String(err), [config.apiKey]);
+      const msg = scrubSecrets(err instanceof Error ? err.message : String(err), getSecretsToScrub(config));
       return { ok: false, message: `Gagal terhubung ke ${config.label}: ${msg}`, errorCode: 'PROVIDER_DOWN' };
     }
   }
@@ -476,14 +480,14 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
           yield { type: 'done' };
           return;
         }
-        const msg = scrubSecrets(err instanceof Error ? err.message : String(err), [config.apiKey]);
+        const msg = scrubSecrets(err instanceof Error ? err.message : String(err), getSecretsToScrub(config));
         yield { type: 'error', code: 'PROVIDER_DOWN', message: msg };
         return;
       }
 
       if (attempt < 3 && (res.status === 429 || res.status === 503)) {
         const retryMs = parseRetryAfterMs(res.headers);
-        const waitMs = retryMs !== null ? retryMs : 500;
+        const waitMs = retryMs !== null ? retryMs : Math.min(3_000, 400 * Math.pow(2, attempt - 1));
         if (waitMs <= 3_000) {
           await res.text().catch(() => {});
           try {
@@ -501,7 +505,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     if (!res || !res.ok || !res.body) {
       const status = res?.status ?? 503;
       const retryMs = parseRetryAfterMs(res?.headers);
-      const body = res ? scrubSecrets(await readResponseTextWithLimit(res, 512 * 1024).catch(() => ''), [config.apiKey]) : '';
+      const body = res ? scrubSecrets(await readResponseTextWithLimit(res, 512 * 1024).catch(() => ''), getSecretsToScrub(config)) : '';
       const norm = normalizeProviderError(status, body, retryMs);
       yield { type: 'error', code: norm.code, message: norm.message };
       return;
@@ -543,7 +547,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
                 typeof errObj === 'string'
                   ? errObj
                   : errObj.message || errObj.code || JSON.stringify(errObj);
-              const norm = normalizeProviderError(errStatus, scrubSecrets(String(errMsgRaw), [config.apiKey]));
+              const norm = normalizeProviderError(errStatus, scrubSecrets(String(errMsgRaw), getSecretsToScrub(config)));
               yield { type: 'error', code: norm.code, message: norm.message };
               return;
             }
@@ -582,7 +586,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       }
     } catch (err) {
       if (!signal?.aborted) {
-        const msg = scrubSecrets(err instanceof Error ? err.message : String(err), [config.apiKey]);
+        const msg = scrubSecrets(err instanceof Error ? err.message : String(err), getSecretsToScrub(config));
         yield { type: 'error', code: 'PROVIDER_DOWN', message: msg };
         return;
       }

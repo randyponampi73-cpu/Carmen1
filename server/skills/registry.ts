@@ -23,7 +23,13 @@ import {
   validateSkillPackage,
 } from './validator';
 
-export const BUILTIN_SKILLS_ROOT = path.resolve(process.cwd(), 'skills');
+export function getBuiltinSkillsRoot(): string {
+  const configured = process.env.CARMEN_BUILTIN_SKILLS_DIR?.trim();
+  if (configured) return path.resolve(configured);
+  return path.resolve(process.cwd(), 'skills');
+}
+
+export const BUILTIN_SKILLS_ROOT = getBuiltinSkillsRoot();
 
 const CATEGORY_SET = new Set<string>(SKILL_CATEGORIES);
 const PERM_SET = new Set<string>(ALLOWED_SKILL_PERMISSIONS);
@@ -46,7 +52,7 @@ export interface BuiltinScanResult {
   failures: Array<{ slug: string; path: string; error: string }>;
 }
 
-function computePackageChecksum(pkg: {
+export function computePackageChecksum(pkg: {
   skillMd: string;
   references: Record<string, string>;
   scripts: Record<string, string>;
@@ -60,6 +66,41 @@ function computePackageChecksum(pkg: {
     }
   }
   return hash.digest('hex').slice(0, 24);
+}
+
+export function verifySkillPackageIntegrity(pkg: {
+  checksum?: string;
+  skillMd: string;
+  references: Record<string, string>;
+  scripts: Record<string, string>;
+  assets: Record<string, string>;
+}): { valid: boolean; expectedChecksum: string; actualChecksum: string } {
+  const actualChecksum = computePackageChecksum({
+    skillMd: pkg.skillMd,
+    references: pkg.references || {},
+    scripts: pkg.scripts || {},
+    assets: pkg.assets || {},
+  });
+  const expectedChecksum = String(pkg.checksum || '').trim();
+  if (!expectedChecksum) {
+    return { valid: false, expectedChecksum, actualChecksum };
+  }
+  const aBuf = Buffer.from(actualChecksum, 'utf8');
+  const bBuf = Buffer.from(expectedChecksum, 'utf8');
+  const valid = aBuf.length === bBuf.length && crypto.timingSafeEqual(aBuf, bBuf);
+  return { valid, expectedChecksum, actualChecksum };
+}
+
+export function signSkillChecksumHmac(checksum: string, secret: string): string {
+  return crypto.createHmac('sha256', secret).update(checksum, 'utf8').digest('hex');
+}
+
+export function verifySkillChecksumHmac(checksum: string, signatureHex: string, secret: string): boolean {
+  if (!checksum || !signatureHex || !secret) return false;
+  const expected = signSkillChecksumHmac(checksum, secret);
+  const aBuf = Buffer.from(expected, 'utf8');
+  const bBuf = Buffer.from(signatureHex.trim(), 'utf8');
+  return aBuf.length === bBuf.length && crypto.timingSafeEqual(aBuf, bBuf);
 }
 
 function readSubtreeFiles(
@@ -106,7 +147,7 @@ function readSubtreeFiles(
  * Scans ONLY CARMEN's 8 category folders under `skills/` (`development`, `debugging`, ...),
  * ignoring unrelated system folders such as `skills/system_skills`.
  */
-export function scanBuiltinSkillPackages(rootDir = BUILTIN_SKILLS_ROOT): BuiltinScanResult {
+export function scanBuiltinSkillPackages(rootDir = getBuiltinSkillsRoot()): BuiltinScanResult {
   const packages: ScannedBuiltinSkill[] = [];
   const failures: Array<{ slug: string; path: string; error: string }> = [];
 
@@ -988,6 +1029,30 @@ export async function deleteUserSkill(
 
   await asyncDb.run('DELETE FROM skills WHERE id = ? AND owner_user_id = ?', existing.id, userId);
   return { ok: true };
+}
+
+export async function revokeSkillTrust(params: {
+  skillId: string;
+  userId: string;
+}): Promise<{ ok: boolean; error?: string; skill?: SkillMetadata }> {
+  const pkg = await getSkillPackage(params.skillId, { userId: params.userId });
+  if (!pkg) {
+    return { ok: false, error: 'Skill tidak ditemukan atau tidak dimiliki pengguna.' };
+  }
+  if (pkg.source === 'builtin') {
+    return { ok: false, error: 'Skill bawaan CARMEN tidak dapat dicabut permanen; nonaktifkan via toggle.' };
+  }
+  if (pkg.ownerUserId !== params.userId) {
+    return { ok: false, error: 'Akses ditolak: hanya pemilik yang dapat mencabut skill ini.' };
+  }
+  await asyncDb.run(
+    `UPDATE skills SET trust_level = 'REVOKED', enabled = ?, updated_at = datetime('now') WHERE id = ? AND owner_user_id = ?`,
+    false,
+    pkg.id,
+    params.userId
+  );
+  const updated = await getSkillPackage(pkg.id, { userId: params.userId });
+  return { ok: true, skill: updated || undefined };
 }
 
 export function getSkillPermissionSummary(skill: SkillMetadata): SkillPermission[] {

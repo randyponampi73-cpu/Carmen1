@@ -2,15 +2,21 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { isKnownAgentTool, getRegisteredTool, validateToolArguments } from '../agent/toolRegistry';
 import { asyncDb } from '../db';
 import { toBooleanFlag, toIsoTimestamp } from '../db/dialect';
-import { spawnIsolatedProcess } from '../runtime/isolation';
+import { detectSandboxIsolation, spawnIsolatedProcess } from '../runtime/isolation';
 import { scrubSecrets } from '../security';
 import { composeSkillPlan } from './composer';
 import { discoverRelevantSkills } from './discovery';
 import { formatSkillsForPrompt } from './parser';
 import { checkSkillExecutionPermissions } from './permissions';
-import { getSkillPackage, listSkillsForContext, loadSkillReferences } from './registry';
+import {
+  getSkillPackage,
+  listSkillsForContext,
+  loadSkillReferences,
+  verifySkillPackageIntegrity,
+} from './registry';
 import type {
   SkillDiscoveryContext,
   SkillExecutionAnalyticsSummary,
@@ -18,6 +24,8 @@ import type {
   SkillPackageRecord,
   SkillPermission,
   SkillPreflightOutcome,
+  SkillWorkflowExecutionReport,
+  SkillWorkflowStep,
 } from './types';
 import { isAllowedSkillPackageFile, scanSkillTextForThreats, validateSkillPackage } from './validator';
 
@@ -127,6 +135,16 @@ export async function prepareSkillsForAgentTurn(
         continue;
       }
 
+      const integrity = verifySkillPackageIntegrity(pkg);
+      if (!integrity.valid) {
+        loadFailures.push({
+          skillName: match.skill.slug,
+          error: `Integritas checksum paket skill tidak cocok (expected=${integrity.expectedChecksum}, actual=${integrity.actualChecksum}).`,
+        });
+        warnings.push(`Skill "${match.skill.slug}" gagal verifikasi integritas; dilewati dengan aman.`);
+        continue;
+      }
+
       const validation = validateSkillPackage({
         expectedFolderName: pkg.slug,
         skillMd: pkg.skillMd,
@@ -144,7 +162,7 @@ export async function prepareSkillsForAgentTurn(
       }
 
       permittedMatches.push(match);
-      loadedPackages.push(pkg);
+      loadedPackages.push({ ...pkg, integrityVerified: true });
 
       // Stage 3 lazy disclosure: attach up to 2 concise references when present
       if (pkg.referencePaths.length > 0 && !loadSkillOverride) {
@@ -170,6 +188,58 @@ export async function prepareSkillsForAgentTurn(
   }
 
   const composition = composeSkillPlan(permittedMatches, availableSkills);
+  // Load any transitive dependencies pulled in by composeSkillPlan after validating trust & integrity
+  for (const depSlug of composition.resolvedDependencies || []) {
+    if (loadedPackages.some((p) => p.slug === depSlug)) continue;
+    const depMeta = availableSkills.find((s) => s.slug === depSlug);
+    if (!depMeta) continue;
+    const depPerm = checkSkillExecutionPermissions({
+      skill: depMeta,
+      approvedPermissions: approvedPermissionsOverride?.[depSlug] || [],
+      hasScriptExecution: false,
+    });
+    if (!depPerm.allowed) {
+      deniedSkills.push({
+        skillName: depSlug,
+        reason: depPerm.reason,
+        missingPermissions: depPerm.missingPermissions,
+        forbidden: depPerm.forbidden,
+      });
+      warnings.push(depPerm.reason);
+      continue;
+    }
+    try {
+      const depPkg = loadSkillOverride
+        ? await loadSkillOverride(depSlug)
+        : await getSkillPackage(depMeta.id, { userId: ctx.userId, projectId: ctx.projectId });
+      if (!depPkg || !verifySkillPackageIntegrity(depPkg).valid) {
+        loadFailures.push({ skillName: depSlug, error: 'Dependensi skill gagal verifikasi integritas.' });
+        continue;
+      }
+      const depValidation = validateSkillPackage({
+        expectedFolderName: depPkg.slug,
+        skillMd: depPkg.skillMd,
+        references: depPkg.references,
+        scripts: depPkg.scripts,
+        assets: depPkg.assets,
+      });
+      if (!depValidation.valid) {
+        loadFailures.push({ skillName: depSlug, error: depValidation.errors.join('; ') });
+        continue;
+      }
+      loadedPackages.push({ ...depPkg, integrityVerified: true });
+      permittedMatches.push({
+        skill: depMeta,
+        confidence: 0.75,
+        reason: `Dependensi otomatis terverifikasi (${depSlug}).`,
+        explicit: false,
+        matchedTriggers: [],
+      });
+    } catch {
+      loadFailures.push({ skillName: depSlug, error: 'Gagal memuat dependensi skill.' });
+    }
+  }
+
   for (const skipped of composition.skippedConflicts) {
     warnings.push(`Skill "${skipped.skillName}" dilewati: ${skipped.reason}`);
   }
@@ -213,8 +283,16 @@ export async function runSkillSandboxScript(params: {
   scriptPath: string;
   approvedPermissions?: SkillPermission[];
   timeoutMs?: number;
-}): Promise<{ ok: boolean; exitCode: number; output: string; isolated: boolean }> {
-  const { projectId, skill, scriptPath, approvedPermissions = [], timeoutMs = 15_000 } = params;
+  requireOsIsolation?: boolean;
+}): Promise<{ ok: boolean; exitCode: number; output: string; isolated: boolean; driver?: string }> {
+  const {
+    projectId,
+    skill,
+    scriptPath,
+    approvedPermissions = [],
+    timeoutMs = 15_000,
+    requireOsIsolation = false,
+  } = params;
 
   const permCheck = checkSkillExecutionPermissions({
     skill,
@@ -228,6 +306,19 @@ export async function runSkillSandboxScript(params: {
       output: permCheck.reason,
       isolated: false,
     };
+  }
+
+  if (requireOsIsolation) {
+    const iso = detectSandboxIsolation();
+    if (!iso.osLevelIsolation) {
+      return {
+        ok: false,
+        exitCode: -1,
+        output: `Fail-closed: driver isolasi OS tidak tersedia (${iso.driver}) untuk menjalankan script skill tidak tepercaya.`,
+        isolated: false,
+        driver: iso.driver,
+      };
+    }
   }
 
   const fileCheck = isAllowedSkillPackageFile(scriptPath);
@@ -432,5 +523,167 @@ export async function getSkillAnalytics(params: {
       durationMs: Number(r.duration_ms || 0),
       createdAt: toIsoTimestamp(r.created_at),
     })),
+  };
+}
+
+/**
+ * Executes a structured Skill workflow manifest strictly through canonical AGENT_TOOLS
+ * or user-approved sandboxed skill scripts, grouping consecutive parallel-safe read-only
+ * steps concurrently while keeping mutating steps strictly serialized.
+ */
+export async function executeComposedSkillWorkflow(params: {
+  projectId: string;
+  skill: SkillPackageRecord;
+  steps: SkillWorkflowStep[];
+  approvedPermissions?: SkillPermission[];
+  executeToolFn: (
+    toolName: string,
+    args: Record<string, unknown>
+  ) => Promise<{ ok: boolean; result: string; mutated: boolean }>;
+}): Promise<SkillWorkflowExecutionReport> {
+  const { projectId, skill, steps, approvedPermissions = [], executeToolFn } = params;
+  const skippedPreconditions: string[] = [];
+  const results: SkillWorkflowExecutionReport['stepsExecuted'] = [];
+
+  const permCheck = checkSkillExecutionPermissions({
+    skill,
+    approvedPermissions,
+    hasScriptExecution: steps.some((s) => Boolean(s.scriptPath)),
+  });
+  if (!permCheck.allowed) {
+    return {
+      ok: false,
+      stepsExecuted: [
+        {
+          id: 'permission-gate',
+          tool: 'policy',
+          ok: false,
+          attempts: 1,
+          durationMs: 0,
+          parallelBatch: 0,
+          errorClass: 'permission',
+          outputSummary: permCheck.reason,
+        },
+      ],
+      skippedPreconditions: [],
+    };
+  }
+
+  let batchCounter = 1;
+  let i = 0;
+
+  const runSingleStep = async (step: SkillWorkflowStep, batchId: number) => {
+    const startMs = Date.now();
+    if (step.precondition) {
+      const proceed = await step.precondition();
+      if (!proceed) {
+        skippedPreconditions.push(step.id);
+        return null;
+      }
+    }
+
+    if (step.scriptPath) {
+      const scriptRes = await runSkillSandboxScript({
+        projectId,
+        skill,
+        scriptPath: step.scriptPath,
+        approvedPermissions,
+        timeoutMs: step.timeoutMs,
+      });
+      return {
+        id: step.id,
+        tool: `script:${step.scriptPath}`,
+        ok: scriptRes.ok,
+        attempts: 1,
+        durationMs: Date.now() - startMs,
+        parallelBatch: batchId,
+        ...(scriptRes.ok ? {} : { errorClass: 'permission' as const }),
+        outputSummary: scriptRes.output.slice(0, 500),
+      };
+    }
+
+    if (!isKnownAgentTool(step.tool) || !skill.manifest.tools.includes(step.tool)) {
+      return {
+        id: step.id,
+        tool: step.tool,
+        ok: false,
+        attempts: 1,
+        durationMs: Date.now() - startMs,
+        parallelBatch: batchId,
+        errorClass: 'permission' as const,
+        outputSummary: `Tool "${step.tool}" tidak terdaftar di AGENT_TOOLS atau tidak dideklarasikan oleh skill "${skill.slug}".`,
+      };
+    }
+
+    const argValidation = validateToolArguments(step.tool, step.args);
+    if (!argValidation.valid) {
+      return {
+        id: step.id,
+        tool: step.tool,
+        ok: false,
+        attempts: 1,
+        durationMs: Date.now() - startMs,
+        parallelBatch: batchId,
+        errorClass: 'validation' as const,
+        outputSummary: argValidation.error || 'Argumen tool tidak valid.',
+      };
+    }
+
+    const retries = Math.min(2, Math.max(0, Math.floor(step.maxRetries ?? 0)));
+    let attempts = 0;
+    let lastOut = { ok: false, result: 'Belum dijalankan.' };
+    while (attempts <= retries) {
+      attempts += 1;
+      try {
+        lastOut = await executeToolFn(step.tool, step.args);
+        if (lastOut.ok) break;
+      } catch (err) {
+        lastOut = { ok: false, result: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
+    return {
+      id: step.id,
+      tool: step.tool,
+      ok: lastOut.ok,
+      attempts,
+      durationMs: Date.now() - startMs,
+      parallelBatch: batchId,
+      ...(lastOut.ok ? {} : { errorClass: 'transient' as const }),
+      outputSummary: lastOut.result.slice(0, 500),
+    };
+  };
+
+  while (i < steps.length) {
+    const canParallelize = (st: SkillWorkflowStep) => {
+      if (st.scriptPath || !st.parallelSafe) return false;
+      const spec = getRegisteredTool(st.tool);
+      return Boolean(spec && !spec.mutating);
+    };
+
+    if (canParallelize(steps[i])) {
+      const parallelBatch: SkillWorkflowStep[] = [];
+      while (i < steps.length && canParallelize(steps[i])) {
+        parallelBatch.push(steps[i]);
+        i += 1;
+      }
+      const batchId = batchCounter++;
+      const batchOut = await Promise.all(parallelBatch.map((s) => runSingleStep(s, batchId)));
+      for (const item of batchOut) {
+        if (item) results.push(item);
+      }
+      continue;
+    }
+
+    const batchId = batchCounter++;
+    const item = await runSingleStep(steps[i], batchId);
+    if (item) results.push(item);
+    i += 1;
+  }
+
+  return {
+    ok: results.every((r) => r.ok),
+    stepsExecuted: results,
+    skippedPreconditions,
   };
 }

@@ -25,6 +25,10 @@ export type AnthropicFetchFn = (
   options: { timeoutMs: number; streamIdleTimeoutMs?: number; maxRedirects: number }
 ) => Promise<Response>;
 
+function getSecretsToScrub(config: ProviderAdapterConfig): string[] {
+  return [config.apiKey, ...Object.values(config.extraHeaders || {})].filter(Boolean);
+}
+
 function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -79,7 +83,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     const rawText = await readResponseTextWithLimit(res, 2 * 1024 * 1024);
     if (!res.ok) {
       const retryMs = parseRetryAfterMs(res.headers);
-      const body = scrubSecrets(rawText, [config.apiKey]);
+      const body = scrubSecrets(rawText, getSecretsToScrub(config));
       const norm = normalizeProviderError(res.status, body, retryMs);
       throw new Error(`${norm.code}: ${norm.message}`);
     }
@@ -134,11 +138,11 @@ export class AnthropicAdapter implements ProviderAdapter {
         return { ok: true, message: 'Koneksi ke Anthropic berhasil diverifikasi.' };
       }
       const retryMs = parseRetryAfterMs(res.headers);
-      const body = scrubSecrets(await readResponseTextWithLimit(res, 512 * 1024).catch(() => ''), [config.apiKey]);
+      const body = scrubSecrets(await readResponseTextWithLimit(res, 512 * 1024).catch(() => ''), getSecretsToScrub(config));
       const norm = normalizeProviderError(res.status, body, retryMs);
       return { ok: false, message: norm.message, errorCode: norm.code };
     } catch (err) {
-      const msg = scrubSecrets(err instanceof Error ? err.message : String(err), [config.apiKey]);
+      const msg = scrubSecrets(err instanceof Error ? err.message : String(err), getSecretsToScrub(config));
       return { ok: false, message: `Gagal menghubungi Anthropic: ${msg}`, errorCode: 'PROVIDER_DOWN' };
     }
   }
@@ -228,14 +232,14 @@ export class AnthropicAdapter implements ProviderAdapter {
           yield { type: 'done' };
           return;
         }
-        const msg = scrubSecrets(err instanceof Error ? err.message : String(err), [config.apiKey]);
+        const msg = scrubSecrets(err instanceof Error ? err.message : String(err), getSecretsToScrub(config));
         yield { type: 'error', code: 'PROVIDER_DOWN', message: msg };
         return;
       }
 
       if (attempt < 3 && (res.status === 429 || res.status === 503 || res.status === 529)) {
         const retryMs = parseRetryAfterMs(res.headers);
-        const waitMs = retryMs !== null ? retryMs : 500;
+        const waitMs = retryMs !== null ? retryMs : Math.min(3_000, 400 * Math.pow(2, attempt - 1));
         if (waitMs <= 3_000) {
           await res.text().catch(() => {});
           try {
@@ -261,7 +265,7 @@ export class AnthropicAdapter implements ProviderAdapter {
           continue;
         }
         const retryMs = parseRetryAfterMs(res.headers);
-        const norm = normalizeProviderError(400, scrubSecrets(errBodyText, [config.apiKey]), retryMs);
+        const norm = normalizeProviderError(400, scrubSecrets(errBodyText, getSecretsToScrub(config)), retryMs);
         yield { type: 'error', code: norm.code, message: norm.message };
         return;
       }
@@ -271,7 +275,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     if (!res || !res.ok || !res.body) {
       const status = res?.status ?? 503;
       const retryMs = parseRetryAfterMs(res?.headers);
-      const body = res ? scrubSecrets(await readResponseTextWithLimit(res, 512 * 1024).catch(() => ''), [config.apiKey]) : '';
+      const body = res ? scrubSecrets(await readResponseTextWithLimit(res, 512 * 1024).catch(() => ''), getSecretsToScrub(config)) : '';
       const norm = normalizeProviderError(status, body, retryMs);
       yield { type: 'error', code: norm.code, message: norm.message };
       return;
@@ -347,7 +351,7 @@ export class AnthropicAdapter implements ProviderAdapter {
             } else if (evt.type === 'error') {
               const rawErrMsg = scrubSecrets(
                 String(evt.error?.message || evt.message || 'Anthropic stream error'),
-                [config.apiKey]
+                getSecretsToScrub(config)
               );
               const errType = typeof evt.error?.type === 'string' ? evt.error.type : '';
               const errStatus =
@@ -380,7 +384,7 @@ export class AnthropicAdapter implements ProviderAdapter {
       }
     } catch (err) {
       if (!signal?.aborted) {
-        const msg = scrubSecrets(err instanceof Error ? err.message : String(err), [config.apiKey]);
+        const msg = scrubSecrets(err instanceof Error ? err.message : String(err), getSecretsToScrub(config));
         yield { type: 'error', code: 'PROVIDER_DOWN', message: msg };
         return;
       }

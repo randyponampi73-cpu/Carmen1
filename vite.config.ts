@@ -7,6 +7,42 @@ import {defineConfig} from 'vite';
 
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
 
+function resolveAllowedViteHosts(env: NodeJS.ProcessEnv): true | string[] {
+  const raw = (env.VITE_ALLOWED_HOSTS || '').trim();
+  if (raw) {
+    if (raw === '*') return true;
+    const parsed = raw.split(',').map((h) => h.trim()).filter(Boolean);
+    if (parsed.length > 0) return parsed;
+  }
+  const allowAllPreview =
+    env.VITE_STRICT_HOSTS !== 'true' &&
+    (env.DISABLE_HMR === 'true' || Boolean(env.APPLET_ID || env.K_SERVICE));
+  if (allowAllPreview) {
+    return true;
+  }
+  const hosts = new Set<string>([
+    'localhost',
+    '127.0.0.1',
+    '.localhost',
+    '.aistudio.google.com',
+    '.usercontent.goog',
+    '.scf.usercontent.com',
+    '.run.app',
+  ]);
+  for (const urlVal of [env.APP_URL, env.PREVIEW_ORIGIN]) {
+    if (!urlVal) continue;
+    try {
+      hosts.add(new URL(urlVal).hostname);
+    } catch {
+      // Ignore malformed env URL
+    }
+  }
+  if (env.CARMEN_DOMAIN && /^[a-zA-Z0-9._-]+$/.test(env.CARMEN_DOMAIN.trim())) {
+    hosts.add(env.CARMEN_DOMAIN.trim());
+  }
+  return Array.from(hosts);
+}
+
 export default defineConfig(() => {
   return {
     plugins: [
@@ -37,9 +73,9 @@ export default defineConfig(() => {
       },
     },
     server: {
-      host: '0.0.0.0',
+      host: (process.env.HOST || (process.env.VITE_LOCAL_ONLY === 'true' ? '127.0.0.1' : '0.0.0.0')).trim(),
       port: 3000,
-      allowedHosts: true as const,
+      allowedHosts: resolveAllowedViteHosts(process.env),
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',

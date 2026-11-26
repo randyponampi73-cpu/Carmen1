@@ -30,7 +30,7 @@ import {
   type ProviderHealthMonitor,
   type RouteCandidate,
 } from './router';
-import { CANONICAL_AGENT_TOOLS } from './toolRegistry';
+import { CANONICAL_AGENT_TOOLS, getRegisteredTool, validateToolArguments } from './toolRegistry';
 import {
   prepareSkillsForAgentTurn,
   recordSkillExecutionResult,
@@ -39,6 +39,27 @@ import {
   type SkillPermission,
   type SkillPreflightOutcome,
 } from '../skills';
+
+export type AgentTaskState =
+  | 'idle'
+  | 'planning'
+  | 'executing'
+  | 'verifying'
+  | 'repairing'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export type AgentErrorClass = 'transient' | 'validation' | 'permission' | 'fatal' | 'cancelled';
+
+export function classifyAgentToolError(resultText: string): AgentErrorClass {
+  const lower = String(resultText || '').toLowerCase();
+  if (/dibatalkan|aborted|cancelled/.test(lower)) return 'cancelled';
+  if (/ditolak|izin|permission|admin|traversal|tidak diizinkan|terlarang/.test(lower)) return 'permission';
+  if (/argumen wajib|tidak valid|tidak dikenal|format|ambigu|tidak ditemukan di/.test(lower)) return 'validation';
+  if (/timeout|econn|enotfound|rate limit|temporarily|sibuk/.test(lower)) return 'transient';
+  return 'fatal';
+}
 
 export const READ_FILE_MAX_CHARS = 16000;
 
@@ -222,8 +243,28 @@ export async function executeTool(
   args: Record<string, unknown>,
   activeSecrets: string[],
   signal?: AbortSignal
-): Promise<{ ok: boolean; target: string; result: string; mutated: boolean; isVerificationCmd?: boolean }> {
-  const safeArgs = args && typeof args === 'object' ? args : {};
+): Promise<{
+  ok: boolean;
+  target: string;
+  result: string;
+  mutated: boolean;
+  isVerificationCmd?: boolean;
+  errorClass?: AgentErrorClass;
+}> {
+  if (signal?.aborted) {
+    return { ok: false, target: name, result: 'Eksekusi tool dibatalkan oleh pengguna.', mutated: false, errorClass: 'cancelled' };
+  }
+  const validation = validateToolArguments(name, args);
+  if (!validation.valid) {
+    return {
+      ok: false,
+      target: String((args && typeof args === 'object' ? args.path || args.cmd || args.query : '') || name),
+      result: validation.error || `Argumen tool "${name}" tidak valid.`,
+      mutated: false,
+      errorClass: 'validation',
+    };
+  }
+  const safeArgs = validation.normalizedArgs;
 
   if (name === 'list_files') {
     const rawDir = String(safeArgs.dir || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').trim();
@@ -1561,6 +1602,22 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMess
   let lastStepHadToolCalls = false;
   let truncationContinuations = 0;
   let lastStepTruncated = false;
+  let lastMutationEventIdx = -1;
+  let taskState: AgentTaskState = 'idle';
+
+  const setTaskState = (next: AgentTaskState, detail?: string) => {
+    if (taskState === next && !detail) return;
+    taskState = next;
+    emit('task_state', {
+      state: next,
+      sessionId,
+      stepCount,
+      ...(detail ? { detail } : {}),
+      timestamp: Date.now(),
+    });
+  };
+
+  setTaskState('planning');
 
   emit('plan', {
     intent: executionPlan.intent,
@@ -1960,18 +2017,18 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMess
       });
 
       lastStepHadToolCalls = true;
-      for (const tc of stepToolCalls) {
-        if (abortController.signal.aborted) break;
+
+      const executeSingleToolCall = async (tc: (typeof stepToolCalls)[number]) => {
         const targetLabel = String(
           tc.arguments.path ||
             tc.arguments.cmd ||
+            tc.arguments.command ||
             tc.arguments.query ||
             tc.arguments.dir ||
             tc.arguments.packages ||
             tc.name
         );
 
-        // Emit structured workflow phase progress events (plan -> inspect -> execute -> verify -> repair)
         if (
           tc.name === 'list_files' ||
           tc.name === 'read_file' ||
@@ -1979,6 +2036,7 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMess
           tc.name === 'inspect_dependencies' ||
           tc.name === 'workspace_diff'
         ) {
+          setTaskState('executing', targetLabel);
           emit('status', { stage: 'inspecting', target: targetLabel });
         } else if (
           tc.name === 'write_file' ||
@@ -1987,8 +2045,10 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMess
           tc.name === 'create_directory' ||
           tc.name === 'rollback_checkpoint'
         ) {
+          const isRepair = failedVerificationCycles > 0 || tc.name === 'rollback_checkpoint';
+          setTaskState(isRepair ? 'repairing' : 'executing', targetLabel);
           emit('status', {
-            stage: failedVerificationCycles > 0 || tc.name === 'rollback_checkpoint' ? 'repairing' : 'executing',
+            stage: isRepair ? 'repairing' : 'executing',
             target: targetLabel,
           });
         } else if (
@@ -1998,6 +2058,7 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMess
           tc.name === 'read_logs' ||
           tc.name === 'run_command'
         ) {
+          setTaskState('verifying', targetLabel);
           emit('status', { stage: 'verifying', target: targetLabel });
         }
 
@@ -2019,7 +2080,14 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMess
         toolEvents.push(actionEvent);
         emit('tool_event', actionEvent);
 
-        let execRes: { ok: boolean; target: string; result: string; mutated: boolean; isVerificationCmd?: boolean };
+        let execRes: {
+          ok: boolean;
+          target: string;
+          result: string;
+          mutated: boolean;
+          isVerificationCmd?: boolean;
+          errorClass?: AgentErrorClass;
+        };
         try {
           execRes = await executeTool(projectId, tc.name, tc.arguments, secretList, abortController.signal);
         } catch (toolErr) {
@@ -2030,9 +2098,30 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMess
             mutated: false,
           };
         }
+        return { tc, actionEvent, execRes };
+      };
+
+      const recordToolOutcome = (
+        outcome: {
+          tc: (typeof stepToolCalls)[number];
+          actionEvent: ToolActionEvent;
+          execRes: {
+            ok: boolean;
+            target: string;
+            result: string;
+            mutated: boolean;
+            isVerificationCmd?: boolean;
+            errorClass?: AgentErrorClass;
+          };
+        }
+      ) => {
+        const { tc, actionEvent, execRes } = outcome;
         actionEvent.status = execRes.ok ? 'success' : 'error';
         actionEvent.detail = execRes.result;
-        if (execRes.mutated) filesMutated = true;
+        if (execRes.mutated) {
+          filesMutated = true;
+          lastMutationEventIdx = toolEvents.indexOf(actionEvent);
+        }
         if (execRes.ok && (tc.name === 'write_file' || tc.name === 'edit_file')) {
           hasSuccessfulWriteOrEdit = true;
         }
@@ -2054,25 +2143,59 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMess
           content: execRes.result,
         });
 
-        // Loop detection: halt if the exact same failing tool call repeats 3 times
         if (!execRes.ok) {
+          const errClass = execRes.errorClass || classifyAgentToolError(execRes.result);
           const sig = `${tc.name}:${JSON.stringify(tc.arguments)}`;
           const nextFailCount = (failedCallCounts.get(sig) || 0) + 1;
           failedCallCounts.set(sig, nextFailCount);
+          if (errClass === 'permission' && nextFailCount >= 2) {
+            loopBrokenReason = `Eksekusi tool "${tc.name}" dihentikan karena penolakan izin/keamanan berulang (${execRes.result.slice(0, 120)}).`;
+            emit('status', { warning: loopBrokenReason });
+            return false;
+          }
           if (nextFailCount >= MAX_IDENTICAL_FAILING_CALLS) {
             loopBrokenReason = `Loop dihentikan otomatis karena pemanggilan tool "${tc.name}" gagal berulang (${MAX_IDENTICAL_FAILING_CALLS}x) dengan argumen identik.`;
             emit('status', { warning: loopBrokenReason });
-            break;
+            return false;
           }
           if (execRes.isVerificationCmd) {
             failedVerificationCycles += 1;
+            setTaskState('repairing', tc.name);
             if (failedVerificationCycles > MAX_AUTO_FIX_CYCLES) {
               loopBrokenReason = `Batas maksimal perbaikan otomatis (${MAX_AUTO_FIX_CYCLES} siklus build/test) tercapai. Periksa log error di tab Terminal.`;
               emit('status', { warning: loopBrokenReason });
-              break;
+              return false;
             }
           }
         }
+        return true;
+      };
+
+      // Execute consecutive read-only (non-mutating) tool calls in parallel while keeping mutating tools serialized
+      const isReadOnlyBatchCandidate = (tc: (typeof stepToolCalls)[number]) => {
+        const spec = getRegisteredTool(tc.name);
+        return Boolean(spec && !spec.mutating && tc.name !== 'read_logs');
+      };
+
+      let tcIdx = 0;
+      while (tcIdx < stepToolCalls.length && !abortController.signal.aborted) {
+        if (isReadOnlyBatchCandidate(stepToolCalls[tcIdx])) {
+          const readBatch: Array<(typeof stepToolCalls)[number]> = [];
+          while (tcIdx < stepToolCalls.length && isReadOnlyBatchCandidate(stepToolCalls[tcIdx])) {
+            readBatch.push(stepToolCalls[tcIdx]);
+            tcIdx += 1;
+          }
+          const batchOutcomes = await Promise.all(readBatch.map((tc) => executeSingleToolCall(tc)));
+          for (const out of batchOutcomes) {
+            if (!recordToolOutcome(out)) break;
+          }
+          if (loopBrokenReason) break;
+          continue;
+        }
+
+        const out = await executeSingleToolCall(stepToolCalls[tcIdx]);
+        tcIdx += 1;
+        if (!recordToolOutcome(out)) break;
       }
 
       if (loopBrokenReason) {
@@ -2099,6 +2222,29 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMess
     projectRuntime.clearError(projectId);
     await projectRuntime.ensureReadyAsync(projectId);
   }
+
+  // Tool-Evidence Verification Gate: verify whether real verification tools passed/failed AFTER last mutation
+  const VERIFICATION_TOOL_NAMES = new Set(['validate_project', 'build_project', 'run_tests', 'run_command']);
+  const postMutationVerifications = toolEvents
+    .slice(Math.max(0, lastMutationEventIdx + 1))
+    .filter((ev) => VERIFICATION_TOOL_NAMES.has(ev.tool));
+  const passedChecks = postMutationVerifications.filter((ev) => ev.status === 'success').map((ev) => `${ev.tool}(${ev.target})`);
+  const failedChecks = postMutationVerifications.filter((ev) => ev.status === 'error').map((ev) => `${ev.tool}(${ev.target})`);
+
+  const verificationGateStatus: 'verified_pass' | 'verified_fail' | 'not_verified' | 'not_required' =
+    mode !== 'build' || !filesMutated
+      ? 'not_required'
+      : failedChecks.length > 0 && passedChecks.length === 0
+        ? 'verified_fail'
+        : passedChecks.length > 0
+          ? 'verified_pass'
+          : 'not_verified';
+
+  emit('verification_gate', {
+    status: verificationGateStatus,
+    passedChecks,
+    failedChecks,
+  });
 
   const assistantMessageId = `msg_${crypto.randomUUID().slice(0, 10)}`;
   let versionId: string | null = null;
@@ -2141,6 +2287,30 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMess
     if (!finalText.includes(truncNote)) {
       finalText = `${finalText}\n\n${truncNote}`;
     }
+  }
+
+  if (!abortController.signal.aborted && !lastStreamError) {
+    if (verificationGateStatus === 'verified_fail') {
+      const failNote = `Status verifikasi: FAILED — tool verifikasi gagal setelah perubahan terakhir (${failedChecks.join(', ')}).`;
+      if (!/gagal|failed|error/i.test(finalText)) {
+        finalText = `${finalText}\n\n${failNote}`;
+      }
+    } else if (
+      verificationGateStatus === 'not_verified' &&
+      /\b(?:build\s+lulus|tests?\s+(?:passed|lulus)|semua\s+(?:test|uji|verifikasi)\s+lulus|verified\s+pass)\b/i.test(
+        finalText
+      )
+    ) {
+      finalText = `${finalText}\n\n[NOT VERIFIED: Belum ada eksekusi validate_project/build_project/run_tests yang lulus setelah mutasi file terakhir.]`;
+    }
+  }
+
+  if (abortController.signal.aborted) {
+    setTaskState('cancelled');
+  } else if (lastStreamError || loopBrokenReason || verificationGateStatus === 'verified_fail') {
+    setTaskState('failed', lastStreamError?.message || loopBrokenReason || 'Verification failed');
+  } else {
+    setTaskState('completed');
   }
 
   const planText = executionPlan.requiresHeavyPlanning ? formatPlanMarkdown(executionPlan) : null;

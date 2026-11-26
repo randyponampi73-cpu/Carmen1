@@ -774,7 +774,12 @@ export function scrubSecrets(text: string, activeSecrets: string[] = []): string
     .replace(/\bgsk_[A-Za-z0-9_-]{12,}\b/g, '[REDACTED_KEY]')
     .replace(/\bcoa_[A-Za-z0-9_-]{12,}\b/g, '[REDACTED_KEY]')
     .replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, '[REDACTED_KEY]')
-    .replace(/(Bearer\s+)[A-Za-z0-9._-]{12,}/gi, '$1[REDACTED_KEY]');
+    .replace(/(Bearer\s+)[A-Za-z0-9._-]{12,}/gi, '$1[REDACTED_KEY]')
+    .replace(/(X-Carmen-Preview-Token\s*[:=]\s*)[A-Za-z0-9._-]+/gi, '$1[REDACTED_PREVIEW_TOKEN]')
+    .replace(/(\/preview\/[^/\s?#]+\/t\/)[A-Za-z0-9._-]+/gi, '$1[REDACTED_PREVIEW_TOKEN]')
+    .replace(/([?&]pt=)[A-Za-z0-9._-]+/gi, '$1[REDACTED_PREVIEW_TOKEN]')
+    .replace(/(carmen_preview_[A-Za-z0-9_-]+=)[^\s;,'"]+/gi, '$1[REDACTED_PREVIEW_TOKEN]')
+    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{16,}\b/g, '[REDACTED_PREVIEW_TOKEN]');
   return clean;
 }
 

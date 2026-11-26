@@ -40,6 +40,10 @@ export type CoarenaFetchFn = (
   options: { timeoutMs: number; streamIdleTimeoutMs?: number; maxRedirects: number; enforceCustomUrlPolicy: boolean }
 ) => Promise<Response>;
 
+function getSecretsToScrub(config: ProviderAdapterConfig): string[] {
+  return [config.apiKey, ...Object.values(config.extraHeaders || {})].filter(Boolean);
+}
+
 interface CoarenaModelRecord {
   id: string;
   name?: string;
@@ -185,7 +189,7 @@ export class CoarenaAdapter implements ProviderAdapter {
 
     if (!res.ok) {
       const retryAfterMs = parseRetryAfterMs(res.headers);
-      const body = scrubSecrets(rawText, [config.apiKey]);
+      const body = scrubSecrets(rawText, getSecretsToScrub(config));
       const norm = normalizeProviderError(res.status, body, retryAfterMs);
       throw new Error(`${norm.code}: ${norm.message}`);
     }
@@ -346,7 +350,7 @@ export class CoarenaAdapter implements ProviderAdapter {
         errorCode: norm.code,
       };
     } catch (err) {
-      const msg = scrubSecrets(err instanceof Error ? err.message : String(err), [config.apiKey]);
+      const msg = scrubSecrets(err instanceof Error ? err.message : String(err), getSecretsToScrub(config));
       return {
         ok: false,
         message: `Gagal terhubung ke ${config.label || 'Coarena AI'}: ${msg}`,
@@ -454,7 +458,7 @@ export class CoarenaAdapter implements ProviderAdapter {
           yield { type: 'done' };
           return;
         }
-        const msg = scrubSecrets(err instanceof Error ? err.message : String(err), [config.apiKey]);
+        const msg = scrubSecrets(err instanceof Error ? err.message : String(err), getSecretsToScrub(config));
         yield { type: 'error', code: 'PROVIDER_DOWN', message: msg };
         return;
       }
@@ -484,7 +488,7 @@ export class CoarenaAdapter implements ProviderAdapter {
       const retryAfterMs = parseRetryAfterMs(res?.headers);
       const rawBody = res ? await readResponseTextWithLimit(res, 512 * 1024).catch(() => '') : '';
       const detail = extractErrorDetail(rawBody, config.apiKey);
-      const norm = normalizeProviderError(status, detail || rawBody, retryAfterMs);
+      const norm = normalizeProviderError(status, scrubSecrets(detail || rawBody, getSecretsToScrub(config)), retryAfterMs);
       yield { type: 'error', code: norm.code, message: norm.message };
       return;
     }
@@ -525,7 +529,7 @@ export class CoarenaAdapter implements ProviderAdapter {
                 typeof errObj === 'string'
                   ? errObj
                   : errObj.message || errObj.code || JSON.stringify(errObj);
-              const norm = normalizeProviderError(errStatus, scrubSecrets(String(errMsgRaw), [config.apiKey]));
+              const norm = normalizeProviderError(errStatus, scrubSecrets(String(errMsgRaw), getSecretsToScrub(config)));
               yield { type: 'error', code: norm.code, message: norm.message };
               return;
             }
@@ -564,7 +568,7 @@ export class CoarenaAdapter implements ProviderAdapter {
       }
     } catch (err) {
       if (!signal?.aborted) {
-        const msg = scrubSecrets(err instanceof Error ? err.message : String(err), [config.apiKey]);
+        const msg = scrubSecrets(err instanceof Error ? err.message : String(err), getSecretsToScrub(config));
         yield { type: 'error', code: 'PROVIDER_DOWN', message: msg };
         return;
       }

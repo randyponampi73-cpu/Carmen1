@@ -1,0 +1,208 @@
+name: CARMEN Quality Gates & Full-Stack CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'server/**'
+      - 'server.ts'
+      - 'skills/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - 'vite.config.ts'
+      - 'eslint.config.mjs'
+      - 'index.html'
+      - 'metadata.json'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - 'Caddyfile'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'server/**'
+      - 'server.ts'
+      - 'skills/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - 'vite.config.ts'
+      - 'eslint.config.mjs'
+      - 'index.html'
+      - 'metadata.json'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - 'Caddyfile'
+      - '.github/workflows/ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-and-tests:
+    name: Typecheck, Lint, Unit, Security, Skills & Integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies cleanly
+        run: npm ci --ignore-scripts
+
+      - name: Gate 1 — TypeScript typecheck
+        run: npm run typecheck
+
+      - name: Gate 2 — ESLint check
+        run: npm run lint
+
+      - name: Gate 3 — Security & adversarial tests
+        run: |
+          npx tsx --test server/security.test.ts server/runtime/isolation.test.ts
+          npm run test:security
+
+      - name: Gate 4 — Skill engine & skill-optional invariant tests
+        run: npm run test:skills
+
+      - name: Gate 5 — Core unit tests (agent, providers, builds, deploy, db dialect)
+        run: npm run test:unit
+
+      - name: Gate 6 — Concurrency, reliability, benchmark & API integration tests
+        run: |
+          npm run test:concurrency
+          npm run test:reliability
+          npm run test:benchmark
+          npm run test:integration
+
+      - name: Gate 7 — Production Vite frontend build
+        run: |
+          npm run build
+          test -s dist/index.html
+
+      - name: Upload built web bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: carmen-ci-dist
+          path: dist
+          if-no-files-found: error
+          retention-days: 1
+
+  postgres-integration:
+    name: Gate 8 — Live PostgreSQL Integration & Migrations
+    needs: quality-and-tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: carmen
+          POSTGRES_PASSWORD: carmen_ci_password
+          POSTGRES_DB: carmen_ci
+        ports:
+          - '5432:5432'
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies cleanly
+        run: npm ci --ignore-scripts
+
+      - name: Run PostgreSQL dialect & live integration verification
+        env:
+          TEST_POSTGRES_URL: postgresql://carmen:carmen_ci_password@127.0.0.1:5432/carmen_ci
+          PGSSLMODE: disable
+        run: npm run test:postgres
+
+  e2e-playwright:
+    name: Gate 9 — Chromium Playwright E2E Verification
+    needs: quality-and-tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies cleanly
+        run: npm ci --ignore-scripts
+
+      - name: Download built web bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: carmen-ci-dist
+          path: dist
+
+      - name: Install Chromium headless browser
+        run: |
+          npx playwright-core install chromium --with-deps
+          CHROMIUM_BIN="$(node -e "import('playwright-core').then((p) => console.log(p.chromium.executablePath()))")"
+          echo "CHROMIUM_PATH=$CHROMIUM_BIN" >> "$GITHUB_ENV"
+
+      - name: Run Playwright E2E suite
+        run: npm run test:e2e
+
+  docker-production-check:
+    name: Gate 10 — Docker Production Image & Built-in Skills Smoke Test
+    needs: quality-and-tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build production Docker image
+        run: docker build -t carmen-ci:latest .
+
+      - name: Verify non-root runtime, built-in skills presence & server healthcheck
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint node carmen-ci:latest -e "
+            const fs = require('fs');
+            if (process.getuid && process.getuid() === 0) process.exit(2);
+            if (!fs.existsSync('/app/skills/development/fullstack-development/SKILL.md')) process.exit(3);
+            if (!fs.existsSync('/app/dist/index.html')) process.exit(4);
+            console.log('Docker image verified non-root uid=' + (process.getuid ? process.getuid() : 'n/a'));
+          "

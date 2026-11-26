@@ -122,9 +122,10 @@ function scoreAutoSkill(
     }
   } else if (skill.category === 'devops') {
     if (
-      /\b(docker|container|deploy|deployment|ci|cd|github actions|env|environment|cloud run|caddy|nginx|build apk)\b/i.test(
+      /\b(docker|container|deploy|deployment|ci|cd|github actions|env|environment|cloud run|caddy|nginx|build apk|apk|android|gradle)\b/i.test(
         promptLower
       ) ||
+      (ctx.projectType === 'android' && /\b(build|release|apk|aab|ci|package)\b/i.test(promptLower)) ||
       (hasDockerfile && /\b(build|run|deploy|container)\b/i.test(promptLower))
     ) {
       score += 0.38;
@@ -250,9 +251,14 @@ export function discoverRelevantSkills(
     isBlankStarter: ctx.existingFiles.length <= 1,
   });
 
+  const minScore = intent === 'simple_edit' ? 0.42 : AUTO_DISCOVERY_THRESHOLD;
   const autoCandidates: SkillDiscoveryMatch[] = [];
   for (const skill of enabledSkills) {
     if (selected.has(skill.slug)) continue;
+    // Never auto-activate untrusted, draft, or revoked skills unless explicitly requested by slash command
+    if (skill.trustLevel === 'UNTRUSTED' || skill.trustLevel === 'DRAFT' || skill.trustLevel === 'REVOKED') {
+      continue;
+    }
     const { confidence, matchedTriggers, reasons } = scoreAutoSkill(
       skill,
       ctx,
@@ -260,7 +266,7 @@ export function discoverRelevantSkills(
       promptLower,
       tokens
     );
-    if (confidence >= AUTO_DISCOVERY_THRESHOLD) {
+    if (confidence >= minScore) {
       autoCandidates.push({
         skill,
         confidence,

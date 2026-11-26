@@ -32,7 +32,7 @@ export const ALLOWED_SKILL_PERMISSIONS: readonly SkillPermission[] = [
   'DEPLOY',
 ] as const;
 
-export type SkillTrustLevel = 'BUILTIN' | 'VERIFIED' | 'APPROVED' | 'DRAFT' | 'UNTRUSTED';
+export type SkillTrustLevel = 'BUILTIN' | 'VERIFIED' | 'APPROVED' | 'DRAFT' | 'UNTRUSTED' | 'REVOKED';
 export type SkillSource = 'builtin' | 'created' | 'imported' | 'marketplace';
 export type SkillInvocationMode = 'auto' | 'manual' | 'advanced';
 
@@ -92,6 +92,7 @@ export interface SkillMetadata {
   assetPaths: string[];
   createdAt: string;
   updatedAt: string;
+  integrityVerified?: boolean;
 }
 
 export interface SkillPackageRecord extends SkillMetadata {
@@ -147,7 +148,35 @@ export interface SkillCompositionPlan {
   steps: SkillCompositionStep[];
   skippedConflicts: Array<{ skillName: string; reason: string }>;
   missingDependencies: Array<{ skillName: string; missing: string }>;
+  resolvedDependencies?: string[];
+  requiredPermissions?: SkillPermission[];
   hasCycle: boolean;
+}
+
+export interface SkillWorkflowStep {
+  id: string;
+  tool: string;
+  args: Record<string, unknown>;
+  precondition?: () => boolean | Promise<boolean>;
+  parallelSafe?: boolean;
+  maxRetries?: number;
+  timeoutMs?: number;
+  scriptPath?: string;
+}
+
+export interface SkillWorkflowExecutionReport {
+  ok: boolean;
+  stepsExecuted: Array<{
+    id: string;
+    tool: string;
+    ok: boolean;
+    attempts: number;
+    durationMs: number;
+    parallelBatch: number;
+    errorClass?: 'transient' | 'validation' | 'permission' | 'fatal';
+    outputSummary: string;
+  }>;
+  skippedPreconditions: string[];
 }
 
 export interface SkillExecutionAttempt {

@@ -14,6 +14,16 @@ import {
 } from './types';
 
 const METADATA_TIMEOUT_MS = 20_000;
+const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 90_000;
+
+function getGeminiStreamIdleTimeoutMs(): number {
+  const raw = Number(process.env.CARMEN_STREAM_IDLE_TIMEOUT_MS || DEFAULT_STREAM_IDLE_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw >= 50 && raw <= 600_000 ? Math.floor(raw) : DEFAULT_STREAM_IDLE_TIMEOUT_MS;
+}
+
+function getSecretsToScrub(config: ProviderAdapterConfig): string[] {
+  return [config.apiKey, ...Object.values(config.extraHeaders || {})].filter(Boolean);
+}
 
 export type GeminiFetchFn = (
   url: string,
@@ -151,7 +161,7 @@ export class GeminiAdapter implements ProviderAdapter {
     const rawText = await readResponseTextWithLimit(res, 2 * 1024 * 1024);
     if (!res.ok) {
       const retryMs = parseRetryAfterMs(res.headers);
-      const body = scrubSecrets(rawText, [config.apiKey]);
+      const body = scrubSecrets(rawText, getSecretsToScrub(config));
       const norm = normalizeProviderError(res.status, body, retryMs);
       throw new Error(`${norm.code}: ${norm.message}`);
     }
@@ -239,11 +249,14 @@ export class GeminiAdapter implements ProviderAdapter {
         return { ok: true, message: 'Koneksi ke Gemini berhasil diverifikasi.' };
       }
       const retryMs = parseRetryAfterMs(res.headers);
-      const body = scrubSecrets(await readResponseTextWithLimit(res, 512 * 1024).catch(() => ''), [config.apiKey]);
+      const body = scrubSecrets(
+        await readResponseTextWithLimit(res, 512 * 1024).catch(() => ''),
+        getSecretsToScrub(config)
+      );
       const norm = normalizeProviderError(res.status, body, retryMs);
       return { ok: false, message: norm.message, errorCode: norm.code };
     } catch (err) {
-      const msg = scrubSecrets(err instanceof Error ? err.message : String(err), [config.apiKey]);
+      const msg = scrubSecrets(err instanceof Error ? err.message : String(err), getSecretsToScrub(config));
       return { ok: false, message: `Gagal menghubungi Gemini: ${msg}`, errorCode: 'PROVIDER_DOWN' };
     }
   }
@@ -272,14 +285,37 @@ export class GeminiAdapter implements ProviderAdapter {
           }))
         : undefined;
 
+    const idleTimeoutMs = getGeminiStreamIdleTimeoutMs();
+    const streamController = new AbortController();
+    let timedOutByIdle = false;
+    let idleTimer: NodeJS.Timeout | null = null;
+    const armIdleTimer = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        timedOutByIdle = true;
+        streamController.abort(new Error(`Gemini stream idle timeout after ${idleTimeoutMs}ms`));
+      }, idleTimeoutMs);
+    };
+    const onCallerAbort = () => {
+      streamController.abort(signal?.reason);
+    };
+    if (signal) {
+      if (signal.aborted) {
+        yield { type: 'done' };
+        return;
+      }
+      signal.addEventListener('abort', onCallerAbort, { once: true });
+    }
+
     try {
+      armIdleTimer();
       const stream = await ai.models.generateContentStream({
         model: modelId,
         contents,
         config: {
           systemInstruction: systemPrompt,
           ...(functionDeclarations ? { tools: [{ functionDeclarations }] } : {}),
-          ...(signal ? { abortSignal: signal } : {}),
+          abortSignal: streamController.signal,
         },
       });
 
@@ -289,6 +325,10 @@ export class GeminiAdapter implements ProviderAdapter {
 
       for await (const chunk of stream) {
         if (signal?.aborted) break;
+        if (timedOutByIdle) {
+          throw new Error(`Permintaan ke model melebihi batas waktu idle (${idleTimeoutMs}ms).`);
+        }
+        armIdleTimer();
         if (chunk.text) {
           yield { type: 'text_delta', text: chunk.text };
         }
@@ -337,6 +377,15 @@ export class GeminiAdapter implements ProviderAdapter {
         }
       }
 
+      if (timedOutByIdle && !signal?.aborted) {
+        yield {
+          type: 'error',
+          code: 'PROVIDER_DOWN',
+          message: `Permintaan ke model melebihi batas waktu idle stream (${Math.round(idleTimeoutMs / 1000)} detik).`,
+        };
+        return;
+      }
+
       if (tokensIn || tokensOut) {
         yield { type: 'usage', tokensIn, tokensOut };
       }
@@ -344,6 +393,14 @@ export class GeminiAdapter implements ProviderAdapter {
     } catch (err) {
       if (signal?.aborted) {
         yield { type: 'done' };
+        return;
+      }
+      if (timedOutByIdle) {
+        yield {
+          type: 'error',
+          code: 'PROVIDER_DOWN',
+          message: `Permintaan ke model melebihi batas waktu idle stream (${Math.round(idleTimeoutMs / 1000)} detik).`,
+        };
         return;
       }
       const errObj = err as
@@ -363,11 +420,14 @@ export class GeminiAdapter implements ProviderAdapter {
         errObj?.cause?.code,
       ].find((s): s is number => typeof s === 'number' && Number.isFinite(s) && s >= 400 && s <= 599);
 
-      const raw = scrubSecrets(err instanceof Error ? err.message : String(err), [config.apiKey]);
+      const raw = scrubSecrets(err instanceof Error ? err.message : String(err), getSecretsToScrub(config));
       const statusMatch = raw.match(/\b(400|401|403|404|413|429|500|502|503)\b/);
       const status = structuredStatus ?? (statusMatch ? Number(statusMatch[1]) : 500);
       const norm = normalizeProviderError(status, raw);
       yield { type: 'error', code: norm.code, message: norm.message };
+    } finally {
+      if (idleTimer) clearTimeout(idleTimer);
+      if (signal) signal.removeEventListener('abort', onCallerAbort);
     }
   }
 }

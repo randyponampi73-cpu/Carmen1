@@ -46,11 +46,14 @@ COPY --from=builder /app/dist ./dist
 
 COPY package.json package-lock.json tsconfig.json server.ts ./
 COPY server ./server
+COPY skills ./skills
 COPY src/types.ts ./src/types.ts
 
 RUN find /app/server -name '*.test.ts' -delete \
+    && test -d /app/skills/development \
     && mkdir -p /app/data/sandboxes /app/data/artifacts \
     && chown -R node:node /app \
+    && chmod -R u=rwX,go=rX /app/skills \
     && chmod 750 /app/data /app/data/sandboxes /app/data/artifacts
 
 VOLUME ["/app/data"]

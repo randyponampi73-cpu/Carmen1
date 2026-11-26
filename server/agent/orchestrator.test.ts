@@ -1465,6 +1465,80 @@ test('Unlimited fallback chain traversal (>4 routes), >140k context preservation
   }
 });
 
+test('Agent Engineering Phase 4: task_state transitions, schema validation, read-only parallel batching, and verification_gate honesty check', async () => {
+  const { projectId } = seedTestProject('Phase 4 Agent Gate Test');
+  await executeTool(projectId, 'write_file', { path: 'a.txt', content: 'alpha' }, []);
+  await executeTool(projectId, 'write_file', { path: 'b.txt', content: 'beta' }, []);
+
+  // 1. Strict schema argument validation catches missing required arguments & bad types cleanly
+  const badRead = await executeTool(projectId, 'read_file', {}, []);
+  assert.equal(badRead.ok, false);
+  assert.equal(badRead.errorClass, 'validation');
+
+  const badStartLine = await executeTool(projectId, 'read_file', { path: 'a.txt', start_line: 'not-a-number' }, []);
+  assert.equal(badStartLine.ok, false);
+  assert.equal(badStartLine.errorClass, 'validation');
+
+  // Empty replace in edit_file is intentionally allowed for deleting snippets
+  const emptyReplaceEdit = await executeTool(
+    projectId,
+    'edit_file',
+    { path: 'a.txt', search: 'alpha', replace: '' },
+    []
+  );
+  assert.equal(emptyReplaceEdit.ok, true);
+
+  // 2. Unverified mutation + false passing claim triggers verification_gate=not_verified & honest warning
+  let step = 0;
+  const lyingAdapter: ProviderAdapter = {
+    id: 'gemini',
+    capabilities: () => ({ toolCalling: 'yes', vision: 'no', maxContext: 64_000, maxOutput: 4096 }),
+    async testConnection() {
+      return { ok: true, message: 'ok' };
+    },
+    async listModels() {
+      return [];
+    },
+    async *chatStream(): AsyncIterable<StreamEvent> {
+      step += 1;
+      if (step === 1) {
+        yield { type: 'tool_call', id: 'r1', name: 'read_file', arguments: { path: 'b.txt' } };
+        yield { type: 'tool_call', id: 'r2', name: 'list_files', arguments: {} };
+        yield { type: 'tool_call', id: 'w1', name: 'write_file', arguments: { path: 'index.html', content: '<h1>App</h1>' } };
+        yield { type: 'done' };
+        return;
+      }
+      yield { type: 'text_delta', text: 'Selesai dan semua test lulus 100%.' };
+      yield { type: 'done' };
+    },
+  };
+
+  const taskStates: string[] = [];
+  let gatePayload: { status?: string } = {};
+  const msg = await runAgentTurn({
+    projectId,
+    prompt: 'Baca file dan tulis index.html',
+    mode: 'build',
+    adapterConfig: mockAdapterConfig,
+    modelId: 'gemini-2.5-flash',
+    adapterOverride: lyingAdapter,
+    emit(event, payload) {
+      if (event === 'task_state' && payload && typeof payload === 'object') {
+        taskStates.push(String((payload as { state?: string }).state));
+      }
+      if (event === 'verification_gate' && payload && typeof payload === 'object') {
+        gatePayload = payload as { status?: string };
+      }
+    },
+  });
+
+  assert.ok(taskStates.includes('planning'));
+  assert.ok(taskStates.includes('executing'));
+  assert.equal(taskStates[taskStates.length - 1], 'completed');
+  assert.equal(gatePayload.status, 'not_verified');
+  assert.match(msg.content, /NOT VERIFIED/i);
+});
+
 
 
 

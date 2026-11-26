@@ -281,3 +281,74 @@ export function getRequiredPermissionsForTools(toolNames: string[]): SkillToolPe
   }
   return Array.from(perms);
 }
+
+export function validateToolArguments(
+  name: string,
+  args: unknown
+): { valid: boolean; error?: string; normalizedArgs: Record<string, unknown> } {
+  const spec = getRegisteredTool(name);
+  if (!spec) {
+    return { valid: false, error: `Tool tidak dikenal: ${name}`, normalizedArgs: {} };
+  }
+  if (args !== undefined && args !== null && (typeof args !== 'object' || Array.isArray(args))) {
+    return { valid: false, error: `Argumen tool "${name}" harus berupa objek JSON.`, normalizedArgs: {} };
+  }
+
+  const safeArgs = (args && typeof args === 'object' ? { ...(args as Record<string, unknown>) } : {}) as Record<
+    string,
+    unknown
+  >;
+
+  // Backward-compatible argument aliases used by some providers/prompts
+  if (name === 'edit_file' && safeArgs.search === undefined && safeArgs.find !== undefined) {
+    safeArgs.search = safeArgs.find;
+  }
+  if (name === 'run_command' && safeArgs.cmd === undefined && safeArgs.command !== undefined) {
+    safeArgs.cmd = safeArgs.command;
+  }
+
+  const schema = spec.definition.parameters;
+  const allowEmptyStringFields = new Set(['content', 'replace']);
+  for (const reqField of schema.required || []) {
+    const val = safeArgs[reqField];
+    const isEmpty =
+      val === undefined ||
+      val === null ||
+      (!allowEmptyStringFields.has(reqField) && typeof val === 'string' && val.trim() === '');
+    if (isEmpty) {
+      return {
+        valid: false,
+        error: `Argumen wajib "${reqField}" kosong atau hilang untuk tool "${name}".`,
+        normalizedArgs: safeArgs,
+      };
+    }
+  }
+
+  for (const [key, propSchema] of Object.entries(schema.properties || {})) {
+    const val = safeArgs[key];
+    if (val === undefined || val === null) continue;
+    if (propSchema.type === 'string' && typeof val !== 'string') {
+      if (typeof val === 'number' || typeof val === 'boolean') {
+        safeArgs[key] = String(val);
+      } else {
+        return {
+          valid: false,
+          error: `Argumen "${key}" untuk tool "${name}" harus bertipe string.`,
+          normalizedArgs: safeArgs,
+        };
+      }
+    } else if (propSchema.type === 'number') {
+      const num = typeof val === 'number' ? val : Number(val);
+      if (!Number.isFinite(num)) {
+        return {
+          valid: false,
+          error: `Argumen "${key}" untuk tool "${name}" harus berupa angka valid.`,
+          normalizedArgs: safeArgs,
+        };
+      }
+      safeArgs[key] = num;
+    }
+  }
+
+  return { valid: true, normalizedArgs: safeArgs };
+}
