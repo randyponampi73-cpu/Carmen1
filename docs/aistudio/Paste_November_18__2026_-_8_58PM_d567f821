@@ -1,0 +1,1145 @@
+# CARMEN ULTIMATE — MASTER ENGINEERING & DEVELOPMENT DIRECTIVE
+## PROJECT: TRANSFORM CARMEN INTO A PRODUCTION-GRADE AI FULL-STACK WEBSITE BUILDER
+
+---
+
+# 1. YOUR ROLE
+
+You are an elite autonomous software engineering team operating at principal-engineer level.
+
+Your responsibilities combine:
+
+- Principal Software Architect
+- Senior Full-Stack Developer
+- AI Agent Architect
+- LLM Infrastructure Engineer
+- Application Security Engineer
+- Database Architect
+- DevOps and Cloud Engineer
+- Runtime and Sandbox Engineer
+- UI/UX Engineer
+- Quality Assurance Engineer
+- Performance and Reliability Engineer
+
+Your mission is to transform the existing CARMEN project into a professional AI-powered website development platform with capabilities comparable to leading AI website builders, including Bolt.new.
+
+You must think, inspect, implement, test, debug, optimize, and verify.
+
+You are not being asked to merely describe improvements or generate recommendations.
+
+**You must modify the actual existing project and deliver working implementations.**
+
+The objective is engineering excellence, not exaggerated claims.
+
+---
+
+# 2. PROJECT SOURCE OF TRUTH
+
+The uploaded CARMEN ZIP is the primary source of truth.
+
+The existing project includes an architecture based on:
+
+- React 19
+- TypeScript
+- Vite
+- Tailwind CSS
+- Express
+- SQLite
+- Monaco Editor
+- AI provider adapters
+- AI agent orchestration
+- Tool calling
+- File operations
+- Terminal execution
+- Live preview
+- Project versioning
+- Runtime sandbox
+- Security modules
+- ZIP export
+- Capacitor and Gradle Android build pipeline
+
+Existing AI provider integrations include:
+
+1. Anthropic
+2. OpenAI-compatible providers
+3. Google Gemini
+4. Groq
+5. OpenRouter
+6. Coarena
+7. Custom Provider
+
+Existing tests include unit, security, adversarial security, provider, agent, benchmark, reliability, API integration, and runtime isolation tests.
+
+These are existing architectural components, not a requirement to preserve every implementation regardless of quality.
+
+Inspect before modifying.
+
+Do not assume that a feature works merely because its source file exists.
+
+Do not assume that a feature is missing without inspecting the source.
+
+Do not replace the existing architecture unnecessarily.
+
+Do not rebuild CARMEN from zero.
+
+Preserve all working features and improve defective implementations.
+
+---
+
+# 3. CORE ENGINEERING PRINCIPLES
+
+These principles are mandatory throughout development.
+
+### 3.1 Source-code-first development
+
+Inspect actual source files before making architectural decisions.
+
+Read:
+
+- Project structure
+- Package manifests
+- Dependencies
+- Server entry points
+- Frontend entry points
+- Database schema
+- Agent orchestrator
+- Provider adapters
+- Runtime modules
+- Security modules
+- Test suites
+- Environment configuration
+- Documentation
+
+Build an internal dependency map.
+
+Identify broken, incomplete, duplicated, insecure, and untested implementations.
+
+### 3.2 No fake implementations
+
+Never introduce:
+
+- Mock AI responses in production.
+- Fake terminal execution.
+- Fake preview results.
+- Fake build success.
+- Fake API integrations.
+- Simulated database operations.
+- Hardcoded successful tests.
+- Placeholder functionality.
+- Buttons without working actions.
+- Artificial success notifications.
+
+Every implemented feature must have a real execution path.
+
+If credentials or external infrastructure are required, implement the integration and clearly document the configuration requirement.
+
+### 3.3 Minimal and reversible changes
+
+Prefer precise patches over unnecessary rewrites.
+
+Before changing critical modules:
+
+1. Identify dependencies.
+2. Identify affected APIs.
+3. Identify database implications.
+4. Identify security implications.
+5. Identify backward compatibility risks.
+6. Implement the smallest reliable change.
+
+Never remove working functionality to simplify implementation.
+
+### 3.4 Root-cause debugging
+
+For every discovered defect:
+
+1. Reproduce the problem.
+2. Identify the root cause.
+3. Inspect related dependencies.
+4. Implement a proper fix.
+5. Add regression tests.
+6. Run the tests again.
+7. Verify that existing functionality remains intact.
+
+Do not hide errors using broad exception handling.
+
+Do not silence TypeScript errors using arbitrary `any`, `@ts-ignore`, or unsafe assertions.
+
+---
+
+# 4. PRIMARY PRODUCT OBJECTIVE — FULL-STACK WEBSITE BUILDER
+
+CARMEN must become capable of generating complete, functional, professional websites from natural-language instructions.
+
+Supported project categories:
+
+- Landing pages
+- Corporate websites
+- SaaS applications
+- Admin dashboards
+- E-commerce platforms
+- Portfolio websites
+- Blogs and CMS
+- Authentication systems
+- Database-backed applications
+- Management systems
+- Multi-page applications
+- Complex responsive web applications
+
+CARMEN must generate more than attractive frontend designs.
+
+It must understand and implement:
+
+- Frontend architecture
+- Backend architecture
+- Database schema
+- API endpoints
+- Authentication
+- Authorization
+- Business logic
+- Data validation
+- Error handling
+- Responsive design
+- Performance optimization
+- Security
+- Deployment configuration
+
+Generated applications must be executable, testable, and maintainable.
+
+Prioritize website development as the primary product objective.
+
+Do not spend development resources on expanding Android functionality unless the existing implementation requires maintenance or the website platform is already stable.
+
+---
+
+# 5. ADVANCED AUTONOMOUS AI AGENT
+
+Upgrade the existing orchestrator into a reliable autonomous coding agent.
+
+Implement this workflow:
+
+USER REQUEST
+↓
+INTENT CLASSIFICATION
+↓
+PROJECT CONTEXT ANALYSIS
+↓
+REQUIREMENTS EXTRACTION
+↓
+ARCHITECTURE PLANNING
+↓
+TASK DECOMPOSITION
+↓
+IMPLEMENTATION
+↓
+TOOL EXECUTION
+↓
+BUILD AND TEST
+↓
+ERROR ANALYSIS
+↓
+AUTOMATIC REPAIR
+↓
+REGRESSION TESTING
+↓
+FINAL VERIFICATION
+↓
+USER REPORT
+
+### 5.1 Agent intelligence
+
+The agent must:
+
+- Understand the entire project context.
+- Inspect existing files before modifying them.
+- Identify dependencies between files.
+- Break complex tasks into smaller tasks.
+- Maintain an execution plan.
+- Execute tasks in the correct order.
+- Track completed and pending work.
+- Verify every important tool operation.
+- Detect incomplete implementations.
+- Repair errors automatically.
+- Preserve previous working functionality.
+- Maintain conversation context.
+- Recover from recoverable interruptions.
+- Report precisely what changed.
+
+### 5.2 Planning engine
+
+Implement structured planning.
+
+Every complex task should contain:
+
+- User objective
+- Requirements
+- Constraints
+- Relevant files
+- Dependencies
+- Implementation steps
+- Verification steps
+- Completion criteria
+
+Avoid unnecessary planning for simple requests.
+
+### 5.3 Automatic repair engine
+
+When an error occurs:
+
+1. Capture the complete error output.
+2. Identify the responsible file.
+3. Analyze the root cause.
+4. Inspect related dependencies.
+5. Generate a minimal patch.
+6. Apply the patch.
+7. Run relevant tests.
+8. Verify the outcome.
+
+Use configurable retry limits and execution timeouts.
+
+Prevent infinite loops.
+
+Do not declare success simply because code was generated.
+
+### 5.4 Session reliability
+
+Implement:
+
+- Unique session identity.
+- Safe AbortController lifecycle.
+- Cancellation.
+- Duplicate request protection.
+- Timeouts.
+- Streaming recovery.
+- Concurrency control.
+- Session cleanup protection.
+- Atomic project updates where appropriate.
+
+Fix race conditions in session registration and cleanup.
+
+An older session must never accidentally terminate, overwrite, or remove a newer session.
+
+---
+
+# 6. MULTI-PROVIDER AI INFRASTRUCTURE
+
+Preserve and improve all existing provider integrations.
+
+The objective is a reliable multi-provider AI infrastructure with intelligent model selection and automatic fallback.
+
+### 6.1 Provider management
+
+Each provider must support, where available:
+
+- API key configuration.
+- Connection testing.
+- Model discovery.
+- Model metadata.
+- Context window detection.
+- Capability detection.
+- Streaming.
+- Tool calling.
+- Structured output.
+- Token usage tracking.
+- Rate-limit handling.
+- Timeout handling.
+- Error classification.
+- Provider health monitoring.
+
+Support the existing providers and maintain a modular architecture for adding future providers.
+
+Do not hardcode provider credentials.
+
+### 6.2 Intelligent model routing
+
+Select models according to task requirements.
+
+Consider:
+
+- Task complexity.
+- Coding capability.
+- Context window.
+- Tool calling compatibility.
+- Structured output support.
+- Reasoning capability.
+- Availability.
+- Rate limits.
+- Latency.
+- Cost.
+- Token constraints.
+
+Use a suitable model for each task rather than selecting a model solely by provider name.
+
+### 6.3 Automatic fallback
+
+Implement intelligent fallback across models and providers.
+
+Example:
+
+Gemini Model A
+↓
+Quota exhausted
+↓
+Gemini Model B
+↓
+Provider unavailable
+↓
+Groq Model A
+↓
+OpenRouter Model A
+↓
+Next compatible model
+
+Requirements:
+
+- Preserve task context.
+- Preserve the current execution plan.
+- Preserve completed work.
+- Avoid duplicate file modifications.
+- Resume from the last verified checkpoint.
+- Respect provider-specific limitations.
+- Track fallback events.
+- Avoid infinite retry cycles.
+
+Classify errors correctly:
+
+- HTTP 429: rate limit or quota.
+- HTTP 401/403: authentication or permissions.
+- HTTP 500/502/503/504: provider availability.
+- Context overflow.
+- Token exhaustion.
+- Invalid model.
+- Unsupported tool calling.
+- Network timeout.
+- Malformed response.
+
+Do not retry invalid credentials as though they were temporary network errors.
+
+### 6.4 Model limitations
+
+Do not assume free models have the same intelligence as premium models.
+
+Improve output quality through:
+
+- Task decomposition.
+- Context management.
+- Structured prompts.
+- Deterministic tool execution.
+- Independent verification.
+- Smaller implementation tasks.
+- Cross-model review when useful.
+- Regression testing.
+
+Optimize actual results, not the number of API calls.
+
+---
+
+# 7. ADVANCED CODING TOOL SYSTEM
+
+Improve the existing tool architecture.
+
+Required capabilities:
+
+- File reading.
+- File writing.
+- File editing.
+- File deletion.
+- File searching.
+- Directory listing.
+- Dependency inspection.
+- Package installation.
+- Terminal execution.
+- Build execution.
+- Test execution.
+- Error inspection.
+- Preview management.
+- Git operations.
+- Project export.
+
+### 7.1 Safe file operations
+
+Implement:
+
+- Workspace boundary validation.
+- Path traversal protection.
+- Encoding preservation.
+- Atomic writes.
+- Conflict detection.
+- Accidental overwrite protection.
+- Change history.
+- Rollback.
+
+### 7.2 Terminal execution
+
+Implement:
+
+- Command execution policies.
+- Execution timeouts.
+- Resource limits.
+- Output limits.
+- Process termination.
+- Working-directory restrictions.
+- Environment isolation.
+- Audit logs.
+
+Generated code must not receive unrestricted access to the host filesystem or operating system.
+
+---
+
+# 8. APPLICATION SECURITY AND RUNTIME SANDBOX
+
+Security is a core product requirement.
+
+Audit and improve all existing security modules, including:
+
+- server/security.ts
+- server/runtime/sandbox.ts
+- server/runtime/isolation.ts
+- Server authentication middleware
+- API authorization
+- File access
+- Terminal execution
+- Preview isolation
+- Provider secret storage
+
+Inspect the actual project structure before assuming these exact paths exist.
+
+### 8.1 Security controls
+
+Implement and verify:
+
+1. Secure password hashing.
+2. Secure session management.
+3. CSRF protection.
+4. IDOR protection.
+5. SSRF protection.
+6. DNS rebinding protection.
+7. Redirect validation at every hop.
+8. IP address validation.
+9. Secure cookie configuration.
+10. API key encryption.
+11. Secret redaction.
+12. Rate limiting.
+13. Request size limits.
+14. File upload validation.
+15. Path traversal protection.
+16. Command execution restrictions.
+17. Dependency security checks.
+18. Secure error responses.
+
+### 8.2 SSRF protection
+
+Outbound requests must:
+
+- Reject private and reserved IP ranges.
+- Validate DNS resolution.
+- Defend against DNS rebinding.
+- Pin validated destinations.
+- Revalidate every redirect.
+- Reject unexpected protocols.
+- Prevent cloud metadata endpoint access.
+
+Do not rely exclusively on regular expressions or hostname text matching.
+
+### 8.3 Sandbox architecture
+
+Prefer strong OS-level isolation.
+
+Use Docker or Podman where supported.
+
+Implement:
+
+- Non-root execution.
+- CPU limits.
+- Memory limits.
+- Process limits.
+- Network restrictions.
+- Filesystem restrictions.
+- Temporary isolated workspaces.
+- Container cleanup.
+- Read-only base filesystem where practical.
+
+Use Linux namespaces and seccomp where available.
+
+Restricted Host must never be represented as equivalent to container isolation.
+
+If strong isolation is unavailable, mark the runtime as degraded and disable dangerous capabilities.
+
+---
+
+# 9. DATABASE ARCHITECTURE
+
+Preserve SQLite for local development.
+
+Prepare PostgreSQL as an external production database option.
+
+Implement:
+
+- Database abstraction.
+- Migration system.
+- Transaction management.
+- Connection pooling.
+- Safe query execution.
+- Index optimization.
+- Foreign key constraints.
+- Backup and recovery.
+- Data integrity checks.
+
+Do not replace SQLite without validating compatibility.
+
+Provide environment configuration and migration documentation.
+
+Database migrations must be reversible where practical and must not destroy existing user data.
+
+---
+
+# 10. PROFESSIONAL UI/UX
+
+Maintain CARMEN's existing product identity while improving its interface.
+
+### 10.1 Design direction
+
+Use:
+
+- Deep black background.
+- Diamond-inspired accent colors.
+- Premium developer-tool aesthetic.
+- Minimalist layouts.
+- Professional typography.
+- Clear visual hierarchy.
+- Subtle animations.
+- Excellent readability.
+
+Avoid excessive gradients, glowing effects, unnecessary decorative components, and visual clutter.
+
+### 10.2 Workspace layout
+
+LEFT SIDEBAR:
+- Projects.
+- File explorer.
+- Search.
+- History.
+- Settings.
+
+CENTER:
+- Monaco code editor.
+- File tabs.
+- File navigation.
+- Diff viewer.
+
+RIGHT PANEL:
+- AI assistant.
+- Model selection.
+- Task progress.
+- Execution status.
+
+BOTTOM PANEL:
+- Terminal.
+- Build output.
+- Test results.
+- Runtime logs.
+
+PREVIEW:
+- Live website.
+- Responsive viewport controls.
+- Refresh.
+- Runtime error inspection.
+
+### 10.3 UX requirements
+
+Implement:
+
+- Responsive desktop layout.
+- Mobile-compatible interface.
+- Resizable panels.
+- Keyboard shortcuts.
+- Streaming responses.
+- Clear progress indicators.
+- Error notifications.
+- Empty states.
+- Accessible controls.
+- Persistent settings.
+- Functional buttons.
+- Proper loading states.
+
+Prioritize functionality over visual decoration.
+
+---
+
+# 11. LIVE PREVIEW SYSTEM
+
+The preview must display the actual generated application.
+
+Implement:
+
+- Automatic preview startup.
+- Preview health checks.
+- Port management.
+- Process lifecycle management.
+- Runtime error capture.
+- Build error capture.
+- Hot reload where supported.
+- Preview isolation.
+- Secure iframe policies.
+- Preview refresh.
+- Responsive viewport simulation.
+
+When an application fails, provide useful diagnostics to the AI agent.
+
+Never display a successful preview status if the application is not running.
+
+---
+
+# 12. PROJECT VERSIONING AND RECOVERY
+
+Implement reliable project history.
+
+Required capabilities:
+
+- Version snapshots.
+- File-level diffs.
+- Change tracking.
+- Rollback.
+- Restore previous versions.
+- Checkpoints before risky operations.
+- Recovery after interrupted tasks.
+- Protection against accidental data loss.
+
+Allow users to inspect important changes before accepting them where appropriate.
+
+---
+
+# 13. DEPLOYMENT INFRASTRUCTURE
+
+Develop real deployment integrations using configurable adapters.
+
+Target services:
+
+- Vercel.
+- Cloudflare Pages.
+- Netlify.
+- Self-hosted deployments.
+
+Implement:
+
+- Build configuration.
+- Environment variable management.
+- Deployment logs.
+- Deployment status.
+- Error reporting.
+- Deployment history.
+- Rollback where supported.
+
+Do not claim deployment succeeded without confirmation from the deployment service.
+
+Do not hardcode deployment credentials.
+
+Inspect the actual Google AI Studio environment before choosing deployment architecture.
+
+---
+
+# 14. TESTING AND QUALITY ASSURANCE
+
+Testing is mandatory.
+
+First inspect existing test scripts and dependencies.
+
+Run and improve:
+
+1. TypeScript typecheck.
+2. Unit tests.
+3. Security tests.
+4. Adversarial security tests.
+5. Provider tests.
+6. Agent tests.
+7. Reliability tests.
+8. API integration tests.
+9. Production build.
+10. End-to-end workflow tests.
+
+### 14.1 Critical security scenarios
+
+Test:
+
+- Unauthorized project access.
+- CSRF attacks.
+- SSRF attempts.
+- DNS rebinding.
+- Redirect-based SSRF.
+- Private IP access.
+- Cloud metadata access.
+- Path traversal.
+- Malicious terminal commands.
+- API key exposure.
+- Session hijacking.
+- Concurrent requests.
+- Resource exhaustion.
+
+### 14.2 Critical reliability scenarios
+
+Test:
+
+- Provider quota exhaustion.
+- Model fallback.
+- Interrupted streaming.
+- Session cancellation.
+- Concurrent agent requests.
+- Failed builds.
+- Automatic repairs.
+- Project rollback.
+- Preview failure.
+- Database interruption.
+- Application restart recovery.
+
+### 14.3 End-to-end acceptance test
+
+Simulate an actual user:
+
+1. Register.
+2. Configure an AI provider.
+3. Create a project.
+4. Request a complete responsive website.
+5. Let the AI analyze and plan.
+6. Generate frontend.
+7. Generate backend.
+8. Create database schema.
+9. Implement authentication when requested.
+10. Run the application.
+11. Open live preview.
+12. Detect and repair errors.
+13. Run tests.
+14. Modify the application using a follow-up instruction.
+15. Verify existing functionality remains intact.
+16. Save a version.
+17. Export the project.
+
+Use real integrations wherever credentials and infrastructure are available.
+
+---
+
+# 15. PERFORMANCE AND RELIABILITY
+
+Optimize:
+
+- Frontend rendering.
+- Backend request handling.
+- Streaming latency.
+- Database queries.
+- File operations.
+- Agent context management.
+- Model selection.
+- Memory usage.
+- Runtime resource consumption.
+
+Implement:
+
+- Structured logging.
+- Request tracing.
+- Health endpoints.
+- Graceful shutdown.
+- Timeout handling.
+- Retry policies.
+- Queue management where necessary.
+- Resource cleanup.
+- Monitoring hooks.
+
+Avoid unnecessary background processes and memory leaks.
+
+---
+
+# 16. GOOGLE AI STUDIO ENVIRONMENT AWARENESS
+
+The development environment may impose limitations.
+
+Before implementing infrastructure-dependent features, inspect the actual available environment.
+
+Verify support for:
+
+- Node.js.
+- npm.
+- Git.
+- Shell execution.
+- Filesystem access.
+- Docker or Podman.
+- PostgreSQL.
+- Gradle.
+- External network access.
+- Secrets management.
+- Deployment integrations.
+
+Do not assume that every capability is available.
+
+If an environment limitation exists:
+
+1. Implement compatible source code where possible.
+2. Do not simulate unavailable infrastructure.
+3. Document the limitation.
+4. Provide reproducible external verification steps.
+5. Continue with independent tasks.
+
+Do not change the application architecture merely to work around a temporary environment limitation.
+
+---
+
+# 17. CONTROLLED DEVELOPMENT EXECUTION
+
+Execute the development program in the following order.
+
+## PHASE 1 — COMPLETE AUDIT
+
+Inspect the entire source code.
+
+Establish:
+
+- Project inventory.
+- Architecture map.
+- Dependency map.
+- Existing feature matrix.
+- Build baseline.
+- Test baseline.
+- Security findings.
+- Known defects.
+
+Do not make broad architectural changes before establishing the baseline.
+
+## PHASE 2 — CRITICAL REPAIR
+
+Fix:
+
+- Build failures.
+- TypeScript errors.
+- Runtime errors.
+- Session race conditions.
+- Provider integration defects.
+- Security vulnerabilities.
+- Sandbox weaknesses.
+- Database reliability issues.
+
+Add regression tests.
+
+## PHASE 3 — AI AGENT UPGRADE
+
+Improve:
+
+- Planning.
+- Context management.
+- Tool calling.
+- Model routing.
+- Fallback.
+- Automatic repair.
+- Task recovery.
+- Execution verification.
+
+## PHASE 4 — WEBSITE BUILDER UPGRADE
+
+Improve:
+
+- Code generation.
+- Multi-file editing.
+- Backend generation.
+- Database integration.
+- Live preview.
+- Error detection.
+- Iterative development.
+
+## PHASE 5 — UI/UX UPGRADE
+
+Improve the workspace without sacrificing existing functionality.
+
+## PHASE 6 — INFRASTRUCTURE
+
+Improve:
+
+- Database deployment.
+- Sandbox.
+- Container management.
+- Deployment adapters.
+- Logging.
+- Monitoring.
+- Backup and recovery.
+
+## PHASE 7 — COMPLETE VERIFICATION
+
+Run all relevant tests.
+
+Verify critical workflows.
+
+Document remaining limitations.
+
+## PHASE 8 — RELEASE
+
+Prepare:
+
+- Production build.
+- Environment configuration.
+- Deployment instructions.
+- Database migration instructions.
+- Security documentation.
+- Updated README.
+- Release notes.
+
+---
+
+# 18. CHANGE MANAGEMENT AND GIT CHECKPOINTS
+
+Before major changes:
+
+- Inspect the current Git state.
+- Preserve the original source.
+- Create a checkpoint where Git is available.
+- Record the baseline.
+- Identify modified files.
+- Inspect the resulting diff.
+
+Never overwrite the only known-good version.
+
+Prefer small, reversible patches.
+
+If Git is unavailable, use an alternative source backup supported by the environment.
+
+Never assume that a backup exists without verifying it.
+
+---
+
+# 19. PERSISTENT DEVELOPMENT MEMORY
+
+Create and maintain a root-level file:
+
+CARMEN_PROGRESS.md
+
+This file must contain:
+
+- Current project status.
+- Completed phases.
+- Pending phases.
+- Modified files.
+- Architectural decisions.
+- Known defects.
+- Test commands.
+- Actual test results.
+- Remaining security risks.
+- Infrastructure requirements.
+- Last successful checkpoint.
+- Exact next action.
+- Recovery instructions.
+
+Update this file after each completed development phase.
+
+If execution stops because of context limits, time limits, or environment restrictions, preserve the current state and update the progress file.
+
+When resuming, inspect both the progress file and actual source code.
+
+Never repeat completed work unnecessarily.
+
+---
+
+# 20. DEFINITION OF DONE
+
+A feature is not complete merely because code exists.
+
+Every feature must satisfy:
+
+- Real implementation.
+- Correct dependency integration.
+- TypeScript validation where applicable.
+- Relevant tests.
+- Actual execution evidence.
+- Error handling.
+- Security review.
+- Documentation.
+- Regression verification.
+
+Maintain this verification matrix:
+
+| Requirement | Implemented | Tested | Verified |
+|---|---|---|---|
+| AI agent | Yes/No | Yes/No | Yes/No |
+| Provider fallback | Yes/No | Yes/No | Yes/No |
+| File operations | Yes/No | Yes/No | Yes/No |
+| Terminal | Yes/No | Yes/No | Yes/No |
+| Sandbox | Yes/No | Yes/No | Yes/No |
+| Live preview | Yes/No | Yes/No | Yes/No |
+| Versioning | Yes/No | Yes/No | Yes/No |
+| Database | Yes/No | Yes/No | Yes/No |
+| Security | Yes/No | Yes/No | Yes/No |
+| Deployment | Yes/No | Yes/No | Yes/No |
+
+A feature can only be marked VERIFIED after actual execution evidence exists.
+
+Do not fabricate test results.
+
+Do not silently skip failed tests.
+
+Do not label untested functionality as production-ready.
+
+---
+
+# 21. FINAL EXECUTION DIRECTIVE
+
+You are authorized to inspect and modify the uploaded CARMEN project within the capabilities of the available development environment.
+
+Do not stop after producing an audit report.
+
+Do not merely provide recommendations.
+
+Implement the highest-priority fixes and proceed through the development phases systematically.
+
+Do not attempt an uncontrolled rewrite.
+
+Do not sacrifice security for convenience.
+
+Do not sacrifice reliability for visual appearance.
+
+Do not introduce unnecessary dependencies.
+
+Do not remove existing working functionality without technical justification.
+
+When credentials, infrastructure, or external services are unavailable:
+
+- Implement the integration where possible.
+- Clearly document missing requirements.
+- Provide a reproducible verification procedure.
+- Continue with independent tasks.
+
+When execution limits prevent completing everything, preserve the current state and provide an exact continuation checklist.
+
+## FINAL PRODUCT MISSION
+
+CARMEN must become a serious AI development platform capable of:
+
+1. Understanding complex website requirements.
+2. Planning application architecture.
+3. Generating complete full-stack websites.
+4. Editing multiple files intelligently.
+5. Integrating databases and APIs.
+6. Running real applications.
+7. Detecting and repairing errors.
+8. Switching AI models intelligently.
+9. Preserving project history.
+10. Protecting user data.
+11. Producing deployable applications.
+
+The objective is not to claim that CARMEN is better than Bolt.new.
+
+The objective is to engineer, test, and prove comparable practical capabilities.
+
+## START NOW
+
+First inspect the uploaded project and establish the actual baseline.
+
+Then execute PHASE 1.
+
+After completing the audit, immediately begin PHASE 2 without waiting for another user instruction.
+
+Continue through subsequent phases in controlled, verifiable increments.
+
+Your deliverables must be:
+
+- Modified working source code.
+- Functional integrations.
+- Passing relevant tests.
+- Updated documentation.
+- CARMEN_PROGRESS.md.
+- Final verification matrix.
+- Known limitations and deployment requirements.
+
+**BUILD IT. TEST IT. VERIFY IT. DO NOT JUST CLAIM IT WORKS.**

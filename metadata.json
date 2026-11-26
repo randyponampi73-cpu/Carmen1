@@ -1,0 +1,6 @@
+{
+  "name": "CARMEN",
+  "description": "Platform pembuat aplikasi web dan Android (APK) fullstack berbasis prompt dengan BYOK multi-provider.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,41 @@
+# Dependencies & Build Outputs
+node_modules/
+build/
+dist/
+.android-ci/
+coverage/
+
+# Runtime Data, SQLite Databases, WAL/SHM & Generated Build Artifacts
+data/
+artifacts/
+*.db
+*.db-wal
+*.db-shm
+*.wal
+*.shm
+*.sqlite
+*.sqlite3
+*.apk
+*.aab
+*.zip
+
+# Temporary AI Studio, Playwright & Media Artifacts
+.aistudio/
+.playwright-cli/
+*.log
+*.tmp
+*.bak
+
+# Environment Secrets & Signing Keys (keep .env.example)
+.env*
+!.env.example
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+
+# OS Junk
+.DS_Store
+Thumbs.db

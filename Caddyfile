@@ -1,0 +1,63 @@
+{
+	admin off
+}
+
+# Main CARMEN Workspace & API Reverse Proxy (automatic TLS via Let's Encrypt / internal CA)
+{$CARMEN_DOMAIN:localhost} {
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# SSE endpoints (AI chat streaming & APK build log streaming) require flush_interval -1
+	@sse {
+		path /api/projects/*/chat /api/builds/*/logs
+	}
+	handle @sse {
+		reverse_proxy app:8080 {
+			flush_interval -1
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-Host {host}
+		}
+	}
+
+	# Token-scoped isolated live previews
+	handle /preview/* {
+		reverse_proxy app:8080 {
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-Host {host}
+		}
+	}
+
+	handle {
+		reverse_proxy app:8080 {
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-Host {host}
+		}
+	}
+}
+
+# Optional separate origin for cross-origin isolated preview iframes (set PREVIEW_DOMAIN=preview.example.com)
+{$PREVIEW_DOMAIN::8443} {
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	handle /preview/* {
+		reverse_proxy app:8080 {
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-Host {host}
+		}
+	}
+
+	handle {
+		respond "Preview route required under /preview/<projectId>/t/<token>/" 404
+	}
+}

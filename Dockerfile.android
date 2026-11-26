@@ -1,0 +1,49 @@
+# Reproducible CARMEN Full-Stack + Native Android Build Container
+# Includes Node.js 22, OpenJDK 17, Gradle 8.10, Android SDK (API 34 + build-tools 34.0.0 + apksigner)
+FROM node:22-bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    NODE_ENV=production \
+    PORT=8080 \
+    CARMEN_DB_PATH=/app/data/carmen.db \
+    JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
+    ANDROID_HOME=/opt/android-sdk \
+    ANDROID_SDK_ROOT=/opt/android-sdk \
+    GRADLE_VERSION=8.10.2 \
+    CMDLINE_TOOLS_REV=11076708
+
+ENV PATH="${JAVA_HOME}/bin:/opt/gradle/bin:${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/build-tools/34.0.0:${PATH}"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl unzip git bash util-linux openjdk-17-jdk-headless \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" -o /tmp/gradle.zip \
+    && unzip -q /tmp/gradle.zip -d /opt \
+    && mv "/opt/gradle-${GRADLE_VERSION}" /opt/gradle \
+    && rm -f /tmp/gradle.zip \
+    && mkdir -p "${ANDROID_HOME}/cmdline-tools" \
+    && curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-${CMDLINE_TOOLS_REV}_latest.zip" -o /tmp/cmdline-tools.zip \
+    && unzip -q /tmp/cmdline-tools.zip -d "${ANDROID_HOME}/cmdline-tools" \
+    && mv "${ANDROID_HOME}/cmdline-tools/cmdline-tools" "${ANDROID_HOME}/cmdline-tools/latest" \
+    && rm -f /tmp/cmdline-tools.zip \
+    && yes | sdkmanager --licenses >/dev/null \
+    && sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" \
+    && chmod -R a+rX /opt/gradle "${ANDROID_HOME}"
+
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts
+COPY . .
+RUN npm run build \
+    && mkdir -p /app/data/sandboxes /app/data/artifacts \
+    && chown -R node:node /app
+
+ENV NODE_ENV=production \
+    CARMEN_DB_PATH=/app/data/carmen.db
+
+USER node
+
+HEALTHCHECK --interval=20s --timeout=10s --start-period=20s --retries=3 \
+  CMD ["node", "scripts/apk-worker-healthcheck.mjs"]
+
+CMD ["npm", "run", "worker:apk"]

@@ -1,0 +1,248 @@
+name: CARMEN Android Native Build & Verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_id:
+        description: 'Android applicationId / package ID'
+        required: false
+        default: 'id.carmen.app'
+      build_release:
+        description: 'Build signed Release APK + AAB (requires repository ANDROID_* signing secrets)'
+        type: boolean
+        default: false
+  push:
+    paths:
+      - 'android/**'
+      - 'capacitor.config.json'
+      - 'Dockerfile.android'
+      - 'server/builds/**'
+      - 'scripts/prepare-android-ci.ts'
+      - '.github/workflows/android-build.yml'
+  pull_request:
+    paths:
+      - 'android/**'
+      - 'capacitor.config.json'
+      - 'Dockerfile.android'
+      - 'server/builds/**'
+      - 'scripts/prepare-android-ci.ts'
+      - '.github/workflows/android-build.yml'
+
+jobs:
+  validate-builder:
+    name: Validate CARMEN Builder & Web Bundle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies cleanly
+        run: npm ci --ignore-scripts
+
+      - name: Run TypeScript typecheck, ESLint, test suite & production build
+        run: |
+          npm run typecheck
+          npm run lint
+          npm test
+          npm run build
+          test -s dist/index.html
+
+      - name: Upload built frontend bundle for Android packaging
+        uses: actions/upload-artifact@v4
+        with:
+          name: carmen-web-dist
+          path: dist
+          if-no-files-found: error
+          retention-days: 1
+
+  build-debug-apk:
+    name: Compile & Verify Debug APK
+    needs: validate-builder
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download built frontend bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: carmen-web-dist
+          path: dist
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Setup JDK 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK (API 34 + Build-Tools 34.0.0)
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+
+      - name: Setup Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Prepare Android Gradle project (committed android/ or generated .android-ci)
+        run: |
+          npm ci --ignore-scripts
+          if [ -f android/build.gradle ]; then
+            echo "ANDROID_PROJECT_DIR=android" >> "$GITHUB_ENV"
+          else
+            npx tsx scripts/prepare-android-ci.ts \
+              --dist dist \
+              --out .android-ci \
+              --package-id "${{ github.event.inputs.package_id || 'id.carmen.app' }}"
+            echo "ANDROID_PROJECT_DIR=.android-ci" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build Debug APK (never skipped)
+        working-directory: ${{ env.ANDROID_PROJECT_DIR }}
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew 2>/dev/null || true
+          if [ -x ./gradlew ]; then
+            ./gradlew assembleDebug --no-daemon --console=plain
+          else
+            gradle assembleDebug --no-daemon --console=plain
+          fi
+
+      - name: Verify Debug APK exists, has non-zero size, valid structure & signature
+        run: |
+          set -euo pipefail
+          APK_PATH="${{ env.ANDROID_PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -f "$APK_PATH" ]; then
+            echo "::error::Debug APK missing at $APK_PATH"
+            exit 1
+          fi
+          APK_SIZE=$(wc -c < "$APK_PATH")
+          if [ "$APK_SIZE" -lt 10240 ]; then
+            echo "::error::Generated APK unexpectedly small ($APK_SIZE bytes)"
+            exit 1
+          fi
+          echo "Verified APK size: $APK_SIZE bytes"
+          APKSIGNER="$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner"
+          AAPT2="$ANDROID_SDK_ROOT/build-tools/34.0.0/aapt2"
+          "$APKSIGNER" verify --verbose --print-certs "$APK_PATH"
+          "$AAPT2" dump badging "$APK_PATH" | head -n 15
+
+      - name: Upload verified Debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: carmen-android-debug-apk
+          path: ${{ env.ANDROID_PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  build-release-signed:
+    name: Build & Sign Release APK + AAB
+    needs: build-debug-apk
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.build_release == true) || startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate release signing secrets are configured
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$ANDROID_STORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ] || [ -z "$ANDROID_KEY_PASSWORD" ]; then
+            echo "::error::Release build requested without ANDROID_KEYSTORE_BASE64 / ANDROID_STORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD GitHub Secrets."
+            exit 1
+          fi
+
+      - name: Download built frontend bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: carmen-web-dist
+          path: dist
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Setup JDK 17 & Android SDK & Gradle
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK (API 34 + Build-Tools 34.0.0)
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+
+      - name: Setup Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Assemble Android Gradle project
+        run: |
+          npm ci --ignore-scripts
+          if [ -f android/build.gradle ]; then
+            echo "ANDROID_PROJECT_DIR=android" >> "$GITHUB_ENV"
+          else
+            npx tsx scripts/prepare-android-ci.ts \
+              --dist dist \
+              --out .android-ci \
+              --package-id "${{ github.event.inputs.package_id || 'id.carmen.app' }}"
+            echo "ANDROID_PROJECT_DIR=.android-ci" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build & Verify Signed Release APK + AAB
+        working-directory: ${{ env.ANDROID_PROJECT_DIR }}
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          trap 'shred -u release.keystore 2>/dev/null || rm -f release.keystore' EXIT
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > release.keystore
+          chmod 600 release.keystore
+          GRADLE_CMD="gradle"
+          if [ -x ./gradlew ]; then GRADLE_CMD="./gradlew"; fi
+          "$GRADLE_CMD" assembleRelease bundleRelease --no-daemon --console=plain \
+            -Pandroid.injected.signing.store.file="$(pwd)/release.keystore" \
+            -Pandroid.injected.signing.store.password="$ANDROID_STORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias="$ANDROID_KEY_ALIAS" \
+            -Pandroid.injected.signing.key.password="$ANDROID_KEY_PASSWORD"
+          test -s app/build/outputs/apk/release/app-release.apk
+          test -s app/build/outputs/bundle/release/app-release.aab
+          "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
+          jarsigner -verify -verbose -certs app/build/outputs/bundle/release/app-release.aab | tail -n 10
+
+      - name: Upload verified Signed Release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: carmen-android-release-artifacts
+          path: |
+            ${{ env.ANDROID_PROJECT_DIR }}/app/build/outputs/apk/release/app-release.apk
+            ${{ env.ANDROID_PROJECT_DIR }}/app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+          retention-days: 14

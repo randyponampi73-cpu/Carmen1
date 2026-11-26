@@ -1,0 +1,104 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* CARMEN Design Tokens — Section 6.8.1 (Strict) */
+:root {
+  --bg: #FAFAF9;
+  --surface: #FFFFFF;
+  --surface-2: #F3F3F1;
+  --border: #E4E4E1;
+  --border-strong: #858991;
+  --text: #1A1A1A;
+  --text-muted: #6B6F76;
+  --accent: #B52A42;
+  --accent-text: #B52A42;
+  --accent-hover: #9E2338;
+  --success: #2E8B57;
+  --success-text: #1F6F43;
+  --warning: #B7831F;
+  --warning-text: #8A5F0A;
+  --error: #D13438;
+  --error-text: #B82A2E;
+  --error-fill: #B82A2E;
+  --shadow-float: 0 8px 24px rgba(0, 0, 0, 0.08);
+  color-scheme: light;
+}
+
+.dark {
+  --bg: #0E0F11;
+  --surface: #151618;
+  --surface-2: #1B1D20;
+  --border: #26282C;
+  --border-strong: #656B75;
+  --text: #E8E9EA;
+  --text-muted: #8B8F96;
+  --accent: #C8324B;
+  --accent-text: #E8566C;
+  --accent-hover: #B22A41;
+  --success: #3FA66B;
+  --success-text: #3FA66B;
+  --warning: #D9A441;
+  --warning-text: #D9A441;
+  --error: #E5484D;
+  --error-text: #F0686C;
+  --error-fill: #B82A2E;
+  --shadow-float: 0 10px 28px rgba(0, 0, 0, 0.45);
+  color-scheme: dark;
+}
+
+@layer base {
+  html, body {
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    background-color: var(--bg);
+    color: var(--text);
+    overflow-x: hidden;
+  }
+
+  code, pre, kbd, .font-mono {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+
+  button, a, input, textarea, select {
+    transition-property: color, background-color, border-color, opacity;
+    transition-duration: 150ms;
+    transition-timing-function: ease-out;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Scrollbar refinement matching hairline aesthetic */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>CARMEN — Platform Pembuat Aplikasi Web & Android</title>
+    <meta name="description" content="Platform pembuat aplikasi web dan Android (APK) fullstack berbasis prompt dengan BYOK multi-provider." />
+    <meta property="og:title" content="CARMEN — Platform Pembuat Aplikasi Web & Android" />
+    <meta property="og:description" content="Platform pembuat aplikasi web dan Android (APK) fullstack berbasis prompt dengan BYOK multi-provider." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('carmen_theme');
+          var useDark = saved === 'dark' || (saved !== 'light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.classList.toggle('dark', Boolean(useDark));
+          var accentId = localStorage.getItem('carmen_accent');
+          var accents = {
+            crimson: { light: ['#B52A42', '#B52A42', '#9E2338'], dark: ['#C8324B', '#E8566C', '#B22A41'] },
+            cobalt: { light: ['#1D4ED8', '#1D4ED8', '#1E40AF'], dark: ['#2563EB', '#60A5FA', '#1D4ED8'] },
+            emerald: { light: ['#15803D', '#15803D', '#166534'], dark: ['#16A34A', '#4ADE80', '#15803D'] },
+            amber: { light: ['#B45309', '#B45309', '#92400E'], dark: ['#D97706', '#FBBF24', '#B45309'] },
+            indigo: { light: ['#4338CA', '#4338CA', '#3730A3'], dark: ['#4F46E5', '#818CF8', '#4338CA'] }
+          };
+          if (accentId && accents[accentId]) {
+            var pal = useDark ? accents[accentId].dark : accents[accentId].light;
+            document.documentElement.style.setProperty('--accent', pal[0]);
+            document.documentElement.style.setProperty('--accent-text', pal[1]);
+            document.documentElement.style.setProperty('--accent-hover', pal[2]);
+          }
+        } catch (e) {
+          document.documentElement.classList.add('dark');
+        }
+      })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body class="bg-[var(--bg)] text-[var(--text)] antialiased selection:bg-[var(--accent)] selection:text-white">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
