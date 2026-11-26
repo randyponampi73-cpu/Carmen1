@@ -129,9 +129,46 @@ import {
   verifyPreviewToken,
 } from './server/security';
 import { buildBlankProjectFiles, PROJECT_TEMPLATES } from './server/templates/projectTemplates';
+import { listRegisteredTools } from './server/agent/toolRegistry';
+import {
+  approveSkillPermissions,
+  createSkillDraft,
+  deleteUserSkill,
+  exportSkillPackageZip,
+  getSkillAnalytics,
+  getSkillMarketplaceCatalog,
+  getSkillPackage,
+  getSkillPermissionSummary,
+  inspectAndImportSkillZip,
+  listSkillsForContext,
+  listSkillVersions,
+  MAX_SKILL_IMPORT_ZIP_BYTES,
+  rollbackSkillVersion,
+  saveUserSkillPackage,
+  setProjectSkillConfig,
+  setUserSkillEnabled,
+  SKILL_CATEGORIES,
+  syncBuiltinSkillsAsync,
+  validateSkillPackage,
+  type SkillCategory,
+  type SkillInvocationMode,
+  type SkillPermission,
+} from './server/skills';
 
 if (ACTIVE_DB_DRIVER === 'sqlite') {
   initDatabase();
+}
+
+let builtinSkillsSyncPromise: Promise<void> | null = null;
+async function ensureBuiltinSkillsSyncedAsync(force = false): Promise<void> {
+  if (!builtinSkillsSyncPromise || force) {
+    builtinSkillsSyncPromise = syncBuiltinSkillsAsync()
+      .then(() => undefined)
+      .catch((err) => {
+        console.warn('[CARMEN] Skill sync warning:', err instanceof Error ? err.message : String(err));
+      });
+  }
+  await builtinSkillsSyncPromise;
 }
 
 function asyncHandler(
@@ -2300,13 +2337,27 @@ app.delete('/api/projects/:id/files', requireAuth, requireProjectOwner, asyncHan
 }));
 
 app.post('/api/projects/:id/chat', requireAuth, requireProjectOwner, asyncHandler(async (req: AuthedRequest, res) => {
-  const { prompt, mode = 'build', providerKeyId, modelId, imageBase64, imageMimeType, localProviderConfig } = req.body as {
+  const {
+    prompt,
+    mode = 'build',
+    providerKeyId,
+    modelId,
+    imageBase64,
+    imageMimeType,
+    localProviderConfig,
+    skillMode: rawSkillMode,
+    selectedSkillNames: rawSelectedSkillNames,
+    disableAllSkills: rawDisableAllSkills,
+  } = req.body as {
     prompt?: string;
     mode?: 'build' | 'discuss';
     providerKeyId?: string;
     modelId?: string;
     imageBase64?: string;
     imageMimeType?: string;
+    skillMode?: SkillInvocationMode;
+    selectedSkillNames?: string[];
+    disableAllSkills?: boolean;
     localProviderConfig?: {
       provider: ProviderType;
       label: string;
@@ -2317,6 +2368,17 @@ app.post('/api/projects/:id/chat', requireAuth, requireProjectOwner, asyncHandle
       chatPath?: string;
     };
   };
+
+  const skillMode: SkillInvocationMode =
+    rawSkillMode === 'manual' || rawSkillMode === 'advanced' ? rawSkillMode : 'auto';
+  const selectedSkillNames = Array.isArray(rawSelectedSkillNames)
+    ? rawSelectedSkillNames
+        .filter((s): s is string => typeof s === 'string')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean)
+        .slice(0, 10)
+    : undefined;
+  const disableAllSkills = Boolean(rawDisableAllSkills);
 
   if (!prompt || !prompt.trim()) {
     return res.status(400).json({ error: 'Prompt tidak boleh kosong.' });
@@ -2572,8 +2634,10 @@ app.post('/api/projects/:id/chat', requireAuth, requireProjectOwner, asyncHandle
   };
 
   try {
+    await ensureBuiltinSkillsSyncedAsync();
     const savedMsg = await runAgentTurn({
       projectId: req.params.id,
+      userId: req.user!.id,
       prompt: prompt.trim(),
       mode: mode === 'discuss' ? 'discuss' : 'build',
       imageBase64,
@@ -2582,6 +2646,9 @@ app.post('/api/projects/:id/chat', requireAuth, requireProjectOwner, asyncHandle
       modelId: chosenModel,
       fallbackCandidates,
       sessionId,
+      skillMode,
+      requestedSkillNames: selectedSkillNames,
+      disableAllSkills,
       emit,
     });
     if (usesPlatformSharedKey || actualRoutedProviderKeyId.startsWith('key_platform_')) {
@@ -2942,16 +3009,16 @@ app.post('/api/projects/:id/deployments', requireAuth, requireProjectOwner, asyn
     production: Boolean(production),
   });
 
-  const hasPkg = Boolean(
-    await asyncDb.get<{ id: string }>(
-      'SELECT id FROM project_files WHERE project_id = ? AND path = ?',
-      req.params.id,
-      'package.json'
-    )
+  const pkgRow = await asyncDb.get<{ content: string }>(
+    'SELECT content FROM project_files WHERE project_id = ? AND path = ?',
+    req.params.id,
+    'package.json'
   );
   const selfHostedArtifacts =
     target === 'self-hosted'
-      ? generateSelfHostedArtifacts(resolvedName, hasPkg, await detectProjectArchitectureAsync(req.params.id))
+      ? generateSelfHostedArtifacts(resolvedName, Boolean(pkgRow), await detectProjectArchitectureAsync(req.params.id), {
+          packageJsonContent: pkgRow?.content ?? null,
+        })
       : undefined;
 
   return res.status(deployment.status === 'failed' ? 400 : 201).json({
@@ -2974,6 +3041,350 @@ app.get('/api/deployments/:deployId', requireAuth, asyncHandler(async (req: Auth
     return res.status(403).json({ error: 'Anda tidak memiliki akses ke deployment ini.' });
   }
   return res.json({ deployment });
+}));
+
+// ============================================================
+// CARMEN DYNAMIC SKILL INTELLIGENCE API (Skill-Optional Architecture)
+// ============================================================
+async function assertOptionalOwnedProjectId(userId: string, rawProjectId: unknown): Promise<string | undefined | null> {
+  if (typeof rawProjectId !== 'string' || !rawProjectId.trim()) return undefined;
+  const projectId = rawProjectId.trim();
+  const row = await asyncDb.get<{ id: string }>(
+    'SELECT id FROM projects WHERE id = ? AND user_id = ?',
+    projectId,
+    userId
+  );
+  return row ? projectId : null;
+}
+
+app.get('/api/skills', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
+  const forceSync = req.query.sync === '1';
+  await ensureBuiltinSkillsSyncedAsync(forceSync);
+
+  const projectId = await assertOptionalOwnedProjectId(req.user!.id, req.query.projectId);
+  if (projectId === null) {
+    return res.status(404).json({ error: 'Proyek tidak ditemukan.' });
+  }
+
+  const rawCategory = typeof req.query.category === 'string' ? req.query.category.trim().toLowerCase() : 'all';
+  const category =
+    rawCategory === 'all' || (SKILL_CATEGORIES as readonly string[]).includes(rawCategory)
+      ? (rawCategory as SkillCategory | 'all')
+      : 'all';
+  const search = typeof req.query.search === 'string' ? req.query.search : '';
+  const includeDisabled = req.query.includeDisabled !== '0';
+
+  const [skills, analytics] = await Promise.all([
+    listSkillsForContext({
+      userId: req.user!.id,
+      projectId,
+      includeDisabled,
+      category,
+      search,
+    }),
+    getSkillAnalytics({ userId: req.user!.id, projectId }),
+  ]);
+
+  const tools = listRegisteredTools().map((t) => ({
+    name: t.name,
+    category: t.category,
+    requiredPermission: t.requiredPermission,
+    mutating: t.mutating,
+    description: t.definition.description,
+  }));
+
+  return res.json({ skills, tools, analytics });
+}));
+
+app.get('/api/skills/marketplace', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
+  await ensureBuiltinSkillsSyncedAsync();
+  const projectId = await assertOptionalOwnedProjectId(req.user!.id, req.query.projectId);
+  if (projectId === null) {
+    return res.status(404).json({ error: 'Proyek tidak ditemukan.' });
+  }
+  const catalog = await getSkillMarketplaceCatalog({ userId: req.user!.id, projectId });
+  return res.json(catalog);
+}));
+
+app.get('/api/skills/analytics', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
+  const projectId = await assertOptionalOwnedProjectId(req.user!.id, req.query.projectId);
+  if (projectId === null) {
+    return res.status(404).json({ error: 'Proyek tidak ditemukan.' });
+  }
+  const analytics = await getSkillAnalytics({ userId: req.user!.id, projectId });
+  return res.json({ analytics });
+}));
+
+app.post('/api/skills/import', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
+  const { zipBase64 } = req.body as { zipBase64?: string };
+  if (typeof zipBase64 !== 'string' || !zipBase64.trim()) {
+    return res.status(400).json({ error: 'Data ZIP base64 wajib diisi.' });
+  }
+  const normalizedBase64 = zipBase64.replace(/^data:application\/[a-z0-9.+-]+;base64,/i, '').trim();
+  if (normalizedBase64.length > MAX_SKILL_IMPORT_ZIP_BYTES * 1.5) {
+    return res.status(400).json({ error: 'Ukuran paket ZIP skill melebihi batas aman 2 MB.' });
+  }
+  const zipBuffer = Buffer.from(normalizedBase64, 'base64');
+  const imported = await inspectAndImportSkillZip({
+    userId: req.user!.id,
+    zipBuffer,
+  });
+  if (!imported.ok || !imported.skill) {
+    return res.status(400).json({ error: imported.error || 'Gagal mengimpor paket skill.', warnings: imported.warnings || [] });
+  }
+  return res.status(201).json({ skill: imported.skill, warnings: imported.warnings || [] });
+}));
+
+app.post('/api/skills', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
+  const body = req.body as {
+    skillMd?: string;
+    references?: Record<string, string>;
+    name?: string;
+    category?: SkillCategory;
+    description?: string;
+    tags?: string[];
+    tools?: string[];
+    permissions?: SkillPermission[];
+    triggers?: string[];
+    executionMode?: 'sequential' | 'parallel-safe';
+    purpose?: string;
+    whenToUse?: string;
+    requiredContext?: string;
+    workflowSteps?: string[];
+    verificationCriteria?: string[];
+    failureHandling?: string;
+    safetyConstraints?: string;
+    examples?: string[];
+  };
+
+  if (Array.isArray(body.permissions) && (body.permissions as string[]).some((p) => String(p).toUpperCase() === 'ADMIN')) {
+    return res.status(400).json({ error: 'Izin ADMIN dilarang mutlak untuk seluruh Skill.' });
+  }
+
+  if (typeof body.skillMd === 'string' && body.skillMd.trim()) {
+    const saved = await saveUserSkillPackage({
+      userId: req.user!.id,
+      skillMd: body.skillMd,
+      references: body.references && typeof body.references === 'object' ? body.references : {},
+      source: 'created',
+      trustLevel: 'DRAFT',
+      enabled: false,
+      changelog: 'Draft skill dibuat',
+    });
+    if (!saved.ok || !saved.skill) {
+      return res.status(400).json({ error: saved.error || 'Skill tidak valid.' });
+    }
+    return res.status(201).json({ skill: saved.skill });
+  }
+
+  if (!body.name || !body.category || !body.description) {
+    return res.status(400).json({ error: 'Nama (kebab-case), kategori, dan deskripsi skill wajib diisi.' });
+  }
+  if (!(SKILL_CATEGORIES as readonly string[]).includes(body.category)) {
+    return res.status(400).json({ error: 'Kategori skill tidak valid.' });
+  }
+
+  const created = await createSkillDraft({
+    userId: req.user!.id,
+    name: body.name,
+    category: body.category,
+    description: body.description,
+    tags: Array.isArray(body.tags) ? body.tags.map(String) : undefined,
+    tools: Array.isArray(body.tools) ? body.tools.map(String) : undefined,
+    permissions: Array.isArray(body.permissions) ? body.permissions : undefined,
+    triggers: Array.isArray(body.triggers) ? body.triggers.map(String) : undefined,
+    executionMode: body.executionMode === 'parallel-safe' ? 'parallel-safe' : 'sequential',
+    purpose: body.purpose,
+    whenToUse: body.whenToUse,
+    requiredContext: body.requiredContext,
+    workflowSteps: Array.isArray(body.workflowSteps) ? body.workflowSteps.map(String) : undefined,
+    verificationCriteria: Array.isArray(body.verificationCriteria) ? body.verificationCriteria.map(String) : undefined,
+    failureHandling: body.failureHandling,
+    safetyConstraints: body.safetyConstraints,
+    examples: Array.isArray(body.examples) ? body.examples.map(String) : undefined,
+    references: body.references && typeof body.references === 'object' ? body.references : undefined,
+  });
+
+  if (!created.ok || !created.skill) {
+    return res.status(400).json({ error: created.error || 'Gagal membuat draft skill.', warnings: created.warnings || [] });
+  }
+  return res.status(201).json({ skill: created.skill, warnings: created.warnings || [] });
+}));
+
+app.get('/api/skills/:id', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
+  await ensureBuiltinSkillsSyncedAsync();
+  const projectId = await assertOptionalOwnedProjectId(req.user!.id, req.query.projectId);
+  if (projectId === null) {
+    return res.status(404).json({ error: 'Proyek tidak ditemukan.' });
+  }
+  const skill = await getSkillPackage(req.params.id, { userId: req.user!.id, projectId });
+  if (!skill) {
+    return res.status(404).json({ error: 'Skill tidak ditemukan.' });
+  }
+  const [versions] = await Promise.all([listSkillVersions(skill.id, req.user!.id)]);
+  const validation = validateSkillPackage({
+    expectedFolderName: skill.slug,
+    skillMd: skill.skillMd,
+    references: skill.references,
+    scripts: skill.scripts,
+    assets: skill.assets,
+  });
+  return res.json({
+    skill,
+    versions,
+    effectivePermissions: getSkillPermissionSummary(skill),
+    validation: {
+      valid: validation.valid,
+      errors: validation.errors,
+      warnings: validation.warnings,
+    },
+  });
+}));
+
+app.put('/api/skills/:id', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
+  const { skillMd, references, changelog } = req.body as {
+    skillMd?: string;
+    references?: Record<string, string>;
+    changelog?: string;
+  };
+  if (typeof skillMd !== 'string' || !skillMd.trim()) {
+    return res.status(400).json({ error: 'Konten SKILL.md wajib diisi.' });
+  }
+  const existing = await getSkillPackage(req.params.id, { userId: req.user!.id });
+  if (!existing) {
+    return res.status(404).json({ error: 'Skill tidak ditemukan.' });
+  }
+  if (existing.source === 'builtin' || existing.ownerUserId !== req.user!.id) {
+    return res.status(403).json({ error: 'Skill bawaan atau milik pengguna lain tidak dapat diedit.' });
+  }
+  const updated = await saveUserSkillPackage({
+    userId: req.user!.id,
+    skillId: existing.id,
+    skillMd,
+    references: references && typeof references === 'object' ? references : existing.references,
+    scripts: existing.scripts,
+    assets: existing.assets,
+    source: existing.source,
+    trustLevel: existing.trustLevel,
+    enabled: existing.enabled,
+    changelog: typeof changelog === 'string' && changelog.trim() ? changelog.trim() : 'Pembaruan SKILL.md',
+  });
+  if (!updated.ok || !updated.skill) {
+    return res.status(400).json({ error: updated.error || 'Gagal memperbarui skill.' });
+  }
+  return res.json({ skill: updated.skill });
+}));
+
+app.post('/api/skills/:id/validate', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
+  const skill = await getSkillPackage(req.params.id, { userId: req.user!.id });
+  if (!skill) {
+    return res.status(404).json({ error: 'Skill tidak ditemukan.' });
+  }
+  const validation = validateSkillPackage({
+    expectedFolderName: skill.slug,
+    skillMd: skill.skillMd,
+    references: skill.references,
+    scripts: skill.scripts,
+    assets: skill.assets,
+  });
+  return res.json({
+    valid: validation.valid,
+    errors: validation.errors,
+    warnings: validation.warnings,
+    manifest: validation.parsed?.manifest ?? skill.manifest,
+  });
+}));
+
+app.post('/api/skills/:id/rollback', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
+  const { versionId } = req.body as { versionId?: string };
+  if (typeof versionId !== 'string' || !versionId.trim()) {
+    return res.status(400).json({ error: 'versionId wajib diisi.' });
+  }
+  const result = await rollbackSkillVersion(req.params.id, req.user!.id, versionId.trim());
+  if (!result.ok || !result.skill) {
+    return res.status(400).json({ error: result.error || 'Gagal melakukan rollback versi skill.' });
+  }
+  return res.json({ skill: result.skill });
+}));
+
+app.delete('/api/skills/:id', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
+  const result = await deleteUserSkill(req.params.id, req.user!.id);
+  if (!result.ok) {
+    const status = result.error?.includes('tidak ditemukan') ? 404 : result.error?.includes('ditolak') ? 403 : 400;
+    return res.status(status).json({ error: result.error || 'Gagal menghapus skill.' });
+  }
+  return res.json({ ok: true });
+}));
+
+app.post('/api/skills/:id/toggle', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
+  const { enabled } = req.body as { enabled?: boolean };
+  const updated = await setUserSkillEnabled(req.params.id, req.user!.id, Boolean(enabled));
+  if (!updated) {
+    return res.status(404).json({ error: 'Skill tidak ditemukan.' });
+  }
+  return res.json({ skill: updated });
+}));
+
+app.post('/api/projects/:id/skills/:skillId/toggle', requireAuth, requireProjectOwner, asyncHandler(async (req: AuthedRequest, res) => {
+  const { enabled, approvedPermissions } = req.body as {
+    enabled?: boolean;
+    approvedPermissions?: SkillPermission[];
+  };
+  if (
+    Array.isArray(approvedPermissions) &&
+    (approvedPermissions as string[]).some((p) => String(p).toUpperCase() === 'ADMIN')
+  ) {
+    return res.status(400).json({ error: 'Izin ADMIN dilarang mutlak untuk seluruh Skill.' });
+  }
+  const updated = await setProjectSkillConfig(req.params.id, req.params.skillId, req.user!.id, {
+    enabled: typeof enabled === 'boolean' ? enabled : undefined,
+    approvedPermissions: Array.isArray(approvedPermissions) ? approvedPermissions : undefined,
+  });
+  if (!updated) {
+    return res.status(404).json({ error: 'Skill atau proyek tidak ditemukan.' });
+  }
+  return res.json({ skill: updated });
+}));
+
+app.post('/api/skills/:id/approve', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
+  const { permissions, projectId: rawProjectId, promoteTrust } = req.body as {
+    permissions?: SkillPermission[];
+    projectId?: string;
+    promoteTrust?: boolean;
+  };
+  const projectId = await assertOptionalOwnedProjectId(req.user!.id, rawProjectId);
+  if (projectId === null) {
+    return res.status(404).json({ error: 'Proyek tidak ditemukan.' });
+  }
+  const existing = await getSkillPackage(req.params.id, { userId: req.user!.id, projectId });
+  if (!existing) {
+    return res.status(404).json({ error: 'Skill tidak ditemukan.' });
+  }
+  const requestedPerms = Array.isArray(permissions) ? permissions : existing.manifest.permissions;
+  const approved = await approveSkillPermissions({
+    skillId: existing.id,
+    userId: req.user!.id,
+    permissions: requestedPerms,
+    projectId,
+    promoteTrust: promoteTrust !== false,
+  });
+  if (!approved.ok || !approved.skill) {
+    return res.status(400).json({ error: approved.error || 'Gagal menyetujui permission skill.' });
+  }
+  return res.json({ skill: approved.skill });
+}));
+
+app.get('/api/skills/:id/export.zip', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
+  const skill = await getSkillPackage(req.params.id, { userId: req.user!.id });
+  if (!skill) {
+    return res.status(404).json({ error: 'Skill tidak ditemukan.' });
+  }
+  const buf = await exportSkillPackageZip(skill);
+  const safeName = sanitizeDownloadFilename(skill.slug || 'skill', 'skill');
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Content-Disposition', `attachment; filename="${safeName}.zip"`);
+  return res.send(buf);
 }));
 
 // ============================================================
@@ -3461,6 +3872,7 @@ async function startServer() {
     process.exit(1);
   }
   await initDatabaseAsync();
+  await ensureBuiltinSkillsSyncedAsync();
   await recoverPendingApkBuildsAsync().catch((err) => {
     console.warn('[CARMEN] Warning during APK build startup recovery:', err instanceof Error ? err.message : String(err));
   });

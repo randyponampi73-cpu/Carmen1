@@ -1,0 +1,1365 @@
+CARMEN — MASTER ENGINEERING REMEDIATION & SKILL INTELLIGENCE SYSTEM
+
+ROLE
+
+Bertindak sebagai gabungan:
+
+* Principal Software Architect.
+* Senior Full-Stack Engineer.
+* AI Agent Architect.
+* Autonomous Coding Agent Engineer.
+* Application Security Engineer.
+* DevOps Engineer.
+* Database Architect.
+* QA Automation Engineer.
+* Developer Experience Engineer.
+
+Standar pekerjaan: production-grade, evidence-based engineering, secure-by-design, modular architecture, test-driven remediation.
+
+Tugas utama adalah memperbaiki CARMEN yang sudah ada sekaligus mengembangkan Skill Intelligence System sebagai kemampuan inti baru.
+
+Jangan hanya menghasilkan rekomendasi atau mockup. Implementasikan perubahan aktual pada project apabila lingkungan memungkinkan.
+
+Claude Code hanya referensi konseptual untuk memahami reusable skills, on-demand skill loading, workflow invocation, dan agent tooling.
+
+DILARANG:
+
+* Menyalin implementasi internal atau kode proprietary produk lain.
+* Menggunakan nama, merek, atau ketergantungan Claude sebagai identitas CARMEN.
+* Membuat CARMEN bergantung pada Claude API.
+* Menganggap skill sebagai sekadar kumpulan prompt.
+* Mengklaim fitur bekerja tanpa implementasi dan pengujian.
+
+⸻
+
+PART I — PROJECT FOUNDATION
+
+1. Project Identity
+
+Project: CARMEN
+
+Repository:
+https://github.com/randyponampi73-cpu/Carmen1
+
+Project type:
+Full-Stack AI Application Builder dengan BYOK Multi-Provider dan Autonomous Agent.
+
+Fitur yang menjadi cakupan:
+
+* AI-powered application generation.
+* Full-stack code generation.
+* AI agent orchestration.
+* Multi-provider AI routing.
+* Autonomous code editing.
+* Project workspace.
+* Monaco Editor.
+* Terminal.
+* Live preview.
+* Database management.
+* Sandbox execution.
+* Build management.
+* Deployment.
+* Android APK Builder.
+* Project memory.
+* Skill Intelligence System.
+
+2. Existing Technology
+
+Berdasarkan pemeriksaan package.json dan README yang tersedia, pertahankan fondasi berikut:
+
+* React 19.
+* Vite 8.
+* TypeScript.
+* Tailwind CSS 4.
+* Node.js.
+* Express 4.
+* SQLite menggunakan node:sqlite.
+* PostgreSQL readiness.
+* Monaco Editor.
+* BullMQ.
+* ioredis.
+* Docker/Podman runtime.
+* Multi-provider AI adapters.
+
+Jangan mengganti teknologi utama tanpa bukti masalah arsitektur.
+
+Sebelum melakukan perubahan, verifikasi versi dependency aktual dari package.json dan package-lock.json.
+
+Jangan mengasumsikan PostgreSQL sudah aktif hanya berdasarkan adanya konfigurasi atau schema.
+
+3. Existing Core Modules
+
+Periksa implementasi aktual dari:
+
+* server/agent/orchestrator.ts
+* server/agent/planner.ts
+* server/agent/router.ts
+* server/agent/parser.ts
+* server/agent/projectMemory.ts
+* server/security.ts
+* server/runtime/sandbox.ts
+* server/runtime/isolation.ts
+* server/runtime/backendRuntime.ts
+* server/providers/index.ts
+* server/db/
+* server/builds/
+* server/deploy/
+* src/
+
+Pertahankan fitur lama yang berfungsi.
+
+Jangan menghapus modul tanpa analisis dependency dan dampaknya.
+
+⸻
+
+PART II — FULL ENGINEERING REMEDIATION
+
+4. Complete Repository Audit
+
+Audit seluruh file dalam repository:
+
+* Frontend.
+* Backend.
+* AI agent.
+* Provider adapters.
+* Database.
+* Security.
+* Runtime.
+* Sandbox.
+* Build system.
+* Android builder.
+* Deployment.
+* API.
+* UI.
+* Configuration.
+* Dependencies.
+* Tests.
+* CI/CD.
+* Documentation.
+
+Buat file:
+
+CARMEN_ENGINEERING_AUDIT.md
+
+Catat:
+
+* File yang diperiksa.
+* File yang gagal dibaca.
+* Temuan.
+* Bukti kode.
+* Root cause.
+* Dampak.
+* Solusi.
+* Test yang diperlukan.
+
+Jangan mengklaim audit lengkap jika masih ada file yang belum diperiksa.
+
+5. AI Agent Core Remediation
+
+Prioritaskan stabilitas:
+
+PLAN → INSPECT → EXECUTE → VERIFY → REPAIR
+
+Implementasikan atau perbaiki:
+
+* Intent detection.
+* Task decomposition.
+* Context management.
+* Tool orchestration.
+* File operation.
+* Multi-step execution.
+* Retry control.
+* Error recovery.
+* Checkpoint.
+* Rollback.
+* Session isolation.
+* Agent cancellation.
+* Token budgeting.
+* Context compaction.
+* Execution tracing.
+
+Agent harus dapat:
+
+1. Memahami permintaan.
+2. Memeriksa workspace.
+3. Membuat rencana.
+4. Memilih tools dan skills.
+5. Melaksanakan pekerjaan.
+6. Memverifikasi hasil.
+7. Memperbaiki kegagalan.
+8. Menyajikan laporan.
+
+Hindari infinite loop dan retry yang tidak terbatas.
+
+Setiap task harus mempunyai batas waktu, batas iterasi, resource budget, dan cancellation mechanism.
+
+6. Provider Intelligence
+
+Perbaiki sistem multi-provider:
+
+* Gemini.
+* Anthropic.
+* OpenAI.
+* OpenRouter.
+* Groq.
+* Coarena.
+* Custom OpenAI-compatible.
+
+Kembangkan:
+
+* Provider capability registry.
+* Model capability registry.
+* Automatic provider selection.
+* Model fallback.
+* Quota detection.
+* Rate-limit handling.
+* Context-window handling.
+* Streaming lifecycle.
+* Tool calling compatibility.
+* Provider health monitoring.
+* Credential isolation.
+
+Provider selection harus mempertimbangkan:
+
+* Model capability.
+* Context window.
+* Tool calling.
+* Vision.
+* Streaming.
+* Latency.
+* Availability.
+* User preference.
+* Cost apabila tersedia.
+
+Jangan menganggap semua model memiliki kemampuan identik.
+
+Jangan pernah mengekspos API key di frontend, logs, skill files, atau agent outputs.
+
+⸻
+
+PART III — SKILL INTELLIGENCE SYSTEM
+
+7. Core Objective
+
+Bangun sistem skill yang menjadi extension layer untuk CARMEN AI Agent.
+
+Skill merupakan paket kemampuan modular yang berisi:
+
+* Metadata.
+* Instructions.
+* Workflow.
+* Tools requirements.
+* References.
+* Optional scripts.
+* Optional templates.
+* Permissions.
+* Test definitions.
+
+Satu skill harus dapat digunakan kembali pada berbagai project tanpa mengulang instruksi dari awal.
+
+Gunakan konsep Agent Skills sebagai referensi format terbuka, bukan sebagai ketergantungan pada produk tertentu.
+
+8. Skill Package Format
+
+Buat struktur skill yang konsisten.
+
+Contoh:
+
+skills/
+├── development/
+│   ├── code-generation/
+│   │   ├── SKILL.md
+│   │   ├── references/
+│   │   ├── scripts/
+│   │   └── tests/
+│   ├── code-review/
+│   │   ├── SKILL.md
+│   │   ├── references/
+│   │   └── tests/
+│   ├── frontend-design/
+│   │   └── SKILL.md
+│   ├── backend-development/
+│   │   └── SKILL.md
+│   └── fullstack-development/
+│       └── SKILL.md
+├── debugging/
+├── security/
+├── testing/
+├── database/
+├── devops/
+├── architecture/
+├── agents/
+└── registry/
+
+Setiap skill wajib mempunyai SKILL.md.
+
+Gunakan YAML frontmatter:
+
+⸻
+
+name: code-review
+description: Reviews source code for bugs, security issues, maintainability, and performance. Use when the user requests code review or repository inspection.
+version: 1.0.0
+category: development
+tags:
+
+* code
+* review
+* quality
+
+⸻
+
+Skill Instructions
+
+Tuliskan instruksi workflow secara jelas.
+
+Setiap skill harus mempunyai:
+
+* Purpose.
+* Trigger conditions.
+* Required inputs.
+* Required tools.
+* Permissions.
+* Execution steps.
+* Validation criteria.
+* Error handling.
+* Output format.
+* Examples.
+
+Metadata tambahan boleh digunakan, tetapi harus tervalidasi.
+
+Jangan memasukkan seluruh isi skill ke system prompt secara permanen.
+
+Implementasikan progressive loading:
+
+1. Registry hanya memuat metadata ringan.
+2. Skill body dimuat ketika diperlukan.
+3. References dimuat sesuai kebutuhan.
+4. Scripts dijalankan hanya melalui execution environment yang diizinkan.
+
+9. Skill Registry
+
+Buat Skill Registry untuk menyimpan:
+
+* Skill ID.
+* Name.
+* Description.
+* Version.
+* Author.
+* Category.
+* Tags.
+* Source.
+* Installation status.
+* Enabled status.
+* Trust level.
+* Required permissions.
+* Compatibility.
+* Dependencies.
+* Validation status.
+
+Skill harus memiliki ID stabil dan versi yang jelas.
+
+Hindari duplicate skill.
+
+Deteksi konflik nama dan dependency.
+
+Sediakan pencarian berdasarkan:
+
+* Nama.
+* Deskripsi.
+* Kategori.
+* Tags.
+* Capability.
+* Trigger.
+
+10. Skill Discovery Engine
+
+Kembangkan mekanisme pencarian skill berdasarkan intent pengguna.
+
+Contoh:
+
+User:
+“Periksa keamanan aplikasi dan perbaiki vulnerability.”
+
+Skill Discovery:
+
+* security-audit
+* vulnerability-analysis
+* secret-detection
+* bug-fixing
+* test-generation
+* test-execution
+
+Discovery harus mempertimbangkan:
+
+* Task intent.
+* File types.
+* Project framework.
+* Skill description.
+* Required capabilities.
+* Skill compatibility.
+* User permissions.
+
+Jangan memanggil seluruh skill secara bersamaan.
+
+Pilih skill yang relevan saja.
+
+Jika confidence rendah, tanyakan klarifikasi atau tampilkan kandidat kepada pengguna.
+
+11. Skill Invocation
+
+Sediakan dua cara:
+
+A. Automatic invocation
+
+Agent mendeteksi kebutuhan skill berdasarkan task.
+
+B. Manual invocation
+
+Pengguna dapat memanggil skill:
+
+/code-review
+/security-audit
+/debugging
+/frontend-design
+/database-design
+/test-generation
+/deployment-management
+
+Syntax harus diparsing secara aman.
+
+Parameter harus tervalidasi.
+
+Manual invocation harus tetap menghormati permission policy.
+
+Pengguna harus dapat melihat skill yang sedang aktif.
+
+12. Skill Composer
+
+Bangun kemampuan untuk menggabungkan beberapa skill.
+
+Contoh:
+
+Task:
+“Bangun aplikasi manajemen inventaris lengkap.”
+
+Workflow:
+
+1. system-design
+2. database-design
+3. api-design
+4. frontend-design
+5. backend-development
+6. fullstack-development
+7. test-generation
+8. test-execution
+9. security-audit
+
+Composer wajib:
+
+* Membuat dependency graph.
+* Mengidentifikasi urutan eksekusi.
+* Menghindari konflik file.
+* Menghindari eksekusi bersamaan pada resource yang sama.
+* Mempertahankan shared context.
+* Memisahkan output setiap skill.
+* Melakukan verification antar-tahap.
+
+Jangan menjalankan workflow paralel apabila terdapat ketergantungan data atau file.
+
+13. Skill Executor
+
+Buat executor terpisah dari Skill Discovery.
+
+Executor harus:
+
+* Memvalidasi skill.
+* Memeriksa izin.
+* Memuat instruksi.
+* Menyediakan tools yang diizinkan.
+* Menjalankan langkah.
+* Mengumpulkan output.
+* Menangani error.
+* Memverifikasi hasil.
+* Mencatat execution history.
+
+Skill tidak boleh memperoleh akses otomatis ke seluruh filesystem atau environment.
+
+Gunakan least privilege.
+
+Setiap eksekusi memiliki:
+
+* Execution ID.
+* Skill ID.
+* Project ID.
+* Session ID.
+* Start time.
+* End time.
+* Status.
+* Tool calls.
+* Resource usage.
+* Validation result.
+
+14. Skill Permission System
+
+Implementasikan permission levels:
+
+READ:
+Membaca file dan metadata.
+
+WRITE:
+Mengubah file project yang diizinkan.
+
+EXECUTE:
+Menjalankan perintah yang sudah diotorisasi.
+
+NETWORK:
+Mengakses jaringan melalui kebijakan outbound yang aman.
+
+DATABASE:
+Mengakses database melalui koneksi dan scope yang diizinkan.
+
+DEPLOY:
+Melakukan deployment setelah persetujuan.
+
+ADMIN:
+Mengelola skill registry dan konfigurasi administratif.
+
+Jangan memberikan ADMIN kepada skill biasa.
+
+Operasi berisiko tinggi wajib membutuhkan approval pengguna.
+
+Skill tidak boleh meningkatkan permission dirinya sendiri.
+
+⸻
+
+PART IV — INITIAL SKILL LIBRARY
+
+15. Build the Initial 32 Skills
+
+Implementasikan 32 skill berikut sebagai paket yang benar-benar memiliki instruksi, metadata, workflow, dan test.
+
+A. DEVELOPMENT
+
+1. code-generation
+    Menghasilkan kode sesuai spesifikasi dan pola proyek.
+2. code-review
+    Memeriksa bug, maintainability, readability, security, dan architecture.
+3. refactoring
+    Memperbaiki struktur kode tanpa mengubah behavior yang diharapkan.
+4. frontend-design
+    Menghasilkan UI berkualitas dengan konsistensi design system.
+5. backend-development
+    Mengembangkan business logic dan backend services.
+6. fullstack-development
+    Mengintegrasikan frontend, backend, API, dan database.
+
+B. DEBUGGING
+
+7. error-diagnosis
+    Menganalisis error dan menentukan root cause.
+8. bug-fixing
+    Memperbaiki masalah berdasarkan bukti.
+9. performance-debugging
+    Mendeteksi bottleneck melalui pengukuran.
+10. regression-analysis
+    Menganalisis regresi akibat perubahan kode.
+
+C. SECURITY
+
+11. security-audit
+    Melakukan pemeriksaan keamanan aplikasi.
+12. vulnerability-analysis
+    Mengidentifikasi dan menganalisis vulnerability.
+13. dependency-audit
+    Memeriksa dependency dan advisory keamanan.
+14. secret-detection
+    Mengidentifikasi credential leakage.
+
+D. TESTING
+
+15. test-generation
+    Membuat unit, integration, dan regression tests.
+16. test-execution
+    Menjalankan pengujian yang relevan.
+17. e2e-testing
+    Menguji workflow pengguna secara menyeluruh.
+18. test-failure-analysis
+    Menganalisis penyebab kegagalan test.
+
+E. DATABASE
+
+19. database-design
+    Merancang schema dan relasi.
+20. sql-optimization
+    Mengoptimalkan query dan indexes.
+21. migration-management
+    Mengelola schema migration dan rollback.
+22. data-integrity-audit
+    Memeriksa konsistensi dan integritas data.
+
+F. DEVOPS
+
+23. docker-management
+    Membuat dan mengelola container.
+24. ci-cd-automation
+    Mengembangkan pipeline otomatis.
+25. deployment-management
+    Mengelola deployment.
+26. environment-configuration
+    Mengelola konfigurasi environment secara aman.
+
+G. ARCHITECTURE
+
+27. architecture-review
+    Mengevaluasi kualitas arsitektur.
+28. system-design
+    Merancang sistem yang scalable.
+29. api-design
+    Merancang kontrak API.
+30. technical-documentation
+    Membuat dokumentasi teknis.
+
+H. AGENT MANAGEMENT
+
+31. skill-creator
+    Membuat skill baru berdasarkan kebutuhan pengguna.
+32. skill-validator
+    Memvalidasi struktur, metadata, instruksi, dependency, permissions, dan test skill.
+
+Jangan hanya membuat 32 folder kosong.
+
+Setiap skill harus mempunyai instruksi yang cukup untuk digunakan.
+
+Prioritaskan skill yang menjadi fondasi agent terlebih dahulu.
+
+⸻
+
+PART V — ADVANCED SKILL MANAGEMENT
+
+16. Skill Manager UI
+
+Tambahkan halaman Skill Manager ke CARMEN.
+
+Fitur:
+
+* Skill catalog.
+* Search.
+* Category filters.
+* Installed skills.
+* Available skills.
+* Enabled/disabled.
+* Skill details.
+* Version.
+* Author.
+* Permissions.
+* Dependencies.
+* Usage history.
+* Validation status.
+
+Pengguna dapat:
+
+* Mengaktifkan skill.
+* Menonaktifkan skill.
+* Menginstal skill.
+* Menghapus skill.
+* Memperbarui skill.
+* Membuat skill.
+* Mengedit skill.
+* Mengimpor skill.
+* Mengekspor skill.
+* Melihat execution history.
+
+Gunakan dark UI dan aksen Diamond.
+
+Jangan membuat UI terlalu ramai.
+
+17. Skill Creator
+
+Buat workflow:
+
+USER REQUEST
+→ REQUIREMENT ANALYSIS
+→ SKILL DESIGN
+→ METADATA GENERATION
+→ INSTRUCTION GENERATION
+→ TOOL REQUIREMENT ANALYSIS
+→ PERMISSION DEFINITION
+→ TEST GENERATION
+→ VALIDATION
+→ INSTALLATION
+
+Skill Creator harus menanyakan detail jika kebutuhan skill tidak jelas.
+
+Hasilkan SKILL.md yang valid.
+
+Buat scripts dan references hanya jika benar-benar diperlukan.
+
+Skill baru harus masuk status DRAFT sampai divalidasi.
+
+18. Skill Import/Export
+
+Dukung:
+
+* Folder import.
+* ZIP import.
+* ZIP export.
+* Local skill packages.
+* Project-level skills.
+* Global user-level skills.
+
+Validasi archive untuk:
+
+* Path traversal.
+* Symlink abuse.
+* Malicious scripts.
+* Oversized files.
+* Duplicate skill IDs.
+* Invalid metadata.
+* Suspicious executable content.
+
+Jangan otomatis menjalankan script dari skill yang baru diimpor.
+
+Skill eksternal harus berstatus UNTRUSTED sampai pengguna menyetujui izin dan hasil pemeriksaan.
+
+19. Skill Marketplace
+
+Buat katalog skill yang dapat diperluas.
+
+Kategori:
+
+* Development.
+* Debugging.
+* Security.
+* Testing.
+* Database.
+* DevOps.
+* Architecture.
+* Automation.
+* Research.
+* Documentation.
+
+Marketplace harus mendukung:
+
+* Search.
+* Filter.
+* Version.
+* Compatibility.
+* Publisher.
+* Trust status.
+* Installation.
+* Update.
+* Uninstall.
+
+Jangan membuat marketplace palsu berisi skill yang tidak tersedia.
+
+Jangan mengklaim koneksi marketplace eksternal jika backend belum tersedia.
+
+Siapkan adapter agar repository skill pihak ketiga dapat ditambahkan kemudian.
+
+20. Skill Analytics
+
+Catat:
+
+* Total executions.
+* Successful executions.
+* Failed executions.
+* Average duration.
+* Tool calls.
+* Model usage.
+* Token usage jika tersedia.
+* Error categories.
+* Last execution.
+* Most used skills.
+
+Jangan menyimpan API keys, password, atau raw secrets dalam analytics.
+
+⸻
+
+PART VI — SKILL EXECUTION SAFETY
+
+21. Security Architecture
+
+Skill harus dianggap sebagai untrusted workload sampai tervalidasi.
+
+Implementasikan:
+
+* Permission enforcement.
+* Sandboxed script execution.
+* Path validation.
+* Network policy.
+* Execution timeout.
+* CPU limit.
+* Memory limit.
+* Process limit.
+* Output limit.
+* Cancellation.
+* Audit logging.
+* Secret redaction.
+* Dependency validation.
+
+Jangan menjalankan scripts langsung di host tanpa isolasi yang sesuai.
+
+Jangan menganggap validasi SKILL.md cukup untuk menjamin script aman.
+
+Lakukan pemeriksaan tool arguments sebelum eksekusi.
+
+Skill tidak boleh:
+
+* Membaca master key.
+* Membaca secret project lain.
+* Mengakses workspace tenant lain.
+* Mengubah system permission.
+* Mematikan security policy.
+* Mengakses metadata cloud internal.
+* Menjalankan perintah destruktif tanpa persetujuan.
+* Mengakses network di luar kebijakan.
+
+Gunakan kembali mekanisme security dan sandbox CARMEN yang sudah ada setelah implementasinya diverifikasi.
+
+Jangan membuat sandbox kedua yang bertentangan dengan runtime existing.
+
+⸻
+
+PART VII — ADVANCED AGENT CAPABILITIES
+
+22. Dynamic Tool Registry
+
+Buat registry tools yang dapat dipakai oleh skill.
+
+Contoh tool categories:
+
+FILESYSTEM:
+
+* list_files
+* read_file
+* write_file
+* edit_file
+* search_files
+* delete_file
+
+CODE:
+
+* analyze_code
+* apply_patch
+* format_code
+* lint_code
+
+TERMINAL:
+
+* execute_command
+* inspect_process
+* stop_process
+
+TEST:
+
+* run_unit_tests
+* run_integration_tests
+* run_e2e_tests
+* run_build
+
+BROWSER:
+
+* open_page
+* inspect_page
+* capture_screenshot
+
+DATABASE:
+
+* inspect_schema
+* execute_safe_query
+* validate_migration
+
+GIT:
+
+* inspect_status
+* inspect_diff
+* create_branch
+* commit_changes
+
+DEPLOYMENT:
+
+* validate_deployment
+* deploy_project
+
+Daftar di atas adalah kontrak kemampuan yang diinginkan, bukan asumsi bahwa semua tool sudah tersedia.
+
+Setiap tool harus:
+
+* Memiliki schema input.
+* Memiliki schema output.
+* Memiliki permission requirement.
+* Memiliki timeout.
+* Memiliki error handling.
+* Memiliki validation.
+* Memiliki audit trail.
+
+Jangan membuat tool palsu yang hanya mengembalikan pesan sukses.
+
+23. Context Intelligence
+
+Buat context manager untuk:
+
+* Current project.
+* Active files.
+* User request.
+* Execution plan.
+* Active skills.
+* Previous tool results.
+* Relevant project memory.
+* Error history.
+* Verification status.
+
+Gunakan context retrieval selektif.
+
+Jangan memasukkan seluruh project source code ke context setiap kali.
+
+Gunakan:
+
+* File relevance.
+* Semantic retrieval jika tersedia.
+* Token budget.
+* Context prioritization.
+* Summarization.
+* Checkpoint persistence.
+
+Jangan membuang informasi penting yang diperlukan untuk melanjutkan task.
+
+24. Self-Repair Workflow
+
+Buat workflow:
+
+1. Detect failure.
+2. Capture diagnostics.
+3. Identify affected files.
+4. Determine root cause.
+5. Select debugging skills.
+6. Propose repair.
+7. Apply patch.
+8. Run focused tests.
+9. Run regression tests.
+10. Confirm result.
+
+Batasi jumlah repair cycles.
+
+Jika gagal berulang, hentikan eksekusi dan laporkan masalah.
+
+Jangan mengubah banyak file secara acak hanya untuk membuat build berhasil.
+
+⸻
+
+PART VIII — USER EXPERIENCE
+
+25. CARMEN Skill Workspace
+
+Tambahkan:
+
+* Skill Manager.
+* Active Skills indicator.
+* Skill execution panel.
+* Skill workflow timeline.
+* Permission approval dialog.
+* Skill details drawer.
+* Execution logs.
+* Skill test console.
+
+Pada percakapan AI, tampilkan:
+
+* Skill yang dipilih.
+* Alasan pemilihan.
+* Tahapan pengerjaan.
+* Tool yang digunakan.
+* Status validasi.
+
+Jangan membebani pengguna dengan seluruh detail teknis jika tidak diperlukan.
+
+Sediakan mode:
+
+* Automatic.
+* Manual.
+* Advanced.
+
+AUTOMATIC:
+Agent menentukan skill relevan.
+
+MANUAL:
+Pengguna memilih skill sendiri.
+
+ADVANCED:
+Pengguna dapat mengatur kombinasi skill, urutan, permission, dan batas eksekusi.
+
+26. Design System
+
+Pertahankan visual identity CARMEN.
+
+Tema:
+
+* Deep Black.
+* Diamond White.
+* Silver.
+* Subtle graphite.
+* Minimal accent.
+
+Desain:
+
+* Professional developer workspace.
+* Responsive.
+* Clear hierarchy.
+* Minimal navigation.
+* Efficient workspace.
+* Accessible controls.
+
+Jangan mengubah UI existing secara destruktif.
+
+⸻
+
+PART IX — TESTING AND VALIDATION
+
+27. Existing Test Scripts
+
+Periksa package.json.
+
+Script yang tersedia pada pemeriksaan sebelumnya:
+
+* npm run typecheck
+* npm run lint
+* npm run build
+* npm run test:unit
+* npm run test:security
+* npm run test:benchmark
+* npm run test:reliability
+* npm run test:concurrency
+* npm run test:integration
+* npm run test:postgres
+* npm run test:e2e
+
+Verifikasi kembali bahwa script tersebut masih tersedia sebelum menjalankannya.
+
+Jangan mengklaim PASS jika tidak dijalankan.
+
+28. Skill System Tests
+
+Tambahkan test untuk:
+
+* Skill metadata parsing.
+* Skill registry.
+* Skill discovery.
+* Automatic invocation.
+* Manual invocation.
+* Skill composition.
+* Dependency resolution.
+* Permission enforcement.
+* Skill import.
+* Skill export.
+* ZIP validation.
+* Path traversal protection.
+* Script isolation.
+* Timeout.
+* Cancellation.
+* Execution logging.
+* Context handling.
+* Skill versioning.
+* Concurrent skill execution.
+* Skill update.
+* Skill rollback.
+
+Buat regression tests untuk seluruh fitur existing yang terdampak.
+
+29. Acceptance Criteria
+
+Skill System belum dianggap selesai sebelum:
+
+1. Registry dapat menemukan skill.
+2. Skill metadata tervalidasi.
+3. Skill dapat diaktifkan dan dinonaktifkan.
+4. Automatic invocation berfungsi.
+5. Manual invocation berfungsi.
+6. Skill chaining berfungsi.
+7. Permission enforcement berfungsi.
+8. Scripts berjalan melalui lingkungan yang aman.
+9. Execution history tercatat.
+10. Error handling berfungsi.
+11. Import/export tervalidasi.
+12. Skill Creator dapat membuat paket valid.
+13. Skill Validator dapat menolak paket tidak valid.
+14. Skill tidak dapat mengakses resource tanpa izin.
+15. Skill Manager terhubung ke backend aktual.
+
+⸻
+
+PART X — IMPLEMENTATION ROADMAP
+
+Phase 1 — Existing System Audit
+
+Audit seluruh repository.
+
+Dokumentasikan:
+
+* Arsitektur.
+* Modul.
+* Dependency.
+* Temuan.
+* Risiko.
+* File coverage.
+
+Jangan mulai refactor besar.
+
+Phase 2 — Critical Remediation
+
+Perbaiki:
+
+* P0.
+* P1.
+* Security.
+* Agent orchestration.
+* Provider handling.
+* Runtime.
+* Database.
+* Reliability.
+
+Jalankan regression tests.
+
+Phase 3 — Skill Foundation
+
+Implementasikan:
+
+* Skill package format.
+* Skill loader.
+* Skill parser.
+* Skill registry.
+* Skill validator.
+* Skill discovery.
+
+Phase 4 — Skill Execution
+
+Implementasikan:
+
+* Skill invocation.
+* Skill executor.
+* Tool registry.
+* Permission engine.
+* Sandbox integration.
+* Execution history.
+
+Phase 5 — Initial Skill Library
+
+Bangun 32 skill awal.
+
+Prioritaskan:
+
+* code-review.
+* error-diagnosis.
+* bug-fixing.
+* security-audit.
+* test-generation.
+* test-execution.
+* skill-creator.
+* skill-validator.
+
+Phase 6 — Skill Manager
+
+Bangun UI untuk:
+
+* Discover.
+* Install.
+* Enable.
+* Disable.
+* Edit.
+* Create.
+* Import.
+* Export.
+* Validate.
+
+Phase 7 — Skill Composer
+
+Implementasikan:
+
+* Skill chaining.
+* Dependency graph.
+* Task orchestration.
+* Context sharing.
+* Parallel execution jika aman.
+
+Phase 8 — Advanced Intelligence
+
+Tambahkan:
+
+* Automatic skill routing.
+* Dynamic tool selection.
+* Context intelligence.
+* Self-repair.
+* Skill analytics.
+
+Phase 9 — Production Validation
+
+Jalankan semua pengujian yang didukung lingkungan.
+
+Periksa keamanan dan backward compatibility.
+
+⸻
+
+PART XI — DEVELOPMENT RULES
+
+30. Strict Engineering Rules
+
+WAJIB:
+
+1. Baca file sebelum mengubahnya.
+2. Gunakan source code aktual sebagai dasar keputusan.
+3. Jangan mengarang file atau fungsi.
+4. Jangan mengarang dependency.
+5. Jangan mengganti framework utama.
+6. Jangan menghapus fitur existing tanpa justifikasi.
+7. Jangan menonaktifkan security.
+8. Jangan mengekspos secret.
+9. Jangan membuat mock tool seolah-olah tool asli.
+10. Jangan membuat fake success response.
+11. Jangan melakukan upgrade dependency massal.
+12. Jangan menjalankan destructive operation tanpa approval.
+13. Jangan menyimpan API key di skill package.
+14. Jangan mengeksekusi skill eksternal tanpa validasi.
+15. Jangan menyatakan pekerjaan selesai sebelum diverifikasi.
+
+Jika ada file yang tidak bisa dibaca, dokumentasikan.
+
+Jika fitur memerlukan infrastruktur yang belum tersedia, buat desain integrasinya dan tandai sebagai BLOCKED, bukan berpura-pura sudah berjalan.
+
+Gunakan perubahan incremental dan regression testing.
+
+31. Progress Tracking
+
+Buat:
+
+CARMEN_ENGINEERING_AUDIT.md
+CARMEN_SKILL_SYSTEM_SPEC.md
+CARMEN_IMPLEMENTATION_PROGRESS.md
+CARMEN_SKILL_SECURITY.md
+
+Perbarui setiap kali fase selesai.
+
+Catat:
+
+* Files reviewed.
+* Files modified.
+* Files added.
+* Files removed.
+* Findings.
+* Tests.
+* Failures.
+* Remaining tasks.
+
+Jika context habis, pekerjaan harus dapat dilanjutkan dari progress file tanpa mengulang atau kehilangan keputusan sebelumnya.
+
+⸻
+
+PART XII — FINAL DELIVERABLE
+
+32. Engineering Report
+
+Hasilkan:
+
+1. Executive Summary.
+2. Repository Architecture.
+3. Complete Audit.
+4. Security Assessment.
+5. Bug Findings.
+6. Root Cause Analysis.
+7. Changes Implemented.
+8. Files Modified.
+9. Files Added.
+10. Files Deleted.
+11. Dependency Assessment.
+12. Database Assessment.
+13. Agent Assessment.
+14. Runtime Assessment.
+15. Test Results.
+16. Performance Assessment.
+17. Remaining Risks.
+
+33. Skill System Report
+
+Hasilkan:
+
+1. Skill Architecture.
+2. Skill Package Specification.
+3. Skill Registry.
+4. Skill Discovery.
+5. Skill Invocation.
+6. Skill Composer.
+7. Skill Executor.
+8. Permission Model.
+9. Skill Manager UI.
+10. Skill Marketplace Architecture.
+11. Initial Skill Library.
+12. Skill Security Assessment.
+13. Skill Testing Results.
+14. Missing Infrastructure.
+15. Future Skill Roadmap.
+
+Gunakan tabel:
+
+Skill	Implemented	Tested	Permission	Status
+
+Gunakan status:
+
+* PASS
+* FAIL
+* BLOCKED
+* NOT IMPLEMENTED
+* NOT TESTED
+
+34. Final Scoring
+
+Berikan skor terpisah:
+
+* Architecture: 0–100.
+* Code Quality: 0–100.
+* Security: 0–100.
+* AI Agent Reliability: 0–100.
+* Skill Intelligence: 0–100.
+* Testing: 0–100.
+* Production Readiness: 0–100.
+
+Setiap skor harus memiliki bukti dan penjelasan.
+
+Jangan memberikan skor tinggi hanya karena fitur sudah dibuat secara visual.
+
+⸻
+
+FINAL OBJECTIVE
+
+Bangun CARMEN sebagai platform AI Full-Stack Development dengan autonomous agent, modular skill ecosystem, secure execution, dan kemampuan pengembangan yang dapat diperluas.
+
+CARMEN harus mampu:
+
+1. Memahami kebutuhan pengguna.
+2. Memahami struktur proyek.
+3. Memilih skill secara otomatis.
+4. Menggabungkan beberapa skill.
+5. Memilih tools sesuai kebutuhan.
+6. Membaca dan mengubah source code.
+7. Menjalankan aplikasi.
+8. Mendeteksi error.
+9. Memperbaiki error.
+10. Menjalankan test.
+11. Memverifikasi hasil.
+12. Menghasilkan laporan teknis.
+13. Membuat skill baru.
+14. Mengelola skill secara mandiri dengan permission yang tepat.
+
+Jangan mengejar jumlah fitur dengan mengorbankan stabilitas.
+
+Prioritaskan:
+SECURITY → CORRECTNESS → RELIABILITY → SKILL INTELLIGENCE → PERFORMANCE → UX.
+
+MULAI DARI PHASE 1.
+
+Audit dahulu, kemudian buat implementation plan berdasarkan kondisi repository aktual.
+
+Setelah laporan audit tersedia, lanjutkan implementasi secara bertahap selama lingkungan memungkinkan.
+
+Jangan berhenti hanya pada rekomendasi jika perubahan kode dapat dilakukan.
+
+Jangan mengklaim keberhasilan tanpa bukti kode dan hasil pengujian.
+
+END OF MASTER SPECIFICATION.

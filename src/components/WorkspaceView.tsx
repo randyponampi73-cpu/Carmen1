@@ -32,6 +32,9 @@ import type {
   PreviewHealthReport,
   ProviderModel,
   SandboxIsolationStatus,
+  SkillMetadataItem,
+  SkillPermission,
+  SkillTurnTraceItem,
   ThemeMode,
   ToolActionEvent,
 } from '../types';
@@ -134,6 +137,11 @@ export function WorkspaceView({
     imageBase64?: string;
     imageMimeType?: string;
   } | null>(null);
+  const [availableSkills, setAvailableSkills] = useState<SkillMetadataItem[]>([]);
+  const [skillModeOption, setSkillModeOption] = useState<'auto' | 'manual' | 'builtin'>('auto');
+  const [streamingSkillTrace, setStreamingSkillTrace] = useState<SkillTurnTraceItem[]>([]);
+  const [lastTurnSkillTrace, setLastTurnSkillTrace] = useState<SkillTurnTraceItem[]>([]);
+  const [builtinOnlyTurnNotice, setBuiltinOnlyTurnNotice] = useState(false);
 
   const autoRanRef = useRef(false);
   const chatAbortRef = useRef<AbortController | null>(null);
@@ -188,6 +196,10 @@ export function WorkspaceView({
       api
         .getPreviewHealth(projectId)
         .then((res) => setPreviewHealth(res.health))
+        .catch(() => {});
+      api
+        .listSkills({ projectId, includeDisabled: false })
+        .then((res) => setAvailableSkills(res.skills))
         .catch(() => {});
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : t.workspaceLoadFail);
@@ -430,6 +442,9 @@ export function WorkspaceView({
       setFallbackNotice(null);
       setStreamWarning(null);
       setStreamError(null);
+      setStreamingSkillTrace([]);
+      setLastTurnSkillTrace([]);
+      setBuiltinOnlyTurnNotice(false);
 
       // Optimistically append user message
       setData((prev) =>
@@ -510,6 +525,8 @@ export function WorkspaceView({
             modelId: activeModel.id,
             imageBase64: img?.base64,
             imageMimeType: img?.mimeType,
+            skillMode: skillModeOption === 'manual' ? 'manual' : 'auto',
+            disableAllSkills: skillModeOption === 'builtin',
             ...(localKey
               ? {
                   localProviderConfig: {
@@ -594,6 +611,66 @@ export function WorkspaceView({
                     scheduleFilesSync();
                     schedulePreviewReload();
                   }
+                } else if (currentEvent === 'skill_discovery') {
+                  if (payload.disabled || payload.selectedCount === 0) {
+                    setBuiltinOnlyTurnNotice(true);
+                  }
+                } else if (currentEvent === 'skill_selected' && payload.skillName) {
+                  const nextItem: SkillTurnTraceItem = {
+                    skillName: String(payload.skillName),
+                    reason: String(payload.reason || ''),
+                    confidence: typeof payload.confidence === 'number' ? payload.confidence : undefined,
+                    explicit: Boolean(payload.explicit),
+                    status: 'running',
+                  };
+                  setStreamingSkillTrace((prev) => {
+                    const exists = prev.some((x) => x.skillName === nextItem.skillName);
+                    return exists
+                      ? prev.map((x) => (x.skillName === nextItem.skillName ? nextItem : x))
+                      : [...prev, nextItem];
+                  });
+                } else if (currentEvent === 'skill_permission_required' && payload.skillName) {
+                  const deniedItem: SkillTurnTraceItem = {
+                    skillName: String(payload.skillName),
+                    reason: String(payload.reason || ''),
+                    status: 'denied',
+                    missingPermissions: Array.isArray(payload.missingPermissions)
+                      ? (payload.missingPermissions as SkillPermission[])
+                      : [],
+                  };
+                  setStreamingSkillTrace((prev) => {
+                    const exists = prev.some((x) => x.skillName === deniedItem.skillName);
+                    return exists
+                      ? prev.map((x) => (x.skillName === deniedItem.skillName ? deniedItem : x))
+                      : [...prev, deniedItem];
+                  });
+                } else if (currentEvent === 'skill_execution' && payload.skillName) {
+                  const status: SkillTurnTraceItem['status'] =
+                    payload.status === 'success'
+                      ? 'success'
+                      : payload.status === 'denied'
+                        ? 'denied'
+                        : payload.status === 'fallback' || payload.fallbackUsed
+                          ? 'fallback'
+                          : 'running';
+                  const execItem: SkillTurnTraceItem = {
+                    skillName: String(payload.skillName),
+                    reason: String(payload.reason || ''),
+                    status,
+                    fallbackUsed: Boolean(payload.fallbackUsed),
+                  };
+                  setStreamingSkillTrace((prev) => {
+                    const exists = prev.some((x) => x.skillName === execItem.skillName);
+                    return exists
+                      ? prev.map((x) => (x.skillName === execItem.skillName ? { ...x, ...execItem } : x))
+                      : [...prev, execItem];
+                  });
+                  setLastTurnSkillTrace((prev) => {
+                    const exists = prev.some((x) => x.skillName === execItem.skillName);
+                    return exists
+                      ? prev.map((x) => (x.skillName === execItem.skillName ? { ...x, ...execItem } : x))
+                      : [...prev, execItem];
+                  });
                 } else if (currentEvent === 'status' && payload.warning) {
                   setStreamWarning(payload.warning);
                 } else if (currentEvent === 'error' && payload.message) {
@@ -644,7 +721,7 @@ export function WorkspaceView({
         setFallbackNotice(null);
       }
     },
-    [models, selectedModelKey, projectId, mode, locale, t.sessionMissing, clearDebounceTimers, handleRefreshPreview, loadWorkspace]
+    [models, selectedModelKey, projectId, mode, skillModeOption, locale, t.sessionMissing, clearDebounceTimers, handleRefreshPreview, loadWorkspace]
   );
 
   const handleStopStream = useCallback(() => {
@@ -834,6 +911,12 @@ export function WorkspaceView({
       }}
       onOpenDiff={(vid) => setDiffVersionId(vid)}
       onOpenSettings={onOpenSettings}
+      availableSkills={availableSkills}
+      skillModeOption={skillModeOption}
+      onSkillModeOptionChange={setSkillModeOption}
+      streamingSkillTrace={streamingSkillTrace}
+      lastTurnSkillTrace={lastTurnSkillTrace}
+      builtinOnlyTurnNotice={builtinOnlyTurnNotice}
     />
   );
 

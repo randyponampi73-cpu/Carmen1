@@ -110,6 +110,7 @@ export function buildAgentSystemPrompt(params: {
   useStructuredFallback: boolean;
   projectMemory?: string;
   projectHandoff?: string;
+  skillInstructions?: string;
 }): string {
   const {
     projectName,
@@ -122,6 +123,7 @@ export function buildAgentSystemPrompt(params: {
     useStructuredFallback,
     projectMemory,
     projectHandoff,
+    skillInstructions,
   } = params;
 
   const fileListText =
@@ -205,6 +207,10 @@ export function buildAgentSystemPrompt(params: {
   lines.push(
     'MEMORI PROYEK: Untuk proyek besar atau pekerjaan multi-giliran, di akhir pekerjaan perbarui catatan lewat `update_project_memory` (arsitektur, keputusan penting, daftar tugas beserta statusnya, langkah berikutnya; maks 4000 karakter, tanpa rahasia).'
   );
+
+  if (skillInstructions && skillInstructions.trim()) {
+    lines.push(skillInstructions.trim());
+  }
 
   const handoffBlock = formatProjectHandoffForPrompt(projectHandoff || '');
   if (handoffBlock) lines.push(handoffBlock);

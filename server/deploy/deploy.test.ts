@@ -63,10 +63,10 @@ describe('Database Migrations, Postgres Config & Real Deployment Adapters', () =
     assert.equal(integrity.ok, true);
 
     const rolled = rollbackLastSqliteMigration(dbMod.db);
-    assert.equal(rolled.rolledBack, '005_shared_key_usage_metering');
+    assert.equal(rolled.rolledBack, '006_skills_system');
 
     const reapplied = runSqliteMigrations(dbMod.db);
-    assert.deepEqual(reapplied.applied, ['005_shared_key_usage_metering']);
+    assert.deepEqual(reapplied.applied, ['006_skills_system']);
   });
 
   it('validates PostgreSQL pool configuration and schema readiness without fabricating active PG connection', () => {

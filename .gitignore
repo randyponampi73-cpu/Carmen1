@@ -6,7 +6,7 @@ dist/
 coverage/
 
 # Runtime Data, SQLite Databases, WAL/SHM & Generated Build Artifacts
-data/
+/data/
 artifacts/
 *.db
 *.db-wal

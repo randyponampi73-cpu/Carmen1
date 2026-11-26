@@ -21,6 +21,8 @@ import type {
   FallbackEvent,
   Locale,
   ProviderModel,
+  SkillMetadataItem,
+  SkillTurnTraceItem,
   ToolActionEvent,
 } from '../../types';
 import { ModelSelect } from '../CustomSelect';
@@ -53,6 +55,12 @@ interface ChatPanelProps {
   onRestoreVersion: (versionId: string) => void;
   onOpenDiff: (versionId: string) => void;
   onOpenSettings: () => void;
+  availableSkills?: SkillMetadataItem[];
+  skillModeOption?: 'auto' | 'manual' | 'builtin';
+  onSkillModeOptionChange?: (next: 'auto' | 'manual' | 'builtin') => void;
+  streamingSkillTrace?: SkillTurnTraceItem[];
+  lastTurnSkillTrace?: SkillTurnTraceItem[];
+  builtinOnlyTurnNotice?: boolean;
 }
 
 function renderInlineMarkdown(text: string): React.ReactNode[] {
@@ -229,6 +237,12 @@ export function ChatPanel({
   onRestoreVersion,
   onOpenDiff,
   onOpenSettings,
+  availableSkills = [],
+  skillModeOption = 'auto',
+  onSkillModeOptionChange,
+  streamingSkillTrace = [],
+  lastTurnSkillTrace = [],
+  builtinOnlyTurnNotice = false,
 }: ChatPanelProps) {
   const t = COPY[locale];
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -298,39 +312,86 @@ export function ChatPanel({
     streamError && /api key|kunci|pengaturan|unauthorized|invalid.*key|not configured|belum ada|401/i.test(streamError)
   );
 
+  const slashQuery = useMemo(() => {
+    const match = inputValue.match(/(?:^|\s)\/([a-z0-9-]*)$/i);
+    return match ? match[1].toLowerCase() : null;
+  }, [inputValue]);
+
+  const slashSuggestions = useMemo(() => {
+    if (slashQuery === null || availableSkills.length === 0 || skillModeOption === 'builtin') {
+      return [];
+    }
+    return availableSkills
+      .filter(
+        (s) =>
+          !slashQuery ||
+          s.slug.toLowerCase().includes(slashQuery) ||
+          s.category.toLowerCase().includes(slashQuery)
+      )
+      .slice(0, 6);
+  }, [slashQuery, availableSkills, skillModeOption]);
+
+  function applySlashSuggestion(slug: string) {
+    const next = inputValue.replace(/(?:^|\s)\/[a-z0-9-]*$/i, (full) => {
+      const leadingSpace = full.startsWith(' ') ? ' ' : '';
+      return `${leadingSpace}/${slug} `;
+    });
+    onInputChange(next);
+    textareaRef.current?.focus();
+  }
+
   return (
     <section aria-label={t.chatPanelAria} className="h-full flex flex-col bg-[var(--surface)] min-w-0 relative">
-      {/* Mode bar (Build vs Discuss — WS-10) */}
-      <div className="h-9 px-3 border-b border-[var(--border)] flex items-center justify-between gap-2 shrink-0">
-        <div
-          role="group"
-          aria-label={t.agentModeAria}
-          className="inline-flex items-center gap-1 rounded-[6px] border border-[var(--border)] bg-[var(--surface-2)] p-0.5"
-        >
-          <button
-            type="button"
-            onClick={() => onModeChange('build')}
-            aria-pressed={mode === 'build'}
-            className={`h-7 px-2.5 rounded-[6px] text-[12px] font-medium cursor-pointer ${
-              mode === 'build'
-                ? 'bg-[var(--surface)] text-[var(--text)] border border-[var(--border)]'
-                : 'text-[var(--text-muted)] hover:text-[var(--text)]'
-            }`}
+      {/* Mode bar (Build vs Discuss — WS-10) + Skill Mode */}
+      <div className="h-9 px-3 border-b border-[var(--border)] flex items-center justify-between gap-2 shrink-0 overflow-x-auto">
+        <div className="flex items-center gap-2 shrink-0">
+          <div
+            role="group"
+            aria-label={t.agentModeAria}
+            className="inline-flex items-center gap-1 rounded-[6px] border border-[var(--border)] bg-[var(--surface-2)] p-0.5"
           >
-            {t.modeBuild}
-          </button>
-          <button
-            type="button"
-            onClick={() => onModeChange('discuss')}
-            aria-pressed={mode === 'discuss'}
-            className={`h-7 px-2.5 rounded-[6px] text-[12px] font-medium cursor-pointer ${
-              mode === 'discuss'
-                ? 'bg-[var(--surface)] text-[var(--text)] border border-[var(--border)]'
-                : 'text-[var(--text-muted)] hover:text-[var(--text)]'
-            }`}
-          >
-            {t.modeDiscuss}
-          </button>
+            <button
+              type="button"
+              onClick={() => onModeChange('build')}
+              aria-pressed={mode === 'build'}
+              className={`h-7 px-2.5 rounded-[6px] text-[12px] font-medium cursor-pointer ${
+                mode === 'build'
+                  ? 'bg-[var(--surface)] text-[var(--text)] border border-[var(--border)]'
+                  : 'text-[var(--text-muted)] hover:text-[var(--text)]'
+              }`}
+            >
+              {t.modeBuild}
+            </button>
+            <button
+              type="button"
+              onClick={() => onModeChange('discuss')}
+              aria-pressed={mode === 'discuss'}
+              className={`h-7 px-2.5 rounded-[6px] text-[12px] font-medium cursor-pointer ${
+                mode === 'discuss'
+                  ? 'bg-[var(--surface)] text-[var(--text)] border border-[var(--border)]'
+                  : 'text-[var(--text-muted)] hover:text-[var(--text)]'
+              }`}
+            >
+              {t.modeDiscuss}
+            </button>
+          </div>
+
+          {onSkillModeOptionChange && (
+            <select
+              aria-label={t.skillsModeLabel}
+              title={t.skillsModeLabel}
+              value={skillModeOption}
+              onChange={(e) => {
+                const v = e.target.value;
+                onSkillModeOptionChange(v === 'manual' ? 'manual' : v === 'builtin' ? 'builtin' : 'auto');
+              }}
+              className="h-7 px-2 rounded-[6px] border border-[var(--border)] bg-[var(--surface-2)] text-[12px] text-[var(--text)] cursor-pointer"
+            >
+              <option value="auto">{t.skillsModeLabel}: {t.skillsModeAuto}</option>
+              <option value="manual">{t.skillsModeLabel}: {t.skillsModeManual}</option>
+              <option value="builtin">{t.skillsModeLabel}: {t.skillsModeBuiltinOnly}</option>
+            </select>
+          )}
         </div>
         {sessionTokens > 0 && (
           <span
@@ -470,6 +531,44 @@ export function ChatPanel({
                 </div>
               </div>
             )}
+            {streaming && (streamingSkillTrace.length > 0 || builtinOnlyTurnNotice) && (
+              <div className="rounded-[6px] border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-2 space-y-1 text-[12px]">
+                <div className="font-semibold text-[var(--text)]">{t.skillsActiveTraceTitle}</div>
+                {streamingSkillTrace.length === 0 ? (
+                  <div className="text-[var(--text-muted)]">{t.skillsBuiltinOnlyNotice}</div>
+                ) : (
+                  streamingSkillTrace.map((item) => (
+                    <div key={item.skillName} className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <span className="font-mono font-medium text-[var(--text)]">/{item.skillName}</span>
+                        <span className="text-[var(--text-muted)] ml-1.5">{item.reason}</span>
+                      </div>
+                      <span
+                        className={`shrink-0 font-mono text-[11px] ${
+                          item.status === 'success'
+                            ? 'text-[var(--success-text)]'
+                            : item.status === 'denied'
+                              ? 'text-[var(--error-text)]'
+                              : item.status === 'fallback'
+                                ? 'text-[var(--warning-text)]'
+                                : 'text-[var(--accent-text)]'
+                        }`}
+                      >
+                        {item.status === 'success'
+                          ? t.skillsStatusSuccess
+                          : item.status === 'fallback'
+                            ? t.skillsStatusFallback
+                            : item.status === 'denied'
+                              ? t.skillsStatusDenied
+                              : item.status === 'running'
+                                ? t.skillsStatusRunning
+                                : t.skillsStatusSelected}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
             {streamWarning && (
               <div className="rounded-[6px] border border-[var(--warning)] bg-[var(--surface-2)] px-2.5 py-1.5 text-[12px] text-[var(--warning-text)]">
                 {streamWarning}
@@ -533,7 +632,42 @@ export function ChatPanel({
       )}
 
       {/* Bottom prompt box */}
-      <div className="p-2.5 border-t border-[var(--border)] bg-[var(--surface)] space-y-1.5 shrink-0">
+      <div className="p-2.5 border-t border-[var(--border)] bg-[var(--surface)] space-y-1.5 shrink-0 relative">
+        {!streaming && lastTurnSkillTrace.length > 0 && (
+          <div className="rounded-[6px] border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1.5 text-[11px] flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="font-medium text-[var(--text-muted)]">{t.skillsActiveTraceTitle}:</span>
+            {lastTurnSkillTrace.map((item) => (
+              <span key={item.skillName} className="font-mono text-[var(--text)]" title={item.reason}>
+                /{item.skillName} ({item.status})
+              </span>
+            ))}
+          </div>
+        )}
+        {slashSuggestions.length > 0 && !streaming && (
+          <div
+            role="listbox"
+            aria-label={t.skillsSlashHint}
+            className="absolute left-2.5 right-2.5 bottom-full mb-1 z-30 rounded-[8px] border border-[var(--border)] bg-[var(--surface)] p-1 divide-y divide-[var(--border)]"
+            style={{ boxShadow: 'var(--shadow-float)' }}
+          >
+            {slashSuggestions.map((sk) => (
+              <button
+                key={sk.id}
+                type="button"
+                role="option"
+                aria-selected={false}
+                onClick={() => applySlashSuggestion(sk.slug)}
+                className="w-full px-2.5 py-1.5 text-left hover:bg-[var(--surface-2)] rounded-[6px] flex items-center justify-between gap-2 cursor-pointer"
+              >
+                <div className="min-w-0">
+                  <span className="font-mono text-[12px] font-semibold text-[var(--text)]">/{sk.slug}</span>
+                  <span className="text-[12px] text-[var(--text-muted)] ml-2 truncate">{sk.description}</span>
+                </div>
+                <span className="text-[11px] font-mono text-[var(--text-muted)] shrink-0">{sk.category}</span>
+              </button>
+            ))}
+          </div>
+        )}
         {mode === 'discuss' && (
           <div className="text-[12px] text-[var(--text-muted)] px-0.5">{t.promptDiscussHint}</div>
         )}

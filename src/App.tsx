@@ -28,6 +28,9 @@ const WorkspaceView = lazy(() =>
 const ProjectsView = lazy(() =>
   import('./components/ProjectsView').then((m) => ({ default: m.ProjectsView }))
 );
+const SkillsView = lazy(() =>
+  import('./components/SkillsView').then((m) => ({ default: m.SkillsView }))
+);
 const SettingsView = lazy(() =>
   import('./components/SettingsView').then((m) => ({ default: m.SettingsView }))
 );
@@ -185,6 +188,8 @@ export default function App() {
       document.title = t.titleAuth;
     } else if (route === 'projects') {
       document.title = t.titleProjects;
+    } else if (route === 'skills') {
+      document.title = t.titleSkills;
     } else if (route === 'settings') {
       document.title = t.titleSettings;
     } else {
@@ -655,6 +660,18 @@ export default function App() {
             }}
             onOpenProject={(id) => setActiveProjectId(id)}
           />
+        </Suspense>
+      )}
+
+      {route === 'skills' && (
+        <Suspense
+          fallback={
+            <div className="flex-1 flex items-center justify-center p-6 text-[13px] text-[var(--text-muted)]">
+              {COPY[user.locale].loadingApp}
+            </div>
+          }
+        >
+          <SkillsView locale={user.locale} />
         </Suspense>
       )}
 

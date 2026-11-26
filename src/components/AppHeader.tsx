@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { COPY } from '../i18n';
 import type { UserProfile } from '../types';
 
-export type MainRoute = 'home' | 'projects' | 'settings';
+export type MainRoute = 'home' | 'projects' | 'skills' | 'settings';
 
 interface AppHeaderProps {
   user: UserProfile;
@@ -72,8 +72,15 @@ export function AppHeader({
 
       {/* Zone 2: Clean single-line nav links */}
       <nav aria-label={t.navMainAria} className="flex items-center gap-3 sm:gap-5 text-[13px] font-medium">
-        {(['home', 'projects', 'settings'] as MainRoute[]).map((item) => {
-          const label = item === 'home' ? t.navHome : item === 'projects' ? t.navProjects : t.navSettings;
+        {(['home', 'projects', 'skills', 'settings'] as MainRoute[]).map((item) => {
+          const label =
+            item === 'home'
+              ? t.navHome
+              : item === 'projects'
+                ? t.navProjects
+                : item === 'skills'
+                  ? t.navSkills
+                  : t.navSettings;
           const active = route === item;
           return (
             <button

@@ -1,7 +1,7 @@
 # Security Summary
 
-**Reviewed Files**: 48
-**Issues Resolved**: 18
+**Reviewed Files**: 62
+**Issues Resolved**: 21
 
 ### Issues Resolved
 | Area | File | Line | What Was Happening | Impact | Status | How It Was Fixed |
@@ -24,6 +24,9 @@
 | APK Queue Atomic Claim & Cleanup | `server/builds/queue.ts`, `server/builds/apkWorker.ts`, `server/builds/apkBuilder.ts` | — | Queue workers needed Redis validation, atomic job claims, stale-job recovery, and expired artifact cleanup. | Medium | Fixed | Added startup Redis URL/TLS check, atomic SQL job claim (`claimNextQueuedApkBuild`), stale build timeout recovery, and expired artifact pruning. |
 | Dependency Install Race & Planner DB Scope | `server/runtime/sandbox.ts`, `server/agent/planner.ts` | — | Concurrent dependency installs raced on disk sync and static site prompts injected unnecessary `schema.sql`. | Low | Fixed | Registered in-flight install promises synchronously before disk sync (`sandbox.ts`) and restricted default `schema.sql` planning to data-persistent apps (`planner.ts`). |
 | Lockfile Sync & Real ESLint Setup | `package.json`, `package-lock.json`, `eslint.config.mjs` | — | `npm run lint` only ran `tsc --noEmit` and `package-lock.json` drifted across upgrades. | Medium | Fixed | Split `typecheck` (`tsc --noEmit`) and `lint` (`eslint .` with zero warnings/errors), removed duplicate `bun.lock`, and verified `npm ci --dry-run`. |
+| Skill Archive & Permission Hardening | `server/skills/importExport.ts`, `server/skills/validator.ts`, `server/skills/permissions.ts` | 16 / 78 | Imported Skill ZIP packages needed pre-normalization path checks (`unsafeOriginalName`), UNIX symlink rejection, prompt-injection/secret checks, `ADMIN` prohibition, and sandbox-only `UNTRUSTED`-blocked script execution. | High | Fixed | Rejected `unsafeOriginalName` traversal/absolute paths, symlinks (`0o120000` + `>>> 16`), `.env`/binary assets, ZIP bombs (>1 MB), plaintext secrets, prompt-injection patterns, and `ADMIN` permissions; quarantined imports as `UNTRUSTED` + disabled. |
+| Cross-Tenant Skill Delete Enumeration | `server/skills/registry.ts`, `server.ts` | 982 / 3310 | `DELETE /api/skills/:id` returned `403` for private skills owned by another user while `GET`/`PUT`/`approve`/`export.zip` returned `404`, enabling existence enumeration. | Low | Fixed | Unified private cross-tenant deletion in `deleteUserSkill` to return `404` while keeping `403` strictly for protected built-in `system` skills. |
+| Skill-Optional Agent Fallback | `server/agent/orchestrator.ts`, `server/skills/executor.ts` | 1318 / 38 | Enabling Skill Intelligence must never block or crash built-in Agent generation, editing, debugging, or builds if skills are empty, disabled, corrupted, or denied permission. | High | Fixed | Implemented fail-safe `prepareSkillsForAgentTurn` with progressive disclosure and zero-skill / load-failure / denial fallback to built-in `AGENT_TOOLS` and planner workflows. |
 
 ### Safeguards Verified
 | Area | File | How It's Protected |
@@ -151,4 +154,23 @@ Scoped `ProviderHealthMonitor` cooldown keys to `providerKeyId` so an invalid or
 
 #### Conclusion
 **Fix Verified** - Verified by `api.integration.test.ts` (#7, #23) and real Chromium Headless E2E (`scripts/e2e.playwright.test.ts`).
+
+### Skill Archive Security, Cross-Tenant Isolation & Skill-Optional Core
+#### Summary
+| Field | Value |
+|---|---|
+| Issue Type | ZIP Slip Normalization Bypass, UNTRUSTED Script Execution, IDOR Enumeration, Skill Dependency Coupling |
+| Impact | High |
+| Affected Files | `server/skills/importExport.ts`, `server/skills/registry.ts`, `server/skills/executor.ts`, `server/agent/orchestrator.ts` |
+| Test Scenarios | Binary `../evil.txt` ZIP archive, UNIX symlink ZIP (`0o120777`), `ADMIN` skill creation, User B `GET`/`DELETE` against User A private skill, and all 6 Skill-Optional Agent lifecycle tests (`server/agent/skillOptional.test.ts`, `server/skills/skills.test.ts`) |
+
+#### How It Was Fixed
+- `inspectAndImportSkillZip` inspects both `entry.unsafeOriginalName` and `entry.name` so `../` traversal cannot hide behind `JSZip` path normalization, rejects UNIX symlinks, enforces 1 MB decompressed caps, and marks all imports `UNTRUSTED` and disabled.
+- `approveSkillPermissions` + `runSkillSandboxScript` block `ADMIN` permissions globally and refuse script execution until explicitly approved by the owner inside `spawnIsolatedProcess`.
+- `deleteUserSkill` returns `404` on another user's private skill to match `GET`/`PUT`/`approve`/`export.zip`.
+- `runAgentTurn` isolates `prepareSkillsForAgentTurn` inside a non-fatal boundary so zero skills, all skills disabled, failed loads, or permission denials seamlessly continue through the built-in CARMEN Agent Core.
+
+#### Conclusion
+**Fix Verified** - All `13/13` tests in `npm run test:skills` and `102/102` `test:unit`, `7/7` `test:security`, `23/23` `test:integration`, `6/6` `test:concurrency`, `3/3` `test:reliability`, `2/2` `test:benchmark`, and `1/1` `test:e2e` pass. Live external PostgreSQL (`2/2` integration), Docker/Podman containers, Redis daemon, and Android SDK builds remain `NOT VERIFIED` in this host environment because those runtimes are not installed.
+
 

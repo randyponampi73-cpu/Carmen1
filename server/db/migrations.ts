@@ -85,6 +85,113 @@ export const SQLITE_MIGRATIONS: DbMigration[] = [
       ALTER TABLE shared_key_usage DROP COLUMN tokens_used;
     `,
   },
+  {
+    version: '006_skills_system',
+    name: 'Add CARMEN Skill Intelligence System tables (skills, skill_versions, project_skill_configs, user_skill_preferences, skill_executions)',
+    upSql: `
+      CREATE TABLE IF NOT EXISTS skills (
+        id TEXT PRIMARY KEY,
+        scope_key TEXT NOT NULL DEFAULT 'system',
+        owner_user_id TEXT,
+        slug TEXT NOT NULL,
+        name TEXT NOT NULL,
+        category TEXT NOT NULL,
+        description TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'builtin',
+        trust_level TEXT NOT NULL DEFAULT 'BUILTIN',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        current_version TEXT NOT NULL DEFAULT '1.0.0',
+        manifest_json TEXT NOT NULL DEFAULT '{}',
+        skill_md TEXT NOT NULL,
+        references_json TEXT NOT NULL DEFAULT '{}',
+        scripts_json TEXT NOT NULL DEFAULT '{}',
+        assets_json TEXT NOT NULL DEFAULT '{}',
+        checksum TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(scope_key, slug),
+        FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS skill_versions (
+        id TEXT PRIMARY KEY,
+        skill_id TEXT NOT NULL,
+        version TEXT NOT NULL,
+        skill_md TEXT NOT NULL,
+        manifest_json TEXT NOT NULL DEFAULT '{}',
+        references_json TEXT NOT NULL DEFAULT '{}',
+        scripts_json TEXT NOT NULL DEFAULT '{}',
+        assets_json TEXT NOT NULL DEFAULT '{}',
+        checksum TEXT NOT NULL,
+        changelog TEXT NOT NULL DEFAULT '',
+        created_by_user_id TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS project_skill_configs (
+        project_id TEXT NOT NULL,
+        skill_id TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        approved_permissions_json TEXT NOT NULL DEFAULT '[]',
+        approved_by_user_id TEXT,
+        approved_at TEXT,
+        pinned_version TEXT,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (project_id, skill_id),
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+        FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS user_skill_preferences (
+        user_id TEXT NOT NULL,
+        skill_id TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        approved_permissions_json TEXT NOT NULL DEFAULT '[]',
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (user_id, skill_id),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS skill_executions (
+        id TEXT PRIMARY KEY,
+        project_id TEXT,
+        user_id TEXT,
+        skill_id TEXT,
+        skill_name TEXT NOT NULL,
+        mode TEXT NOT NULL DEFAULT 'auto',
+        status TEXT NOT NULL,
+        confidence REAL NOT NULL DEFAULT 0,
+        reason TEXT NOT NULL DEFAULT '',
+        fallback_used INTEGER NOT NULL DEFAULT 0,
+        tools_invoked_json TEXT NOT NULL DEFAULT '[]',
+        error_summary TEXT,
+        duration_ms INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_skills_owner ON skills(owner_user_id, category);
+      CREATE INDEX IF NOT EXISTS idx_skills_slug ON skills(slug);
+      CREATE INDEX IF NOT EXISTS idx_skill_versions_skill_id ON skill_versions(skill_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_skill_executions_project ON skill_executions(project_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_skill_executions_user ON skill_executions(user_id, created_at);
+    `,
+    downSql: `
+      DROP INDEX IF EXISTS idx_skill_executions_user;
+      DROP INDEX IF EXISTS idx_skill_executions_project;
+      DROP INDEX IF EXISTS idx_skill_versions_skill_id;
+      DROP INDEX IF EXISTS idx_skills_slug;
+      DROP INDEX IF EXISTS idx_skills_owner;
+      DROP TABLE IF EXISTS skill_executions;
+      DROP TABLE IF EXISTS user_skill_preferences;
+      DROP TABLE IF EXISTS project_skill_configs;
+      DROP TABLE IF EXISTS skill_versions;
+      DROP TABLE IF EXISTS skills;
+    `,
+  },
 ];
 
 export interface MigrationRunResult {

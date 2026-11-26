@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test:unit": "tsx --test server/security.test.ts server/runtime/isolation.test.ts server/providers/providers.test.ts server/agent/parser.test.ts server/agent/orchestrator.test.ts server/agent/router.test.ts server/builds/builds.test.ts server/deploy/deploy.test.ts server/db/postgres.test.ts",
+    "test:skills": "tsx --test server/skills/skills.test.ts server/agent/skillOptional.test.ts",
     "test:postgres": "tsx --test server/db/postgres.test.ts server/db/postgres.integration.test.ts",
     "test:security": "tsx --test server/security.adversarial.test.ts",
     "test:benchmark": "tsx --test server/agent/benchmark.test.ts",
@@ -20,7 +21,7 @@
     "test:concurrency": "tsx --test server/concurrency.test.ts",
     "test:integration": "tsx --test server/api.integration.test.ts",
     "test:e2e": "tsx --test scripts/e2e.playwright.test.ts",
-    "test": "npm run test:unit && npm run test:security && npm run test:benchmark && npm run test:reliability && npm run test:concurrency && npm run test:integration",
+    "test": "npm run test:unit && npm run test:skills && npm run test:security && npm run test:benchmark && npm run test:reliability && npm run test:concurrency && npm run test:integration",
     "export:zip": "tsx scripts/export-release-zip.ts"
   },
   "dependencies": {

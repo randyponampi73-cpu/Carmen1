@@ -99,6 +99,105 @@ export const POSTGRES_MIGRATIONS: DbMigration[] = [
       SELECT 1;
     `,
   },
+  {
+    version: '007_skills_system',
+    name: 'Add CARMEN Skill Intelligence System tables (skills, skill_versions, project_skill_configs, user_skill_preferences, skill_executions)',
+    upSql: `
+      CREATE TABLE IF NOT EXISTS skills (
+        id TEXT PRIMARY KEY,
+        scope_key TEXT NOT NULL DEFAULT 'system',
+        owner_user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+        slug TEXT NOT NULL,
+        name TEXT NOT NULL,
+        category TEXT NOT NULL,
+        description TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'builtin',
+        trust_level TEXT NOT NULL DEFAULT 'BUILTIN',
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        current_version TEXT NOT NULL DEFAULT '1.0.0',
+        manifest_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        skill_md TEXT NOT NULL,
+        references_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        scripts_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        assets_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        checksum TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(scope_key, slug)
+      );
+
+      CREATE TABLE IF NOT EXISTS skill_versions (
+        id TEXT PRIMARY KEY,
+        skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+        version TEXT NOT NULL,
+        skill_md TEXT NOT NULL,
+        manifest_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        references_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        scripts_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        assets_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        checksum TEXT NOT NULL,
+        changelog TEXT NOT NULL DEFAULT '',
+        created_by_user_id TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS project_skill_configs (
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        approved_permissions_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        approved_by_user_id TEXT,
+        approved_at TIMESTAMPTZ,
+        pinned_version TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (project_id, skill_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS user_skill_preferences (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        approved_permissions_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, skill_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS skill_executions (
+        id TEXT PRIMARY KEY,
+        project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+        user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+        skill_id TEXT,
+        skill_name TEXT NOT NULL,
+        mode TEXT NOT NULL DEFAULT 'auto',
+        status TEXT NOT NULL,
+        confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
+        reason TEXT NOT NULL DEFAULT '',
+        fallback_used BOOLEAN NOT NULL DEFAULT FALSE,
+        tools_invoked_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        error_summary TEXT,
+        duration_ms INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_skills_owner ON skills(owner_user_id, category);
+      CREATE INDEX IF NOT EXISTS idx_skills_slug ON skills(slug);
+      CREATE INDEX IF NOT EXISTS idx_skill_versions_skill_id ON skill_versions(skill_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_skill_executions_project ON skill_executions(project_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_skill_executions_user ON skill_executions(user_id, created_at);
+    `,
+    downSql: `
+      DROP INDEX IF EXISTS idx_skill_executions_user;
+      DROP INDEX IF EXISTS idx_skill_executions_project;
+      DROP INDEX IF EXISTS idx_skill_versions_skill_id;
+      DROP INDEX IF EXISTS idx_skills_slug;
+      DROP INDEX IF EXISTS idx_skills_owner;
+      DROP TABLE IF EXISTS skill_executions;
+      DROP TABLE IF EXISTS user_skill_preferences;
+      DROP TABLE IF EXISTS project_skill_configs;
+      DROP TABLE IF EXISTS skill_versions;
+      DROP TABLE IF EXISTS skills;
+    `,
+  },
 ];
 
 export async function runPostgresMigrations(

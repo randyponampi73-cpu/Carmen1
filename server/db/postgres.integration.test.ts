@@ -62,11 +62,12 @@ describe('Live PostgreSQL Integration Verification (Requires Real PostgreSQL Ser
     const second = await runPostgresMigrations(client, POSTGRES_MIGRATIONS);
     assert.deepEqual(second.applied, []);
 
+    const latestVersion = POSTGRES_MIGRATIONS[POSTGRES_MIGRATIONS.length - 1].version;
     const rolled = await rollbackLastPostgresMigration(client, POSTGRES_MIGRATIONS);
-    assert.equal(rolled.rolledBack, '005_hash_session_tokens');
+    assert.equal(rolled.rolledBack, latestVersion);
 
     const reapplied = await runPostgresMigrations(client, POSTGRES_MIGRATIONS);
-    assert.deepEqual(reapplied.applied, ['005_hash_session_tokens']);
+    assert.deepEqual(reapplied.applied, [latestVersion]);
   });
 
   it('enforces real PostgreSQL CRUD, transactions, foreign keys, JSONB, booleans, and tenant schema isolation', { skip: skipReason }, async () => {

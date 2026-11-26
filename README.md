@@ -8,7 +8,7 @@ CARMEN adalah platform pembuat aplikasi web dan Android full-stack berbasis peri
 
 - **Frontend**: React 19 + Vite + Tailwind CSS + Monaco Editor (`src/`).
 - **Backend**: Express + TypeScript (`server.ts`, `server/`) + SQLite bawaan Node (`node:sqlite`, `data/carmen.db`).
-- **Secret Vault**: Enkripsi AES-256-GCM (`server/security.ts`) dengan `CARMEN_MASTER_KEY` wajib untuk penyimpanan API key dan *environment variable* proyek di server. *(Catatan: Mode `KEY-8` penyimpanan key hanya di perangkat pada `localStorage` belum dihubungkan ke eksekusi chat/model; gunakan penyimpanan terenkripsi di server.)*
+- **Secret Vault**: Enkripsi AES-256-GCM (`server/security.ts`) dengan `CARMEN_MASTER_KEY` wajib untuk penyimpanan API key dan *environment variable* proyek di server. Tersedia juga mode `KEY-8` penyimpanan key hanya di perangkat (`localStorage`) yang dikirim secara *ephemeral* ke `POST /api/providers/models/ephemeral` dan chat tanpa pernah menulis kunci ke database server.
 - **Isolasi Eksekusi (`server/runtime/isolation.ts` & `server/runtime/sandbox.ts`)**:
   - Prioritas 1: **Docker / Podman container** (`--network=none --read-only --cap-drop=ALL --security-opt=no-new-privileges:true --pids-limit --memory --cpus`).
   - Prioritas 2: **Linux Namespaces** (`unshare -Urnm -pf --mount-proc --kill-child`) + **`prlimit`** (CPU, ukuran file, file descriptor, batas proses), menyembunyikan direktori host (`data/`, kode server) dengan `tmpfs` kosong *read-only*, memutus jaringan pada eksekusi kode, dan menghapus env rahasia host.
@@ -60,8 +60,7 @@ Salin `.env.example` menjadi `.env` atau atur melalui panel **Secrets**:
 | `PREVIEW_ORIGIN` | Opsional | Origin terpisah untuk hosting preview produksi. |
 | `CARMEN_ENABLE_DEMO` | Opsional | Setel `1` untuk mengaktifkan tombol akun demo (`POST /api/auth/demo`) dan `?autostart=1` (default: mati). |
 | `CARMEN_DEMO_PASSWORD` | Opsional | Kata sandi akun demo saat inisialisasi database pertama kali (default: dibuat acak aman per instalasi). |
-| `CARMEN_SHARED_GEMINI` | Opsional | Setel `1` untuk mengaktifkan delegasi `GEMINI_API_KEY` server bersama ke pengguna (default: mati). |
-| `CARMEN_SHARED_GEMINI_DAILY_LIMIT` | Opsional | Batas permintaan harian per pengguna untuk kunci Gemini server bersama (default: `50`). |
+| `CARMEN_SHARED_KEY_MAX_REQUESTS_PER_DAY`, `CARMEN_SHARED_KEY_MAX_TOKENS_PER_DAY`, `CARMEN_SHARED_KEY_MAX_COST_USD_PER_DAY` | Opsional | Batas harian (*requests*, *tokens*, estimasi USD) per pengguna untuk delegasi `GEMINI_API_KEY` server bersama (`server/providers/sharedQuota.ts`). |
 | `ANDROID_HOME` / `ANDROID_SDK_ROOT` | Opsional | Path Android SDK untuk kompilasi APK native melalui Gradle. |
 
 ---
@@ -109,4 +108,4 @@ Status toolchain host dideteksi secara nyata melalui `GET /api/system/android-to
 - Kompilasi `.apk`/`.aab` native membutuhkan host atau worker dengan **JDK 17+**, **Android SDK**, **Gradle**, dan **`apksigner`/`jarsigner`**; tanpa toolchain tersebut output dibatasi secara jujur ke bundel sumber Capacitor `.zip`.
 - Pengujian panggilan API *live* berbayar ke Anthropic/OpenAI/Groq/OpenRouter/Gemini/Coarena memerlukan API key valid milik pengguna; pengujian otomatis dalam repositori memverifikasi seluruh adapter secara deterministik terhadap kontrak resmi tanpa mengirim kunci rahasia.
 - Login *magic link* belum memiliki transport pengiriman email sehingga endpoint `/api/auth/magic-link` mengembalikan `501` dan tab *Magic Link* disembunyikan sampai pengiriman email diimplementasikan.
-- Mode `KEY-8` ("Key hanya di perangkat") pada `localStorage` belum dihubungkan ke endpoint chat/model; seluruh permintaan AI menggunakan API key BYOK terenkripsi di server.
+- Mode `KEY-8` ("Key hanya di perangkat") pada `localStorage` berjalan secara *ephemeral* per permintaan (daftar model melalui `/api/providers/models/ephemeral` dan chat melalui `localProviderConfig`), sehingga tidak tersinkronisasi lintas perangkat kecuali disimpan ke Secret Vault terenkripsi di server.

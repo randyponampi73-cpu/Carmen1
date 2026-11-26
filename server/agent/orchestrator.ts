@@ -30,6 +30,15 @@ import {
   type ProviderHealthMonitor,
   type RouteCandidate,
 } from './router';
+import { CANONICAL_AGENT_TOOLS } from './toolRegistry';
+import {
+  prepareSkillsForAgentTurn,
+  recordSkillExecutionResult,
+  type SkillInvocationMode,
+  type SkillPackageRecord,
+  type SkillPermission,
+  type SkillPreflightOutcome,
+} from '../skills';
 
 export const READ_FILE_MAX_CHARS = 16000;
 
@@ -118,189 +127,7 @@ function safeParseJsonObject<T>(raw: unknown, fallback: T): T {
   return parsed && typeof parsed === 'object' ? (parsed as T) : fallback;
 }
 
-export const AGENT_TOOLS: AdapterToolDefinition[] = [
-  {
-    name: 'write_file',
-    description: 'Membuat file baru atau menimpa seluruh isi file di dalam proyek.',
-    parameters: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'Path file relatif terhadap root proyek, mis. index.html atau schema.sql' },
-        content: { type: 'string', description: 'Isi lengkap file.' },
-      },
-      required: ['path', 'content'],
-    },
-  },
-  {
-    name: 'edit_file',
-    description: 'Mengubah bagian tertentu dari file dengan search-and-replace.',
-    parameters: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'Path file relatif.' },
-        search: { type: 'string', description: 'Teks persis yang akan diganti.' },
-        replace: { type: 'string', description: 'Teks pengganti.' },
-      },
-      required: ['path', 'search', 'replace'],
-    },
-  },
-  {
-    name: 'read_file',
-    description:
-      'Membaca isi file proyek. Untuk file besar (>16.000 karakter), gunakan start_line dan end_line (1-based inklusif) agar tidak terpotong.',
-    parameters: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'Path file relatif.' },
-        start_line: { type: 'number', description: 'Baris awal yang dibaca (opsional, mulai dari 1).' },
-        end_line: { type: 'number', description: 'Baris akhir yang dibaca (opsional, inklusif).' },
-      },
-      required: ['path'],
-    },
-  },
-  {
-    name: 'update_project_memory',
-    description:
-      'Menyimpan catatan proyek permanen (arsitektur, keputusan penting, daftar tugas beserta status, langkah berikutnya) yang otomatis dibaca di awal setiap giliran berikutnya. Mengganti seluruh catatan sebelumnya; maksimal 4000 karakter. Jangan simpan rahasia.',
-    parameters: {
-      type: 'object',
-      properties: {
-        content: { type: 'string', description: 'Seluruh isi catatan baru (Markdown ringkas).' },
-      },
-      required: ['content'],
-    },
-  },
-  {
-    name: 'delete_file',
-    description: 'Menghapus file dari proyek.',
-    parameters: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'Path file relatif.' },
-      },
-      required: ['path'],
-    },
-  },
-  {
-    name: 'list_files',
-    description: 'Melihat daftar file pada proyek.',
-    parameters: {
-      type: 'object',
-      properties: {
-        dir: { type: 'string', description: 'Direktori opsional (kosongkan untuk root).' },
-      },
-      required: [],
-    },
-  },
-  {
-    name: 'search_files',
-    description: 'Mencari teks atau simbol di seluruh file proyek.',
-    parameters: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'Kata kunci teks yang ingin dicari (case-insensitive).' },
-        dir: { type: 'string', description: 'Prefix direktori opsional untuk mempersempit pencarian.' },
-      },
-      required: ['query'],
-    },
-  },
-  {
-    name: 'create_directory',
-    description: 'Membuat direktori baru di dalam workspace proyek.',
-    parameters: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'Path direktori relatif, mis. src/components.' },
-      },
-      required: ['path'],
-    },
-  },
-  {
-    name: 'run_command',
-    description: 'Menjalankan perintah sandbox yang diizinkan (ls, db:sync, node, npm, npx) di direktori proyek.',
-    parameters: {
-      type: 'object',
-      properties: {
-        cmd: { type: 'string', description: 'Perintah aman di dalam proyek.' },
-      },
-      required: ['cmd'],
-    },
-  },
-  {
-    name: 'install_dependencies',
-    description: 'Menjalankan npm install (atau menambahkan paket tertentu) di workspace proyek.',
-    parameters: {
-      type: 'object',
-      properties: {
-        packages: { type: 'string', description: 'Daftar nama paket opsional dipisahkan spasi, kosongkan untuk npm install.' },
-      },
-      required: [],
-    },
-  },
-  {
-    name: 'run_tests',
-    description: 'Menjalankan pengujian proyek (npm test) di sandbox.',
-    parameters: {
-      type: 'object',
-      properties: {},
-      required: [],
-    },
-  },
-  {
-    name: 'build_project',
-    description: 'Menjalankan build proyek (npm run build) untuk memverifikasi tidak ada error kompilasi.',
-    parameters: {
-      type: 'object',
-      properties: {},
-      required: [],
-    },
-  },
-  {
-    name: 'validate_project',
-    description: 'Memvalidasi integritas proyek (index.html, package.json, schema.sql, deteksi kebocoran secret, dan error preview/runtime terakhir).',
-    parameters: {
-      type: 'object',
-      properties: {},
-      required: [],
-    },
-  },
-  {
-    name: 'inspect_dependencies',
-    description: 'Memeriksa package.json proyek (daftar dependensi, skrip, dan audit keamanan skrip lifecycle).',
-    parameters: {
-      type: 'object',
-      properties: {},
-      required: [],
-    },
-  },
-  {
-    name: 'workspace_diff',
-    description: 'Melihat ringkasan perubahan file (ditambah, diubah, dihapus) dibandingkan snapshot versi terakhir.',
-    parameters: {
-      type: 'object',
-      properties: {},
-      required: [],
-    },
-  },
-  {
-    name: 'rollback_checkpoint',
-    description: 'Mengembalikan file workspace ke checkpoint sebelum giliran perubahan saat ini bila perbaikan gagal.',
-    parameters: {
-      type: 'object',
-      properties: {},
-      required: [],
-    },
-  },
-  {
-    name: 'read_logs',
-    description: 'Membaca log terminal dan preview terbaru dari proyek.',
-    parameters: {
-      type: 'object',
-      properties: {},
-      required: [],
-    },
-  },
-];
+export const AGENT_TOOLS: AdapterToolDefinition[] = CANONICAL_AGENT_TOOLS;
 
 interface ActiveSessionRecord {
   sessionId: string;
@@ -1388,6 +1215,7 @@ class StructuredActionStreamFilter {
 
 export interface RunAgentTurnParams {
   projectId: string;
+  userId?: string;
   prompt: string;
   mode: 'build' | 'discuss';
   imageBase64?: string;
@@ -1398,6 +1226,13 @@ export interface RunAgentTurnParams {
   sessionId?: string;
   maxSteps?: number;
   requestTimeoutMs?: number;
+  skillMode?: SkillInvocationMode;
+  requestedSkillNames?: string[];
+  disableAllSkills?: boolean;
+  approvedSkillPermissions?: Record<string, SkillPermission[]>;
+  forceEmptySkills?: boolean;
+  loadSkillOverride?: (slug: string) => Promise<SkillPackageRecord | null>;
+  skillPreflightOverride?: () => Promise<SkillPreflightOutcome>;
   adapterOverride?: ReturnType<typeof getProviderAdapter>;
   adapterResolver?: (provider: ProviderAdapterConfig['provider']) => ReturnType<typeof getProviderAdapter>;
   healthMonitor?: ProviderHealthMonitor;
@@ -1407,6 +1242,7 @@ export interface RunAgentTurnParams {
 export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMessage> {
   const {
     projectId,
+    userId,
     prompt,
     mode,
     imageBase64,
@@ -1417,20 +1253,28 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMess
     sessionId = `sess_${crypto.randomUUID().slice(0, 12)}`,
     maxSteps = DEFAULT_MAX_AGENT_STEPS,
     requestTimeoutMs = MODEL_REQUEST_TIMEOUT_MS,
+    skillMode = 'auto',
+    requestedSkillNames,
+    disableAllSkills = false,
+    approvedSkillPermissions,
+    forceEmptySkills = false,
+    loadSkillOverride,
+    skillPreflightOverride,
     adapterOverride,
     adapterResolver,
     healthMonitor = providerHealthMonitor,
     emit,
   } = params;
 
-  const project = await asyncDb.get<{ id: string; name: string; type: ProjectType; stack: string; rules: string }>(
-    'SELECT id, name, type, stack, rules FROM projects WHERE id = ?',
+  const project = await asyncDb.get<{ id: string; user_id: string; name: string; type: ProjectType; stack: string; rules: string }>(
+    'SELECT id, user_id, name, type, stack, rules FROM projects WHERE id = ?',
     projectId
   );
 
   if (!project) {
     throw new Error('Proyek tidak ditemukan.');
   }
+  const effectiveUserId = userId || project.user_id;
 
   // Persist user message immediately
   const userMessageId = `msg_${crypto.randomUUID().slice(0, 10)}`;
@@ -1470,6 +1314,134 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMess
   const initialRuntimeError = projectRuntime.getLastError(projectId);
   const initialHandoff = await getProjectHandoffAsync(projectId);
 
+  // Optional Dynamic Skill Intelligence Layer: discovery -> on-demand activation -> permission check -> composition.
+  // Built-in Agent Core MUST proceed cleanly even if the skill system has 0 skills, is disabled, or throws.
+  const skillTurnStartMs = Date.now();
+  let skillPreflight: SkillPreflightOutcome;
+  try {
+    skillPreflight = skillPreflightOverride
+      ? await skillPreflightOverride()
+      : await prepareSkillsForAgentTurn({
+          ctx: {
+            prompt,
+            mode,
+            projectId,
+            userId: effectiveUserId,
+            projectType: project.type,
+            stack: project.stack,
+            existingFiles: initialFilePaths,
+            lastError: initialRuntimeError,
+            skillMode,
+            requestedSkillNames,
+            disableAllSkills,
+          },
+          forceEmptySkills,
+          approvedPermissionsOverride: approvedSkillPermissions,
+          loadSkillOverride,
+        });
+  } catch (skillErr) {
+    const errMsg = skillErr instanceof Error ? skillErr.message : String(skillErr);
+    skillPreflight = {
+      skillSystemAvailable: false,
+      mode: skillMode,
+      disabled: disableAllSkills,
+      discoveredCount: 0,
+      selectedMatches: [],
+      loadedSkills: [],
+      composition: { steps: [], skippedConflicts: [], missingDependencies: [], hasCycle: false },
+      deniedSkills: [],
+      loadFailures: [{ skillName: 'skill-system', error: errMsg }],
+      promptInstructions: '',
+      warnings: [`Sistem Skill mengalami gangguan (${errMsg}); melanjutkan dengan Agent Core bawaan.`],
+    };
+  }
+
+  const activeSkillSlugs = skillPreflight.loadedSkills.map((s) => s.slug);
+
+  emit('skill_discovery', {
+    available: skillPreflight.skillSystemAvailable,
+    disabled: skillPreflight.disabled,
+    mode: skillPreflight.mode,
+    discoveredCount: skillPreflight.discoveredCount,
+    selectedCount: skillPreflight.loadedSkills.length,
+    warnings: skillPreflight.warnings,
+  });
+
+  for (const match of skillPreflight.selectedMatches) {
+    if (!activeSkillSlugs.includes(match.skill.slug)) continue;
+    emit('skill_selected', {
+      skillId: match.skill.id,
+      skillName: match.skill.slug,
+      category: match.skill.category,
+      confidence: match.confidence,
+      reason: match.reason,
+      explicit: match.explicit,
+    });
+    emit('skill_execution', {
+      skillId: match.skill.id,
+      skillName: match.skill.slug,
+      mode: skillPreflight.mode,
+      status: 'running',
+      reason: match.reason,
+      fallbackUsed: false,
+    });
+  }
+
+  for (const denied of skillPreflight.deniedSkills) {
+    emit('skill_permission_required', denied);
+    emit('skill_execution', {
+      skillName: denied.skillName,
+      mode: skillPreflight.mode,
+      status: 'denied',
+      reason: denied.reason,
+      fallbackUsed: true,
+      missingPermissions: denied.missingPermissions,
+    });
+    await recordSkillExecutionResult({
+      projectId,
+      userId: effectiveUserId,
+      attempt: {
+        skillId: '',
+        skillName: denied.skillName,
+        mode: skillPreflight.mode,
+        status: 'denied',
+        confidence: 0,
+        reason: denied.reason,
+        fallbackUsed: true,
+        toolsInvoked: [],
+        errorSummary: denied.reason,
+        durationMs: 0,
+        missingPermissions: denied.missingPermissions,
+      },
+    });
+  }
+
+  for (const failure of skillPreflight.loadFailures) {
+    emit('skill_execution', {
+      skillName: failure.skillName,
+      mode: skillPreflight.mode,
+      status: 'fallback',
+      reason: failure.error,
+      fallbackUsed: true,
+    });
+    await recordSkillExecutionResult({
+      projectId,
+      userId: effectiveUserId,
+      attempt: {
+        skillId: '',
+        skillName: failure.skillName,
+        mode: skillPreflight.mode,
+        status: 'fallback',
+        confidence: 0,
+        reason: 'Skill gagal dimuat; beralih aman ke kemampuan bawaan CARMEN.',
+        fallbackUsed: true,
+        toolsInvoked: [],
+        errorSummary: failure.error,
+        durationMs: 0,
+      },
+    });
+  }
+
   // Structured intent classification & execution planning (with continuation handoff inheritance)
   let executionPlan: AgentExecutionPlan = buildExecutionPlan({
     prompt,
@@ -1480,6 +1452,9 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMess
     isBlankStarter,
     projectHandoff: initialHandoff,
   });
+  if (activeSkillSlugs.length > 0) {
+    executionPlan = { ...executionPlan, activeSkills: activeSkillSlugs };
+  }
 
   const resolveAdapter = (provider: ProviderAdapterConfig['provider']) => {
     if (adapterResolver) return adapterResolver(provider);
@@ -1548,6 +1523,7 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMess
       useStructuredFallback,
       projectMemory: await getProjectMemoryAsync(projectId),
       projectHandoff: await getProjectHandoffAsync(projectId),
+      skillInstructions: skillPreflight.promptInstructions,
     });
     const planAppendix = executionPlan.requiresHeavyPlanning
       ? `\n\nRencana Eksekusi Terstruktur:\n${formatPlanMarkdown(executionPlan)}`
@@ -2263,6 +2239,58 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMess
     versionId,
     createdAt: new Date().toISOString(),
   };
+
+  if (skillPreflight.loadedSkills.length > 0) {
+    const skillDurationMs = Date.now() - skillTurnStartMs;
+    const toolsInvoked = Array.from(new Set(toolEvents.map((e) => e.tool)));
+    const turnSucceeded =
+      !abortController.signal.aborted &&
+      !lastStreamError &&
+      !loopBrokenReason &&
+      (mode === 'discuss' || hasSuccessfulWriteOrEdit || filesMutated || Boolean(scrubbedFinalText));
+    const hadToolRecovery = toolEvents.some((e) => e.status === 'error') && turnSucceeded;
+
+    for (const pkg of skillPreflight.loadedSkills) {
+      const match = skillPreflight.selectedMatches.find((m) => m.skill.slug === pkg.slug);
+      const status = turnSucceeded ? (hadToolRecovery ? 'fallback' : 'success') : 'failed';
+      const reason = match?.reason || 'Skill dijalankan bersama CARMEN Agent Core.';
+      const errSummary = !turnSucceeded
+        ? lastStreamError?.message || loopBrokenReason || 'Giliran selesai tanpa mutasi/respons sukses.'
+        : hadToolRecovery
+          ? 'Sebagian langkah tool gagal lalu dipulihkan oleh kemampuan agen bawaan.'
+          : null;
+
+      emit('skill_execution', {
+        skillId: pkg.id,
+        skillName: pkg.slug,
+        mode: skillPreflight.mode,
+        status,
+        reason,
+        fallbackUsed: status === 'fallback' || status === 'failed',
+        durationMs: skillDurationMs,
+        toolsInvoked,
+        errorSummary: errSummary,
+      });
+
+      await recordSkillExecutionResult({
+        projectId,
+        userId: effectiveUserId,
+        attempt: {
+          skillId: pkg.id,
+          skillName: pkg.slug,
+          mode: skillPreflight.mode,
+          status,
+          confidence: match?.confidence ?? 0.5,
+          reason,
+          fallbackUsed: status !== 'success',
+          toolsInvoked,
+          errorSummary: errSummary,
+          durationMs: skillDurationMs,
+        },
+        activeSecrets: secretListForScrub,
+      });
+    }
+  }
 
     emit('done', {
       message: saved,

@@ -12,6 +12,7 @@ import type {
   DeploymentRecord,
   DeploymentTarget,
   EnvVarItem,
+  MarketplaceCatalogData,
   ModelTier,
   PreviewHealthReport,
   ProjectFile,
@@ -21,7 +22,14 @@ import type {
   ProviderKeyRecord,
   ProviderModel,
   ProviderType,
+  RegisteredAgentToolInfo,
   SandboxIsolationStatus,
+  SkillAnalyticsSummary,
+  SkillCategory,
+  SkillMetadataItem,
+  SkillPackageDetail,
+  SkillPermission,
+  SkillVersionItem,
   TerminalLogEntry,
   TriState,
   UserProfile,
@@ -448,6 +456,110 @@ export const api = {
     a.remove();
     URL.revokeObjectURL(url);
   },
+
+  // Dynamic Skill Intelligence System
+  listSkills: (params?: {
+    projectId?: string;
+    category?: SkillCategory | 'all';
+    search?: string;
+    includeDisabled?: boolean;
+  }) => {
+    const q = new URLSearchParams();
+    if (params?.projectId) q.set('projectId', params.projectId);
+    if (params?.category && params.category !== 'all') q.set('category', params.category);
+    if (params?.search?.trim()) q.set('search', params.search.trim());
+    if (params?.includeDisabled === false) q.set('includeDisabled', '0');
+    const qs = q.toString();
+    return request<{
+      skills: SkillMetadataItem[];
+      tools: RegisteredAgentToolInfo[];
+      analytics: SkillAnalyticsSummary;
+    }>(`/api/skills${qs ? `?${qs}` : ''}`);
+  },
+  getSkillDetail: (id: string, projectId?: string) =>
+    request<{
+      skill: SkillPackageDetail;
+      versions: SkillVersionItem[];
+      effectivePermissions: SkillPermission[];
+      validation: { valid: boolean; errors: string[]; warnings: string[] };
+    }>(`/api/skills/${encodeURIComponent(id)}${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
+  createSkill: (body: {
+    name?: string;
+    category?: SkillCategory;
+    description?: string;
+    tools?: string[];
+    permissions?: SkillPermission[];
+    triggers?: string[];
+    workflowSteps?: string[];
+    executionMode?: 'sequential' | 'parallel-safe';
+    skillMd?: string;
+  }) => request<{ skill: SkillPackageDetail; warnings?: string[] }>('/api/skills', { method: 'POST', body: JSON.stringify(body) }),
+  updateSkill: (id: string, body: { skillMd: string; changelog?: string }) =>
+    request<{ skill: SkillPackageDetail }>(`/api/skills/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  validateSkill: (id: string) =>
+    request<{ valid: boolean; errors: string[]; warnings: string[] }>(`/api/skills/${encodeURIComponent(id)}/validate`, {
+      method: 'POST',
+    }),
+  rollbackSkill: (id: string, versionId: string) =>
+    request<{ skill: SkillPackageDetail }>(`/api/skills/${encodeURIComponent(id)}/rollback`, {
+      method: 'POST',
+      body: JSON.stringify({ versionId }),
+    }),
+  deleteSkill: (id: string) =>
+    request<{ ok: boolean }>(`/api/skills/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  toggleUserSkill: (id: string, enabled: boolean) =>
+    request<{ skill: SkillMetadataItem }>(`/api/skills/${encodeURIComponent(id)}/toggle`, {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    }),
+  toggleProjectSkill: (projectId: string, skillId: string, patch: { enabled?: boolean; approvedPermissions?: SkillPermission[] }) =>
+    request<{ skill: SkillMetadataItem }>(
+      `/api/projects/${encodeURIComponent(projectId)}/skills/${encodeURIComponent(skillId)}/toggle`,
+      { method: 'POST', body: JSON.stringify(patch) }
+    ),
+  approveSkill: (id: string, body?: { permissions?: SkillPermission[]; projectId?: string; promoteTrust?: boolean }) =>
+    request<{ skill: SkillMetadataItem }>(`/api/skills/${encodeURIComponent(id)}/approve`, {
+      method: 'POST',
+      body: JSON.stringify(body || {}),
+    }),
+  importSkillZip: (zipBase64: string) =>
+    request<{ skill: SkillPackageDetail; warnings?: string[] }>('/api/skills/import', {
+      method: 'POST',
+      body: JSON.stringify({ zipBase64 }),
+    }),
+  downloadSkillZip: async (id: string, slug: string) => {
+    const res = await fetch(`/api/skills/${encodeURIComponent(id)}/export.zip`, {
+      credentials: 'include',
+      headers: { ...getAuthHeaders() },
+    });
+    if (res.status === 401) {
+      notifyUnauthorized();
+      throw new Error(defaultUnauthorizedMessage);
+    }
+    if (!res.ok) {
+      throw new Error(`Gagal mengekspor skill ZIP (HTTP ${res.status}).`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${slug || 'skill'}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
+  getSkillMarketplace: (projectId?: string) =>
+    request<MarketplaceCatalogData>(
+      `/api/skills/marketplace${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`
+    ),
+  getSkillAnalytics: (projectId?: string) =>
+    request<{ analytics: SkillAnalyticsSummary }>(
+      `/api/skills/analytics${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`
+    ),
 };
 
 // Local-only key storage in browser localStorage (Mode "Key hanya di perangkat" KEY-8)

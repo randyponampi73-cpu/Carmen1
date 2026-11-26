@@ -25,6 +25,7 @@ export interface AgentExecutionPlan {
   relevantFiles: string[];
   steps: StructuredPlanStep[];
   verificationCriteria: string[];
+  activeSkills?: string[];
 }
 
 const REPAIR_KEYWORDS =
@@ -381,6 +382,9 @@ export function formatPlanMarkdown(plan: AgentExecutionPlan): string {
   const lines: string[] = [];
   lines.push(`Tujuan: ${plan.objective}`);
   lines.push(`Klasifikasi: ${plan.intent} (kompleksitas: ${plan.complexity})`);
+  if (plan.activeSkills && plan.activeSkills.length > 0) {
+    lines.push(`Skill Opsional: ${plan.activeSkills.join(', ')}`);
+  }
   if (plan.steps.length > 0) {
     lines.push('Langkah:');
     plan.steps.forEach((step, idx) => {

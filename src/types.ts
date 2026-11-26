@@ -379,3 +379,142 @@ export interface ActivityLogEntry {
   createdAt: string;
 }
 
+export type SkillCategory =
+  | 'development'
+  | 'debugging'
+  | 'security'
+  | 'testing'
+  | 'database'
+  | 'devops'
+  | 'architecture'
+  | 'agents';
+
+export type SkillPermission = 'READ' | 'WRITE' | 'EXECUTE' | 'NETWORK' | 'DATABASE' | 'DEPLOY';
+export type SkillTrustLevel = 'BUILTIN' | 'VERIFIED' | 'APPROVED' | 'DRAFT' | 'UNTRUSTED';
+export type SkillSource = 'builtin' | 'created' | 'imported' | 'marketplace';
+export type SkillInvocationMode = 'auto' | 'manual' | 'advanced';
+
+export interface SkillManifestSummary {
+  category: SkillCategory;
+  version: string;
+  tags: string[];
+  tools: string[];
+  permissions: SkillPermission[];
+  triggers: string[];
+  dependencies: string[];
+  conflicts: string[];
+  executionMode: 'sequential' | 'parallel-safe';
+  verification: string[];
+  examples: string[];
+  hasReferences: boolean;
+  hasScripts: boolean;
+}
+
+export interface SkillMetadataItem {
+  id: string;
+  slug: string;
+  name: string;
+  category: SkillCategory;
+  description: string;
+  source: SkillSource;
+  trustLevel: SkillTrustLevel;
+  enabled: boolean;
+  projectEnabled?: boolean;
+  approvedPermissions: SkillPermission[];
+  currentVersion: string;
+  manifest: SkillManifestSummary;
+  checksum: string;
+  ownerUserId: string | null;
+  referencePaths: string[];
+  scriptPaths: string[];
+  assetPaths: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SkillPackageDetail extends SkillMetadataItem {
+  skillMd: string;
+  references: Record<string, string>;
+  scripts: Record<string, string>;
+  assets: Record<string, string>;
+}
+
+export interface SkillVersionItem {
+  id: string;
+  skillId: string;
+  version: string;
+  skillMd: string;
+  manifest: SkillManifestSummary;
+  checksum: string;
+  changelog: string;
+  createdByUserId: string | null;
+  createdAt: string;
+}
+
+export interface RegisteredAgentToolInfo {
+  name: string;
+  category: string;
+  requiredPermission: SkillPermission;
+  mutating: boolean;
+  description: string;
+}
+
+export interface SkillAnalyticsSummary {
+  totalExecutions: number;
+  successCount: number;
+  failedCount: number;
+  fallbackCount: number;
+  deniedCount: number;
+  avgDurationMs: number;
+  topSkills: Array<{
+    skillName: string;
+    total: number;
+    successRate: number;
+    avgDurationMs: number;
+  }>;
+  recentExecutions: Array<{
+    id: string;
+    projectId: string | null;
+    skillName: string;
+    mode: SkillInvocationMode;
+    status: string;
+    confidence: number;
+    reason: string;
+    fallbackUsed: boolean;
+    errorSummary: string | null;
+    durationMs: number;
+    createdAt: string;
+  }>;
+}
+
+export interface MarketplaceSkillItem {
+  slug: string;
+  name: string;
+  category: SkillCategory;
+  description: string;
+  version: string;
+  sourceType: 'curated-builtin' | 'remote';
+  installed: boolean;
+  enabled: boolean;
+  trustBadge: string;
+  permissions: SkillPermission[];
+}
+
+export interface MarketplaceCatalogData {
+  items: MarketplaceSkillItem[];
+  remoteConfigured: boolean;
+  remoteAvailable: boolean;
+  remoteNotice: string;
+}
+
+export interface SkillTurnTraceItem {
+  skillName: string;
+  reason: string;
+  confidence?: number;
+  explicit?: boolean;
+  status: 'selected' | 'running' | 'success' | 'fallback' | 'denied';
+  fallbackUsed?: boolean;
+  missingPermissions?: SkillPermission[];
+}
+
+
