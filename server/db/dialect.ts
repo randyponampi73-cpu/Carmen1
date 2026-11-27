@@ -124,8 +124,8 @@ export function translateSqliteToPostgres(sql: string): string {
       .replace(/\bINSERT\s+OR\s+IGNORE\s+INTO\b/gi, 'INSERT INTO')
       .replace(/\b(archived|is_server_env)\s*=\s*0\b/gi, '$1 = FALSE')
       .replace(/\b(archived|is_server_env)\s*=\s*1\b/gi, '$1 = TRUE')
-      .replace(/,\s*rowid\s+(?:ASC|DESC)\b/gi, '')
-      .replace(/\bORDER\s+BY\s+rowid\s+(ASC|DESC)\b/gi, 'ORDER BY created_at $1')
+      .replace(/,\s*(?:[a-zA-Z_][a-zA-Z0-9_]*\.)?rowid\s+(?:ASC|DESC)\b/gi, '')
+      .replace(/\bORDER\s+BY\s+([a-zA-Z_][a-zA-Z0-9_]*\.)?rowid\s+(ASC|DESC)\b/gi, 'ORDER BY $1created_at $2')
   );
 
   if (/^\s*INSERT\s+OR\s+IGNORE\s+INTO\b/i.test(input) && !/\bON\s+CONFLICT\b/i.test(out)) {

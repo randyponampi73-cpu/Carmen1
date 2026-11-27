@@ -24,6 +24,9 @@ import {
   scrubSecrets,
   validateApkConfig,
   validateCustomBaseUrl,
+  validateProviderChatPath,
+  validateProviderExtraHeaders,
+  validateProviderHeaderName,
   validateSandboxCommand,
   validateSqlSchemaSafe,
   validateTenantWorkspacePath,
@@ -584,5 +587,117 @@ test('safeOutboundFetch streamIdleTimeoutMs lets active slow-ticking streams out
     }
   );
   await assert.rejects(() => stalledRes.text(), /tidak ada data/i);
+});
+
+test('safeOutboundFetch uses strict cross-origin header allowlist and blocks cross-origin 307/308 body forwarding', async () => {
+  // 1) Cross-origin GET redirect strips non-allowlisted custom auth/secret headers
+  let nextHeaders: Record<string, string> = {};
+  const res = await safeOutboundFetch(
+    'https://origin-a.example/v1/models',
+    {
+      headers: {
+        Authorization: 'Bearer secret-a',
+        'X-Custom-Auth': 'custom-secret-token',
+        'Api-Key': 'another-secret-token',
+        Accept: 'application/json',
+      },
+    },
+    {
+      lookupFn: async () => [{ address: '93.184.216.34', family: 4 }],
+      transportFn: async ({ url, headers }) => {
+        if (new URL(url).hostname === 'origin-a.example') {
+          return new Response('', {
+            status: 302,
+            headers: { location: 'https://origin-b.example/v1/models' },
+          });
+        }
+        nextHeaders = headers;
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      },
+    }
+  );
+  assert.equal(res.status, 200);
+  const lowerKeys = Object.keys(nextHeaders).map((k) => k.toLowerCase());
+  assert.equal(lowerKeys.includes('authorization'), false);
+  assert.equal(lowerKeys.includes('x-custom-auth'), false);
+  assert.equal(lowerKeys.includes('api-key'), false);
+  assert.equal(lowerKeys.includes('accept'), true);
+
+  // 2) Cross-origin 307 POST redirect carrying a request body must be rejected
+  await assert.rejects(
+    () =>
+      safeOutboundFetch(
+        'https://origin-a.example/v1/chat/completions',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Custom-Auth': 'secret' },
+          body: JSON.stringify({ prompt: 'confidential source code' }),
+        },
+        {
+          lookupFn: async () => [{ address: '93.184.216.34', family: 4 }],
+          transportFn: async ({ url }) => {
+            if (new URL(url).hostname === 'origin-a.example') {
+              return new Response('', {
+                status: 307,
+                headers: { location: 'https://evil-collector.example/steal' },
+              });
+            }
+            throw new Error('Must never forward POST body to cross-origin redirect target');
+          },
+        }
+      ),
+    /lintas-origin|body/i
+  );
+});
+
+test('validateProviderHeaderName, validateProviderExtraHeaders, and validateProviderChatPath reject injection and forbidden headers', () => {
+  assert.equal(validateProviderHeaderName('X-Tenant-Id').valid, true);
+  assert.equal(validateProviderHeaderName('Host').valid, false);
+  assert.equal(validateProviderHeaderName('Cookie').valid, false);
+  assert.equal(validateProviderHeaderName('X-Bad\r\nInjected').valid, false);
+  assert.equal(validateProviderHeaderName('Bad Header').valid, false);
+
+  assert.equal(validateProviderExtraHeaders({ 'X-Org-Id': 'org_123' }).valid, true);
+  assert.equal(validateProviderExtraHeaders({ 'X-Org-Id': 'val\r\nEvil: 1' }).valid, false);
+  assert.equal(validateProviderExtraHeaders({ Host: 'internal.local' }).valid, false);
+  const tooMany: Record<string, string> = {};
+  for (let i = 0; i < 11; i += 1) tooMany[`X-H-${i}`] = 'v';
+  assert.equal(validateProviderExtraHeaders(tooMany).valid, false);
+
+  assert.equal(validateProviderChatPath('/v1/chat/completions').valid, true);
+  assert.equal(validateProviderChatPath('https://evil.example/chat').valid, false);
+  assert.equal(validateProviderChatPath('/../etc/passwd').valid, false);
+  assert.equal(validateProviderChatPath('/chat\r\nInjected').valid, false);
+});
+
+test('scrubSecrets redacts session cookies, database/redis URIs, GitHub tokens, Basic auth, API headers, and runtime env secrets', () => {
+  const prevDbUrl = process.env.DATABASE_URL;
+  process.env.DATABASE_URL = 'postgresql://carmen_user:Sup3rS3cretPgPass@db.supabase.co:5432/postgres';
+  try {
+    const sample = [
+      'Cookie: carmen_session=abc123sessiontoken999; other=1',
+      'PG error connecting to postgresql://carmen_user:Sup3rS3cretPgPass@db.supabase.co:5432/postgres',
+      'Redis failed: rediss://default:MyRedisPass12345@redis.example.com:6379',
+      'GitHub PAT ghp_abcdefghijklmnopqrstuvwxyz123456 and github_pat_11ABCDEFGH_0123456789abcdef',
+      'Authorization: Basic dXNlcjpwYXNzd29yZA==',
+      'X-API-Key: my-custom-header-secret-999',
+      'X-Goog-API-Key: custom-goog-key-value-888',
+      'Leaked pass alone: Sup3rS3cretPgPass',
+    ].join('\n');
+
+    const scrubbed = scrubSecrets(sample);
+    assert.equal(scrubbed.includes('abc123sessiontoken999'), false);
+    assert.equal(scrubbed.includes('Sup3rS3cretPgPass'), false);
+    assert.equal(scrubbed.includes('MyRedisPass12345'), false);
+    assert.equal(scrubbed.includes('ghp_abcdefghijklmnopqrstuvwxyz123456'), false);
+    assert.equal(scrubbed.includes('github_pat_11ABCDEFGH_0123456789abcdef'), false);
+    assert.equal(scrubbed.includes('dXNlcjpwYXNzd29yZA=='), false);
+    assert.equal(scrubbed.includes('my-custom-header-secret-999'), false);
+    assert.equal(scrubbed.includes('custom-goog-key-value-888'), false);
+    assert.match(scrubbed, /carmen_session=\[REDACTED_SESSION\]/);
+  } finally {
+    if (prevDbUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = prevDbUrl;
+  }
 });
 

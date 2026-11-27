@@ -262,6 +262,7 @@ export const api = {
     authHeader?: string;
     chatPath?: string;
     customModels?: string[];
+    extraHeaders?: Record<string, string>;
   }) =>
     request<{ ok: boolean; message: string; errorCode?: string }>('/api/providers/test-ephemeral', {
       method: 'POST',
@@ -279,6 +280,7 @@ export const api = {
     authHeader?: string;
     chatPath?: string;
     customModels?: string[];
+    extraHeaders?: Record<string, string>;
     supportsTools?: TriState;
     supportsVision?: TriState;
   }) =>

@@ -358,11 +358,11 @@ export function DeployModal({ projectId, projectName, locale, onClose }: DeployM
                   {latestDeployment.target} · {latestDeployment.status.toUpperCase()}
                 </span>
               </div>
-              {latestDeployment.deploymentUrl && (
+              {latestDeployment.deploymentUrl && /^https?:\/\//i.test(latestDeployment.deploymentUrl.trim()) && (
                 <a
-                  href={latestDeployment.deploymentUrl}
+                  href={latestDeployment.deploymentUrl.trim()}
                   target="_blank"
-                  rel="noreferrer"
+                  rel="noopener noreferrer"
                   className="text-[12px] text-[var(--accent-text)] hover:underline inline-flex items-center gap-1 font-mono"
                 >
                   <span>{latestDeployment.deploymentUrl}</span>
@@ -432,11 +432,11 @@ export function DeployModal({ projectId, projectName, locale, onClose }: DeployM
                       {formatDateTime(item.createdAt, locale)} · {item.projectName}
                     </div>
                   </div>
-                  {item.deploymentUrl ? (
+                  {item.deploymentUrl && /^https?:\/\//i.test(item.deploymentUrl.trim()) ? (
                     <a
-                      href={item.deploymentUrl}
+                      href={item.deploymentUrl.trim()}
                       target="_blank"
-                      rel="noreferrer"
+                      rel="noopener noreferrer"
                       className="text-[12px] font-mono text-[var(--accent-text)] hover:underline shrink-0 inline-flex items-center gap-1"
                     >
                       <span>{t.open}</span>

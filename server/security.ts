@@ -383,13 +383,99 @@ export interface PinnedRequestContext {
 
 export type PinnedTransportFn = (ctx: PinnedRequestContext) => Promise<Response>;
 
-const SENSITIVE_REDIRECT_HEADERS = new Set([
-  'authorization',
-  'proxy-authorization',
-  'cookie',
-  'x-api-key',
-  'x-goog-api-key',
+const SAFE_CROSS_ORIGIN_REDIRECT_HEADERS = new Set([
+  'accept',
+  'accept-encoding',
+  'accept-language',
+  'cache-control',
+  'content-type',
+  'user-agent',
+  'if-none-match',
+  'if-modified-since',
 ]);
+
+const FORBIDDEN_PROVIDER_HEADERS = new Set([
+  'host',
+  'content-length',
+  'transfer-encoding',
+  'connection',
+  'cookie',
+  'upgrade',
+  'te',
+  'trailer',
+  'keep-alive',
+  'proxy-connection',
+]);
+
+export function validateProviderHeaderName(rawName: string): {
+  valid: boolean;
+  normalized?: string;
+  error?: string;
+} {
+  const name = rawName.trim();
+  if (!name) {
+    return { valid: false, error: 'Nama header tidak boleh kosong.' };
+  }
+  if (/[\r\n\0]/.test(name) || name.length > 64 || !/^[A-Za-z0-9-]+$/.test(name)) {
+    return { valid: false, error: `Nama header "${name.slice(0, 32)}" tidak valid (hanya huruf, angka, dan tanda hubung).` };
+  }
+  if (FORBIDDEN_PROVIDER_HEADERS.has(name.toLowerCase())) {
+    return { valid: false, error: `Header transport "${name}" tidak diizinkan untuk konfigurasi provider.` };
+  }
+  return { valid: true, normalized: name };
+}
+
+export function validateProviderExtraHeaders(raw: unknown): {
+  valid: boolean;
+  normalized?: Record<string, string>;
+  error?: string;
+} {
+  if (raw === undefined || raw === null) {
+    return { valid: true, normalized: undefined };
+  }
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    return { valid: false, error: 'extraHeaders harus berupa objek key-value string.' };
+  }
+  const entries = Object.entries(raw as Record<string, unknown>);
+  if (entries.length > 10) {
+    return { valid: false, error: 'Maksimal 10 custom header tambahan per provider.' };
+  }
+  const normalized: Record<string, string> = {};
+  for (const [rawKey, rawVal] of entries) {
+    const keyCheck = validateProviderHeaderName(rawKey);
+    if (!keyCheck.valid || !keyCheck.normalized) {
+      return { valid: false, error: keyCheck.error || 'Nama custom header tidak valid.' };
+    }
+    if (typeof rawVal !== 'string') {
+      return { valid: false, error: `Nilai header "${keyCheck.normalized}" harus berupa string.` };
+    }
+    if (/[\r\n\0]/.test(rawVal) || rawVal.length > 4096) {
+      return { valid: false, error: `Nilai header "${keyCheck.normalized}" mengandung karakter terlarang atau terlalu panjang.` };
+    }
+    const trimmedVal = rawVal.trim();
+    if (!trimmedVal) continue;
+    normalized[keyCheck.normalized] = trimmedVal;
+  }
+  return { valid: true, normalized: Object.keys(normalized).length > 0 ? normalized : undefined };
+}
+
+export function validateProviderChatPath(rawPath: string): {
+  valid: boolean;
+  normalized?: string;
+  error?: string;
+} {
+  const trimmed = rawPath.trim();
+  if (!trimmed) {
+    return { valid: true, normalized: '/chat/completions' };
+  }
+  if (/[\r\n\0\s]/.test(trimmed) || trimmed.length > 256) {
+    return { valid: false, error: 'Chat path mengandung karakter terlarang atau terlalu panjang.' };
+  }
+  if (!trimmed.startsWith('/') || trimmed.includes('://') || trimmed.includes('..') || trimmed.includes('\\')) {
+    return { valid: false, error: 'Chat path harus berupa path relatif yang diawali "/" tanpa traversal.' };
+  }
+  return { valid: true, normalized: trimmed };
+}
 
 function normalizeHeadersToRecord(input?: HeadersInit): Record<string, string> {
   const out: Record<string, string> = {};
@@ -684,21 +770,25 @@ export async function safeOutboundFetch(
         const nextUrlObj = new URL(location, currentUrl);
         currentUrl = nextUrlObj.toString();
 
-        // Strip auth headers when redirecting across origins
-        if (nextUrlObj.origin !== prevOrigin) {
-          const cleaned: Record<string, string> = {};
-          for (const [k, v] of Object.entries(currentHeaders)) {
-            if (!SENSITIVE_REDIRECT_HEADERS.has(k.toLowerCase())) {
-              cleaned[k] = v;
-            }
-          }
-          currentHeaders = cleaned;
-        }
-
         // RFC 9110: 303 See Other (and 301/302 on POST) converts to GET without body
         if (res.status === 303 || ((res.status === 301 || res.status === 302) && currentMethod === 'POST')) {
           currentMethod = 'GET';
           currentBody = null;
+        }
+
+        // Cross-origin redirect hardening: block forwarding request bodies (e.g. 307/308) and allowlist safe headers only
+        if (nextUrlObj.origin !== prevOrigin) {
+          if (currentBody !== null) {
+            throw new Error('Pengalihan lintas-origin dengan payload body ditolak oleh kebijakan keamanan.');
+          }
+          const cleaned: Record<string, string> = {};
+          for (const [k, v] of Object.entries(currentHeaders)) {
+            const lower = k.toLowerCase();
+            if (SAFE_CROSS_ORIGIN_REDIRECT_HEADERS.has(lower) && (currentBody !== null || lower !== 'content-type')) {
+              cleaned[k] = v;
+            }
+          }
+          currentHeaders = cleaned;
         }
         continue;
       }
@@ -760,9 +850,51 @@ export async function readResponseTextWithLimit(res: Response, maxBytes = 2 * 10
  * Scrubs known secrets and common API key token prefixes from logs or error messages
  * so keys never leak into logs, responses, or exported files (PRD 5.5 & 8.9).
  */
+const RUNTIME_SECRET_ENV_KEYS = [
+  'CARMEN_MASTER_KEY',
+  'SESSION_SECRET',
+  'ENCRYPTION_SECRET',
+  'DATABASE_URL',
+  'DIRECT_URL',
+  'REDIS_URL',
+  'GEMINI_API_KEY',
+  'ANTHROPIC_API_KEY',
+  'OPENAI_API_KEY',
+  'OPENROUTER_API_KEY',
+  'GROQ_API_KEY',
+  'COARENA_API_KEY',
+] as const;
+
+function collectRuntimeEnvSecrets(): string[] {
+  const out: string[] = [];
+  for (const key of RUNTIME_SECRET_ENV_KEYS) {
+    const val = process.env[key]?.trim();
+    if (!val || val.length < 8) continue;
+    out.push(val);
+    if (key === 'DATABASE_URL' || key === 'DIRECT_URL' || key === 'REDIS_URL') {
+      try {
+        const parsed = new URL(val);
+        if (parsed.password && parsed.password.length >= 8) {
+          out.push(parsed.password);
+          try {
+            const decoded = decodeURIComponent(parsed.password);
+            if (decoded.length >= 8) out.push(decoded);
+          } catch {
+            // Ignore malformed percent-encoding
+          }
+        }
+      } catch {
+        // Ignore unparseable URI
+      }
+    }
+  }
+  return out;
+}
+
 export function scrubSecrets(text: string, activeSecrets: string[] = []): string {
   let clean = text;
-  for (const secret of activeSecrets) {
+  const uniqueSecrets = new Set<string>([...activeSecrets, ...collectRuntimeEnvSecrets()]);
+  for (const secret of uniqueSecrets) {
     if (secret && secret.length >= 8) {
       clean = clean.split(secret).join('[REDACTED_KEY]');
     }
@@ -774,7 +906,14 @@ export function scrubSecrets(text: string, activeSecrets: string[] = []): string
     .replace(/\bgsk_[A-Za-z0-9_-]{12,}\b/g, '[REDACTED_KEY]')
     .replace(/\bcoa_[A-Za-z0-9_-]{12,}\b/g, '[REDACTED_KEY]')
     .replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, '[REDACTED_KEY]')
+    .replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b/g, '[REDACTED_KEY]')
+    .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, '[REDACTED_KEY]')
     .replace(/(Bearer\s+)[A-Za-z0-9._-]{12,}/gi, '$1[REDACTED_KEY]')
+    .replace(/(Authorization\s*[:=]\s*Basic\s+)[A-Za-z0-9+/=]{8,}/gi, '$1[REDACTED_KEY]')
+    .replace(/((?:X-API-Key|X-Goog-API-Key)\s*[:=]\s*)[^\s,;'"<>]{6,}/gi, '$1[REDACTED_KEY]')
+    .replace(/(postgres(?:ql)?:\/\/[^:@/\s]+:)([^@/\s]+)(@)/gi, '$1[REDACTED_KEY]$3')
+    .replace(/(rediss?:\/\/[^:@/\s]*:)([^@/\s]+)(@)/gi, '$1[REDACTED_KEY]$3')
+    .replace(/(carmen_session=)[^\s;,'"]+/gi, '$1[REDACTED_SESSION]')
     .replace(/(X-Carmen-Preview-Token\s*[:=]\s*)[A-Za-z0-9._-]+/gi, '$1[REDACTED_PREVIEW_TOKEN]')
     .replace(/(\/preview\/[^/\s?#]+\/t\/)[A-Za-z0-9._-]+/gi, '$1[REDACTED_PREVIEW_TOKEN]')
     .replace(/([?&]pt=)[A-Za-z0-9._-]+/gi, '$1[REDACTED_PREVIEW_TOKEN]')

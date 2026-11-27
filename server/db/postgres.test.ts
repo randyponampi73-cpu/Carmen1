@@ -20,7 +20,7 @@ import {
   translateSqliteToPostgres,
 } from './dialect';
 import { runSqliteMigrations } from './migrations';
-import { getDatabaseDriverStatus, parsePostgresConfig } from './postgres';
+import { buildTenantSchemaProvisionSql, getDatabaseDriverStatus, parsePostgresConfig } from './postgres';
 import {
   POSTGRES_MIGRATIONS,
   rollbackLastPostgresMigration,
@@ -685,6 +685,72 @@ describe('PostgreSQL Compatibility Layer & Dual-Mode Repositories', () => {
     const inlinePool = buildPgPoolConfig(inlineCfg!);
     assert.ok(inlinePool.ssl && typeof inlinePool.ssl === 'object');
     assert.equal(inlinePool.ssl.checkServerIdentity, undefined);
+  });
+
+  it('prevents pooled search_path leakage, avoids revoking public schema, strips qualified rowid, and preserves healthy pool clients on benign tx errors', async () => {
+    // 1) Tenant schema SQL uses transaction-scoped SET LOCAL and never revokes public schema globally
+    const provisionSql = buildTenantSchemaProvisionSql('prj_tenant_abc');
+    assert.match(provisionSql, /SET LOCAL search_path TO "tenant_prj_tenant_abc"/);
+    assert.equal(/REVOKE\s+ALL\s+ON\s+SCHEMA\s+public/i.test(provisionSql), false);
+
+    // 2) Table-qualified SQLite rowid tie-breakers (used in /api/activity) are cleanly stripped for Postgres
+    const activitySql = translateSqliteToPostgres(
+      `SELECT v.id FROM project_versions v WHERE v.project_id = ? ORDER BY v.created_at DESC, v.rowid DESC LIMIT ?`
+    );
+    assert.equal(/\browid\b/i.test(activitySql), false, `Qualified rowid must be stripped: ${activitySql}`);
+    assert.match(activitySql, /ORDER BY v\.created_at DESC\s+LIMIT \$2/);
+
+    // 3) PostgresAsyncDbClient.transaction releases healthy connection (false) on normal SQL error,
+    //    and only destroys connection (true) when ROLLBACK itself fails
+    const releaseArgs: Array<boolean | Error | undefined> = [];
+    let failRollback = false;
+    const mockPool: PgPoolLike = {
+      async query() {
+        return { rows: [], rowCount: 0 };
+      },
+      async connect(): Promise<PgPoolClientLike> {
+        return {
+          async query(text: string) {
+            if (text.trim().toUpperCase() === 'ROLLBACK' && failRollback) {
+              throw new Error('connection lost during rollback');
+            }
+            return { rows: [], rowCount: 0 };
+          },
+          release(err?: boolean | Error) {
+            releaseArgs.push(err);
+          },
+        };
+      },
+      async end() {},
+    };
+    const pgCfg = parsePostgresConfig({
+      DATABASE_URL: 'postgresql://carmen:pw@localhost:5432/carmen',
+      PGSSLMODE: 'disable',
+    })!;
+    const pgClient = new PostgresAsyncDbClient(pgCfg, { poolFactory: () => mockPool });
+
+    try {
+      await assert.rejects(
+        () =>
+          pgClient.transaction(async () => {
+            throw new Error('duplicate key constraint');
+          }),
+        /duplicate key constraint/
+      );
+      assert.equal(releaseArgs[0], false, 'Benign transaction rollback should return healthy client to pool');
+
+      failRollback = true;
+      await assert.rejects(
+        () =>
+          pgClient.transaction(async () => {
+            throw new Error('query failed before broken rollback');
+          }),
+        /query failed before broken rollback/
+      );
+      assert.equal(releaseArgs[1], true, 'Failed ROLLBACK must destroy tainted connection');
+    } finally {
+      await pgClient.close();
+    }
   });
 });
 

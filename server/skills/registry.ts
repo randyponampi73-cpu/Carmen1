@@ -957,8 +957,17 @@ export async function rollbackSkillVersion(
   userId: string,
   versionId: string
 ): Promise<{ ok: boolean; error?: string; skill?: SkillPackageRecord }> {
-  const existing = await asyncDb.get<{ id: string; owner_user_id: string | null; scope_key: string; category: string }>(
-    'SELECT id, owner_user_id, scope_key, category FROM skills WHERE id = ?',
+  const existing = await asyncDb.get<{
+    id: string;
+    owner_user_id: string | null;
+    scope_key: string;
+    category: string;
+    trust_level: SkillTrustLevel;
+    enabled: unknown;
+    manifest_json: unknown;
+    scripts_json: unknown;
+  }>(
+    'SELECT id, owner_user_id, scope_key, category, trust_level, enabled, manifest_json, scripts_json FROM skills WHERE id = ?',
     skillId
   );
   if (!existing) return { ok: false, error: 'Skill tidak ditemukan.' };
@@ -996,14 +1005,35 @@ export async function rollbackSkillVersion(
     return { ok: false, error: `Versi target tidak lolos validasi: ${validation.errors.join('; ')}` };
   }
 
+  let nextTrustLevel: SkillTrustLevel = existing.trust_level;
+  let nextEnabled = Boolean(existing.enabled);
+  if (existing.trust_level === 'APPROVED') {
+    const prevManifest = normalizeManifest(existing.manifest_json, existing.category as SkillCategory);
+    const prevScripts = parseJsonColumn<Record<string, string>>(existing.scripts_json, {});
+    const scriptsChanged = JSON.stringify(prevScripts) !== JSON.stringify(scripts);
+    const elevatedSet = new Set<SkillPermission>(['WRITE', 'EXECUTE', 'NETWORK', 'DEPLOY']);
+    const prevPerms = new Set<SkillPermission>(prevManifest.permissions);
+    const prevTools = new Set<string>(prevManifest.tools);
+    const newElevatedPerm = validation.parsed.manifest.permissions.some(
+      (p) => elevatedSet.has(p) && !prevPerms.has(p)
+    );
+    const newToolAdded = validation.parsed.manifest.tools.some((t) => !prevTools.has(t));
+    if (scriptsChanged || newElevatedPerm || newToolAdded) {
+      nextTrustLevel = 'DRAFT';
+      nextEnabled = false;
+    }
+  }
+
   await asyncDb.transaction(async (tx) => {
     await tx.run(
       `UPDATE skills
-       SET current_version = ?, manifest_json = ?, skill_md = ?,
+       SET current_version = ?, trust_level = ?, enabled = ?, manifest_json = ?, skill_md = ?,
            references_json = ?, scripts_json = ?, assets_json = ?, checksum = ?,
            description = ?, category = ?, updated_at = datetime('now')
        WHERE id = ? AND owner_user_id = ?`,
       ver.version,
+      nextTrustLevel,
+      nextEnabled,
       typeof ver.manifest_json === 'string' ? ver.manifest_json : JSON.stringify(ver.manifest_json),
       ver.skill_md,
       JSON.stringify(references),

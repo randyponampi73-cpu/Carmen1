@@ -1,7 +1,7 @@
 # Security Summary
 
 **Reviewed Files**: 156 (158 total repository files; 2 binary PDFs excluded from text inspection)
-**Issues Resolved**: 39
+**Issues Resolved**: 49
 
 ### Issues Resolved
 | Area | File | Line | What Was Happening | Impact | Status | How It Was Fixed |
@@ -37,6 +37,16 @@
 | APK DB-Poll Claim Race, Cancel Overwrite & Stale Recovery | `server/builds/apkBuilder.ts`, `server/builds/apkWorker.ts`, `server/builds/builds.test.ts` | 1156 / 1346 / 1427 | DB-poll workers read the top queued row without atomic SQL claiming, completion updates could overwrite a concurrent `cancelled` build status, and long-lived DB-poll workers lacked a periodic stale-`running` sweeper. | Medium | Fixed | Switched DB-poll claiming to atomic `UPDATE builds SET status = 'running' WHERE id = ? AND status = 'running'` / `'queued'` conditional transitions, cleaned up artifacts on concurrent cancellation, and added a 60-second periodic `recoverStaleRunningApkBuildsAsync` sweeper inside `apkWorker.ts`. |
 | Custom Provider Header Secret Scrubbing | `server/providers/types.ts`, `server/agent/orchestrator.ts`, `server/providers/*.ts` | 83 / 1535 | The agent orchestrator's active secret scrub list only included provider `apiKey` values, leaving custom `extraHeaders` credentials unscrubbed in tool/agent output, while `getSecretsToScrub` was duplicated across four provider adapters. | Medium | Fixed | Exported a single canonical `getSecretsToScrub(config)` helper from `server/providers/types.ts`, reused it across all four provider adapters, and populated `activeSecrets` in `orchestrator.ts` with all primary and fallback `apiKey` plus `extraHeaders` values. |
 | Agent Verification Gate & Parallel Tool Isolation | `server/agent/orchestrator.ts`, `server/agent/toolRegistry.ts`, `server/skills/executor.ts` | 1880 / 2167 / 2228 | Mixed pass+fail post-mutation checks falsely reported `verified_pass`, structured-fallback turns did not advance `lastMutationEventIdx` or stop on repeated permission denials, and heavy verification/memory tools (`build_project`, `run_tests`, `validate_project`, `update_project_memory`) could run concurrently inside `Promise.all`. | High | Fixed | Computed post-mutation verification status using the latest result per check so any failing check produces `verified_fail`, brought structured-fallback turns to full parity (mutation tracking, task-state emission, permission early-break), and added explicit `parallelSafe` classification so only pure read-only inspection tools run in parallel. |
+| PostgreSQL Pooled `search_path` Leakage & `public` Revoke | `server/db/postgres.ts`, `server/db/client.ts` | 67 / 258 | Tenant provisioning SQL emitted global `REVOKE ALL ON SCHEMA public FROM PUBLIC` and session-scoped `SET search_path`, which could break shared Supabase/Postgres schemas and leak tenant `search_path` across pooled connections, while any benign SQL error destroyed healthy pool clients. | Critical | Fixed | Removed global `REVOKE ALL ON SCHEMA public`, switched to transaction-scoped `SET LOCAL search_path`, and released healthy connections (`client.release(false)`) after clean rollbacks while destroying clients only if `ROLLBACK` itself fails. |
+| PostgreSQL Table-Qualified `rowid` Compatibility | `server/db/dialect.ts`, `server.ts` | 127 / 1799 | Activity queries used table-qualified SQLite `rowid` tie-breakers (`v.rowid DESC`, `b.rowid DESC`, `d.rowid DESC`) that `translateSqliteToPostgres` failed to strip, causing `GET /api/activity` to fail on PostgreSQL/Supabase. | Critical | Fixed | Updated `translateSqliteToPostgres` to strip optional table qualifiers before `rowid` (`(?:[a-zA-Z_][a-zA-Z0-9_]*\.)?rowid`). |
+| Cross-Origin Redirect Header & Body Leakage | `server/security.ts` | 386 / 687 | `safeOutboundFetch` used a 5-header denylist on cross-origin redirects (allowing custom auth headers like `X-Custom-Auth` or `Api-Key` to leak) and forwarded request bodies on cross-origin `307`/`308` redirects. | High | Fixed | Replaced the denylist with a strict safe-header allowlist (`SAFE_CROSS_ORIGIN_REDIRECT_HEADERS`) and blocked cross-origin redirects whenever a request body would be forwarded. |
+| Complete Secret Scrubbing Across Headers & Runtime Env | `server/security.ts`, `server.ts` | 763 / 820 / 2933 | `getAllUserSecrets` omitted decrypted `extra_headers_enc` secrets, provider/chat error paths scrubbed only `apiKey`, and `scrubSecrets` missed runtime env secrets, `carmen_session=`, PostgreSQL/Redis URI credentials, GitHub tokens, `Authorization: Basic`, and `X-API-Key`/`X-Goog-API-Key` headers. | High | Fixed | Expanded `getAllUserSecrets` to include `extra_headers_enc`, switched all provider/chat error scrubbers to `getSecretsToScrub` across primary and fallback configs, and added runtime env and credential regex redaction to `scrubSecrets`. |
+| Custom Provider Header & Chat Path Validation | `server/security.ts`, `server.ts` | 397 / 1247 | Custom provider `authHeader`, `chatPath`, and `extraHeaders` accepted CRLF characters, forbidden transport headers (`Host`, `Cookie`, `Transfer-Encoding`), oversized maps, and path traversal sequences. | Medium | Fixed | Added `validateProviderHeaderName`, `validateProviderExtraHeaders`, and `validateProviderChatPath` and enforced them across all provider save, patch, ephemeral test/model, and local-device chat endpoints. |
+| Sandbox Container Binary Resolution & Bun Guard | `server/runtime/isolation.ts`, `server/runtime/sandbox.ts` | 204 / 1525 | `buildContainerRunArgs` passed host-specific absolute `process.execPath` paths into `node:22-alpine` containers, and `defaultCheckBunAvailable` probed host `bun` even when running inside `node:22-alpine` containers lacking `bun`. | High | Fixed | Added `resolveContainerExecutable` to normalize host binary paths to container-safe names (`node`, `npm`, `npx`, etc.) and made `defaultCheckBunAvailable` return `false` for non-bun OCI images. |
+| Detached Grandchild Process Termination | `server/runtime/isolation.ts` | 279 / 554 | `terminateProcessTree` only signaled `-pid` and `child.kill()`, leaving detached grandchildren (`setsid()` / `detached: true`) alive as orphans after cancellation or timeout. | High | Fixed | Extended `inspectLinuxProcessTree` to return descendant PIDs and updated `terminateProcessTree` to snapshot and send `SIGTERM` + `SIGKILL` to both the process group and all captured descendant PIDs. |
+| Skill Sandbox Container Script Path & Rollback Demotion | `server/skills/executor.ts`, `server/skills/registry.ts` | 366 / 960 | `runSkillSandboxScript` passed host absolute `/tmp/...` paths and `bash` (missing in `node:22-alpine`), and `rollbackSkillVersion` could restore an older script/elevated-permission version while retaining `APPROVED` status. | High | Fixed | Switched skill script invocation to workspace-relative `./skill-script.*` with POSIX `sh`, and enforced `APPROVED` -> `DRAFT` + disabled demotion during `rollbackSkillVersion` whenever scripts or elevated permissions/tools change. |
+| Android CI Least-Privilege Permissions & SDK Fallback | `.github/workflows/android-build.yml` | 1 / 147 / 263 | Workflow omitted top-level read-only `permissions:` and referenced `$ANDROID_SDK_ROOT` without falling back to `$ANDROID_HOME`. | High | Fixed | Added top-level `permissions: { contents: read }` and resolved `SDK_DIR="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"` for `apksigner` and `aapt2`. |
+| Deployment Link Protocol Guard & Custom Provider Test Parity | `src/components/workspace/DeployModal.tsx`, `src/components/SettingsView.tsx`, `src/lib/api.ts` | 361 / 185 | `DeployModal` rendered `deploymentUrl` links without validating `http(s)://` scheme, and `SettingsView` omitted configured `extraHeaders` during pre-save custom provider connection tests. | Low | Fixed | Added `/^https?:\/\//i` validation + `rel="noopener noreferrer"` on deployment links and forwarded `extraHeaders` from `handleTestFormKey` to `/api/providers/test-ephemeral`. |
 
 ### Safeguards Verified
 | Area | File | How It's Protected |
@@ -330,3 +340,48 @@ Unified `getSecretsToScrub` in `server/providers/types.ts` and fed all primary/f
 
 #### Conclusion
 **Fix Verified** - Regression tests in `server/agent/orchestrator.test.ts` and `server/providers/providers.test.ts` confirm secret redaction, honest verification gating, and serialized execution of stateful/verification tools.
+
+### PostgreSQL Pooled `search_path` Isolation, Pool Release & Qualified `rowid` Fix
+#### Summary
+| Field | Value |
+|---|---|
+| Issue Type | Connection Pool State Leakage, Shared Schema Revocation & SQL Dialect Failure |
+| Impact | Critical |
+| Affected Files | `server/db/postgres.ts:67-73`, `server/db/client.ts:258-277`, `server/db/dialect.ts:127-128` |
+| Test Scenario | `buildTenantSchemaProvisionSql('prj_tenant_abc')`, `translateSqliteToPostgres` on `v.rowid DESC`, and `PostgresAsyncDbClient.transaction` error/rollback release checks (`server/db/postgres.test.ts`, `server/deploy/deploy.test.ts`) |
+
+#### How It Was Fixed
+Removed `REVOKE ALL ON SCHEMA public FROM PUBLIC;` and switched `SET search_path` to transaction-scoped `SET LOCAL search_path` in `buildTenantSchemaProvisionSql`, ensured `PostgresAsyncDbClient.transaction` only destroys connections when `ROLLBACK` itself throws, and updated `translateSqliteToPostgres` to strip table-qualified `rowid` ordering clauses.
+
+#### Conclusion
+**Fix Verified** - Unit tests confirm `SET LOCAL search_path`, zero `public` schema revocations, clean pool client recycling on normal SQL rollbacks, and valid PostgreSQL translation for `/api/activity` queries. Live PostgreSQL integration remains external to this container (`psql`/Postgres server not installed).
+
+### Cross-Origin Redirect Allowlist, Header Injection Guards & Expanded Secret Scrubbing
+#### Summary
+| Field | Value |
+|---|---|
+| Issue Type | Cross-Origin Credential/Body Exfiltration, Outbound Header Injection & Secret Redaction Gaps |
+| Impact | High |
+| Affected Files | `server/security.ts:386-478,687-704,763-825`, `server.ts:820-848,1247-1620,2630-2920` |
+| Test Scenario | Cross-origin 302 with `X-Custom-Auth`/`Api-Key`, cross-origin 307 POST with body, CRLF/`Host`/`Cookie` provider headers, and `scrubSecrets` against cookies/DB URIs/Redis URIs/GitHub tokens/runtime env (`server/security.test.ts`) |
+
+#### How It Was Fixed
+Replaced the redirect header denylist with a strict safe-header allowlist, rejected cross-origin redirects that carry request bodies, enforced strict validation on custom provider `authHeader`/`extraHeaders`/`chatPath`, added decrypted `extra_headers_enc` to `getAllUserSecrets`, and expanded `scrubSecrets` to redact runtime environment credentials, session cookies, DB/Redis URIs, GitHub tokens, Basic auth, and API key headers.
+
+#### Conclusion
+**Fix Verified** - All new regression tests in `server/security.test.ts` pass cleanly.
+
+### Container Binary Resolution, Detached Grandchild Cleanup & Skill Rollback Trust Demotion
+#### Summary
+| Field | Value |
+|---|---|
+| Issue Type | OCI Sandbox Portability, Orphan Process Survival & Rollback Trust Bypass |
+| Impact | High |
+| Affected Files | `server/runtime/isolation.ts:204-238,279-342,554-598`, `server/runtime/sandbox.ts:1525-1542`, `server/skills/executor.ts:366-374`, `server/skills/registry.ts:960-1038` |
+| Test Scenario | `resolveContainerExecutable('/opt/hostedtoolcache/node/22.14.0/x64/bin/node')`, `terminateProcessTree` against a `SIGTERM`-ignoring detached grandchild (`detached: true`), and `rollbackSkillVersion` from clean `APPROVED` v2 back to script-bearing `EXECUTE` v1 (`server/runtime/isolation.test.ts`, `server/skills/skills.test.ts`) |
+
+#### How It Was Fixed
+Normalized host absolute paths to container-safe executable names inside `buildContainerRunArgs`, avoided `bun` selection on non-bun OCI images, captured and signaled all `/proc` descendant PIDs during `terminateProcessTree`, switched skill scripts to relative `./skill-script.*` with POSIX `sh`, and enforced `APPROVED` -> `DRAFT` + disabled demotion when `rollbackSkillVersion` alters scripts or introduces elevated permissions/tools.
+
+#### Conclusion
+**Fix Verified** - Verified via `server/runtime/isolation.test.ts` and `server/skills/skills.test.ts`. Live Docker daemon execution remains external to this container (`docker` binary not installed).

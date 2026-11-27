@@ -68,8 +68,7 @@ export function buildTenantSchemaProvisionSql(projectId: string): string {
   const schema = getTenantSchemaName(projectId);
   return [
     `CREATE SCHEMA IF NOT EXISTS "${schema}";`,
-    `REVOKE ALL ON SCHEMA public FROM PUBLIC;`,
-    `SET search_path TO "${schema}";`,
+    `SET LOCAL search_path TO "${schema}";`,
   ].join('\n');
 }
 

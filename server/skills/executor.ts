@@ -363,13 +363,14 @@ export async function runSkillSandboxScript(params: {
 
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'carmen-skill-run-'));
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'carmen-skill-tmp-'));
-  const scriptFile = path.join(workDir, 'skill-script' + path.extname(scriptPath));
+  const ext = path.extname(scriptPath).toLowerCase();
+  const scriptFilename = `skill-script${ext}`;
+  const scriptFile = path.join(workDir, scriptFilename);
 
   try {
     fs.writeFileSync(scriptFile, scriptBody, 'utf8');
-    const ext = path.extname(scriptPath).toLowerCase();
-    const bin = ext === '.py' ? 'python3' : ext === '.sh' ? 'bash' : 'node';
-    const args = [scriptFile];
+    const bin = ext === '.py' ? 'python3' : ext === '.sh' ? 'sh' : 'node';
+    const args = [`./${scriptFilename}`];
 
     const handle = spawnIsolatedProcess({
       projectId,

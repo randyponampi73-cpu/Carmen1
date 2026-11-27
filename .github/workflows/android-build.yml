@@ -1,5 +1,8 @@
 name: CARMEN Android Native Build & Verification
 
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
     inputs:
@@ -145,8 +148,9 @@ jobs:
             exit 1
           fi
           echo "Verified APK size: $APK_SIZE bytes"
-          APKSIGNER="$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner"
-          AAPT2="$ANDROID_SDK_ROOT/build-tools/34.0.0/aapt2"
+          SDK_DIR="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          APKSIGNER="$SDK_DIR/build-tools/34.0.0/apksigner"
+          AAPT2="$SDK_DIR/build-tools/34.0.0/aapt2"
           "$APKSIGNER" verify --verbose --print-certs "$APK_PATH"
           "$AAPT2" dump badging "$APK_PATH" | head -n 15
 
@@ -262,7 +266,8 @@ jobs:
           "$GRADLE_CMD" assembleRelease bundleRelease --no-daemon --console=plain
           test -s app/build/outputs/apk/release/app-release.apk
           test -s app/build/outputs/bundle/release/app-release.aab
-          "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
+          SDK_DIR="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          "$SDK_DIR/build-tools/34.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
           jarsigner -verify -verbose -certs app/build/outputs/bundle/release/app-release.aab | tail -n 10
 
       - name: Upload verified Signed Release artifacts

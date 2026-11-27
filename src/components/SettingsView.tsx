@@ -182,6 +182,10 @@ export function SettingsView({
     setFormTestResult(null);
     setBusyKeyId('form-test');
     try {
+      const extraHeaders =
+        formProvider === 'custom' && formExtraHeaderKey.trim() && formExtraHeaderVal.trim()
+          ? { [formExtraHeaderKey.trim()]: formExtraHeaderVal.trim() }
+          : undefined;
       const res = await api.testEphemeralKey({
         provider: formProvider,
         label: formLabel || formProvider,
@@ -194,6 +198,7 @@ export function SettingsView({
           formProvider === 'custom'
             ? formCustomModels.split(',').map((s) => s.trim()).filter(Boolean)
             : undefined,
+        extraHeaders,
       });
       setFormTestResult({ ok: res.ok, message: res.message });
     } catch (err) {

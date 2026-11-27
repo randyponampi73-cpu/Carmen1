@@ -201,8 +201,40 @@ export function buildContainerRunArgs(opts: ContainerRunArgsOptions): string[] {
     '-e',
     'GRADLE_USER_HOME=/tmp/.gradle'
   );
-  containerArgs.push(opts.image, opts.bin, ...opts.args);
+  containerArgs.push(opts.image, resolveContainerExecutable(opts.bin), ...opts.args);
   return containerArgs;
+}
+
+const CONTAINER_BARE_EXECUTABLES = new Set([
+  'node',
+  'npm',
+  'npx',
+  'bun',
+  'git',
+  'python3',
+  'python',
+  'sh',
+  'bash',
+  'gradle',
+  'gradlew',
+]);
+
+/**
+ * Normalizes host-specific absolute executable paths (such as `process.execPath` like
+ * `/opt/hostedtoolcache/node/22.x/x64/bin/node`) to container-safe executable names
+ * so OCI images (e.g. `node:22-alpine`) resolve the binary from container PATH.
+ */
+export function resolveContainerExecutable(bin: string): string {
+  const trimmed = bin.trim();
+  if (!trimmed) return trimmed;
+  if (trimmed === process.execPath) return 'node';
+  if (path.isAbsolute(trimmed)) {
+    const base = path.basename(trimmed);
+    if (CONTAINER_BARE_EXECUTABLES.has(base)) {
+      return base;
+    }
+  }
+  return trimmed;
 }
 
 let cachedCapabilities: SandboxIsolationCapabilities | null = null;
@@ -276,15 +308,19 @@ export function chownDirectorySafe(dirPath: string, uid: number, gid: number, ro
  * Walks /proc on Linux to count descendant processes and sum resident memory (VmRSS in KB)
  * belonging to a detached process tree (by PPID lineage and PGID).
  */
-export function inspectLinuxProcessTree(rootPid: number): { processCount: number; totalRssKb: number } {
+export function inspectLinuxProcessTree(rootPid: number): {
+  processCount: number;
+  totalRssKb: number;
+  pids: number[];
+} {
   if (process.platform !== 'linux' || !rootPid || rootPid <= 1) {
-    return { processCount: 0, totalRssKb: 0 };
+    return { processCount: 0, totalRssKb: 0, pids: [] };
   }
   let pidEntries: string[];
   try {
     pidEntries = fs.readdirSync('/proc').filter((n) => /^\d+$/.test(n));
   } catch {
-    return { processCount: 0, totalRssKb: 0 };
+    return { processCount: 0, totalRssKb: 0, pids: [] };
   }
 
   const childrenByPpid = new Map<number, number[]>();
@@ -338,7 +374,7 @@ export function inspectLinuxProcessTree(rootPid: number): { processCount: number
     }
   }
 
-  return { processCount: visited.size, totalRssKb };
+  return { processCount: visited.size, totalRssKb, pids: Array.from(visited) };
 }
 
 /**
@@ -552,11 +588,36 @@ export function terminateProcessTree(
   }
 
   const pid = child.pid;
-  if (!pid || child.exitCode !== null || child.signalCode !== null) {
+  if (!pid) {
     return;
   }
 
-  const signalGroup = (sig: NodeJS.Signals) => {
+  // Snapshot all descendants via /proc BEFORE signaling so detached grandchildren
+  // (setsid / detached: true in a different PGID) are captured before the parent exits.
+  const trackedDescendants = new Set<number>();
+  const captureDescendants = () => {
+    for (const p of inspectLinuxProcessTree(pid).pids) {
+      if (p > 1 && p !== process.pid && p !== pid) {
+        trackedDescendants.add(p);
+      }
+    }
+  };
+  captureDescendants();
+
+  if (child.exitCode !== null || child.signalCode !== null) {
+    // Parent already exited, still ensure any captured detached descendants are cleaned up
+    for (const descPid of trackedDescendants) {
+      try {
+        process.kill(descPid, 'SIGKILL');
+      } catch {
+        // Already exited
+      }
+    }
+    return;
+  }
+
+  const signalTree = (sig: NodeJS.Signals) => {
+    captureDescendants();
     try {
       // Negative PID targets the entire detached process group on POSIX
       process.kill(-pid, sig);
@@ -567,18 +628,33 @@ export function terminateProcessTree(
         // Process already exited
       }
     }
+    for (const descPid of trackedDescendants) {
+      try {
+        process.kill(descPid, sig);
+      } catch {
+        // Already exited
+      }
+    }
   };
 
   if (graceMs <= 0) {
-    signalGroup('SIGKILL');
+    signalTree('SIGKILL');
     return;
   }
 
-  signalGroup('SIGTERM');
+  signalTree('SIGTERM');
 
   const killTimer = setTimeout(() => {
     if (child.exitCode === null && child.signalCode === null) {
-      signalGroup('SIGKILL');
+      signalTree('SIGKILL');
+    } else if (trackedDescendants.size > 0) {
+      for (const descPid of trackedDescendants) {
+        try {
+          process.kill(descPid, 'SIGKILL');
+        } catch {
+          // Already exited
+        }
+      }
     }
   }, graceMs);
   killTimer.unref();

@@ -257,22 +257,22 @@ export class PostgresAsyncDbClient implements AsyncDbClient {
 
   async transaction<T>(fn: (tx: DbExecutor) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
-    let txError = false;
+    let destroyConnection = false;
     try {
       await client.query('BEGIN');
       const result = await fn(new PostgresTxExecutor(client));
       await client.query('COMMIT');
       return result;
     } catch (err) {
-      txError = true;
       try {
         await client.query('ROLLBACK');
       } catch {
-        // Ignore secondary rollback error
+        // Destroy connection only if ROLLBACK fails and leaves session state uncertain
+        destroyConnection = true;
       }
       throw err;
     } finally {
-      client.release(txError);
+      client.release(destroyConnection);
     }
   }
 

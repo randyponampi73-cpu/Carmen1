@@ -1522,16 +1522,24 @@ export interface DependencyInstallResult {
   error?: string;
 }
 
-let cachedBunAvailable: boolean | null = null;
+let cachedHostBunAvailable: boolean | null = null;
 function defaultCheckBunAvailable(): boolean {
-  if (cachedBunAvailable !== null) return cachedBunAvailable;
+  const caps = detectSandboxIsolation();
+  if (caps.driver === 'docker' || caps.driver === 'podman') {
+    const image = (process.env.CARMEN_SANDBOX_IMAGE || 'node:22-alpine').toLowerCase();
+    // Standard node:* sandbox images do not include bun; fall back to npm inside OCI containers
+    if (!image.includes('bun')) {
+      return false;
+    }
+  }
+  if (cachedHostBunAvailable !== null) return cachedHostBunAvailable;
   try {
     const res = spawnSync('bun', ['--version'], { timeout: 2000, stdio: 'ignore' });
-    cachedBunAvailable = res.status === 0 && !res.error;
+    cachedHostBunAvailable = res.status === 0 && !res.error;
   } catch {
-    cachedBunAvailable = false;
+    cachedHostBunAvailable = false;
   }
-  return cachedBunAvailable;
+  return cachedHostBunAvailable;
 }
 
 const HOST_PROVIDED_PREVIEW_PACKAGES = new Set([

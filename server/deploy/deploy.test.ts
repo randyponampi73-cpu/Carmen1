@@ -112,7 +112,8 @@ describe('Database Migrations, Postgres Config & Real Deployment Adapters', () =
     assert.equal(schema, 'tenant_prj_abc_123');
     const ddl = buildTenantSchemaProvisionSql('prj_abc-123');
     assert.match(ddl, /CREATE SCHEMA IF NOT EXISTS "tenant_prj_abc_123"/);
-    assert.match(ddl, /SET search_path TO "tenant_prj_abc_123"/);
+    assert.match(ddl, /SET LOCAL search_path TO "tenant_prj_abc_123"/);
+    assert.equal(/REVOKE\s+ALL\s+ON\s+SCHEMA\s+public/i.test(ddl), false);
 
     assert.equal(validateTenantQuerySql('SELECT * FROM todos ORDER BY id DESC;', 'prj_abc-123').safe, true);
     assert.equal(validateTenantQuerySql('SELECT * FROM users;', 'prj_abc-123').safe, false);

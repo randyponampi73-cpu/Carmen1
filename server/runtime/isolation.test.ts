@@ -10,7 +10,9 @@ import {
   getSandboxProcessLimit,
   getSandboxResourceLimits,
   processRegistry,
+  resolveContainerExecutable,
   spawnIsolatedProcess,
+  terminateProcessTree,
   type IsolatedSpawnOptions,
 } from './isolation';
 import { computeRuntimeResourceBudget, readContainerCgroupLimits } from './resourceBudget';
@@ -200,8 +202,8 @@ test('Process lifecycle cancellation terminates child and grandchild processes w
       ac.signal
     );
 
-    // Wait up to 3s for grandchild PID file to appear
-    const deadline = Date.now() + 3000;
+    // Wait up to 8s for grandchild PID file to appear (accounts for container startup overhead)
+    const deadline = Date.now() + 8000;
     while (!fs.existsSync(pidFile) && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 50));
     }
@@ -408,4 +410,76 @@ test('F-15: readContainerCgroupLimits parses cgroup v2/v1 bounds and computeRunt
   assert.equal(tightBudget.hostCpuCount, 1);
   assert.ok(tightBudget.maxConcurrentAgentSessions >= 1 && tightBudget.maxConcurrentAgentSessions <= 2);
   assert.equal(tightBudget.maxConcurrentSandboxes, 1);
+});
+
+test('resolveContainerExecutable and buildContainerRunArgs normalize host absolute binaries for OCI images', () => {
+  assert.equal(resolveContainerExecutable(process.execPath), 'node');
+  assert.equal(resolveContainerExecutable('/opt/hostedtoolcache/node/22.14.0/x64/bin/node'), 'node');
+  assert.equal(resolveContainerExecutable('/usr/local/bin/npm'), 'npm');
+  assert.equal(resolveContainerExecutable('npx'), 'npx');
+
+  const args = buildContainerRunArgs({
+    containerName: 'carmen-sb-bin-1',
+    projectId: 'prj_bin',
+    workspaceDir: '/tmp/sandboxes/prj_bin/workspace',
+    image: 'node:22-alpine',
+    bin: '/opt/hostedtoolcache/node/22.14.0/x64/bin/node',
+    args: ['probe.mjs'],
+    env: { PATH: '/opt/hostedtoolcache/node/22.14.0/x64/bin:/usr/bin', NODE_ENV: 'test' },
+  });
+  const imageIdx = args.indexOf('node:22-alpine');
+  assert.ok(imageIdx >= 0);
+  assert.equal(args[imageIdx + 1], 'node', 'Container entrypoint must use bare "node", never host absolute path');
+  assert.equal(args[imageIdx + 2], 'probe.mjs');
+  assert.equal(args.some((a) => a.startsWith('PATH=')), false, 'Host PATH must never be forwarded into container');
+});
+
+test('terminateProcessTree kills detached grandchildren in separate sessions/PGIDs with zero surviving orphans', async () => {
+  const { spawn } = await import('node:child_process');
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'carmen-detached-gc-'));
+  const pidFile = path.join(workDir, 'detached-gc.pid');
+
+  try {
+    const child = spawn(
+      process.execPath,
+      [
+        '-e',
+        [
+          'const { spawn } = require("node:child_process");',
+          'const fs = require("node:fs");',
+          'const gc = spawn(process.execPath, ["-e", "process.on(\'SIGTERM\', () => {}); setInterval(() => {}, 1000);"], { detached: true, stdio: "ignore" });',
+          'fs.writeFileSync(process.argv[1], String(gc.pid));',
+          'setInterval(() => {}, 1000);',
+        ].join(' '),
+        pidFile,
+      ],
+      { detached: true, stdio: 'ignore' }
+    );
+
+    const deadline = Date.now() + 4000;
+    while (!fs.existsSync(pidFile) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    assert.equal(fs.existsSync(pidFile), true, 'Detached grandchild PID file must be written');
+    const gcPid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+    assert.ok(gcPid > 1);
+
+    // Wait briefly so detached grandchild installs its SIGTERM trap
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Terminate with short graceMs so SIGKILL escalation kills the SIGTERM-ignoring detached grandchild
+    terminateProcessTree(child, { graceMs: 150 });
+    await new Promise((r) => setTimeout(r, 400));
+
+    let alive = false;
+    try {
+      process.kill(gcPid, 0);
+      alive = true;
+    } catch {
+      alive = false;
+    }
+    assert.equal(alive, false, `Detached grandchild PID ${gcPid} must be terminated cleanly`);
+  } finally {
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
 });

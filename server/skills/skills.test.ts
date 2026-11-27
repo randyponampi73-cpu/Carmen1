@@ -1028,6 +1028,51 @@ test('P0 Security: APPROVED skill without EXECUTE grant cannot run scripts, tamp
   assert.equal(edited.ok, true);
   assert.equal(edited.skill?.trustLevel, 'DRAFT', 'Escalated APPROVED skill must be demoted to DRAFT');
   assert.equal(edited.skill?.enabled, false, 'Escalated APPROVED skill must be disabled until re-approved');
+
+  // 4) Rolling back an APPROVED skill to an older version with different scripts or elevated permissions MUST also demote trustLevel
+  const v1WithExecMd = readOnlyMd
+    .replace('name: p0-script-gate-skill', 'name: p0-rollback-demote-skill')
+    .replace('  - READ', '  - READ\n  - EXECUTE');
+  const v1Saved = await saveUserSkillPackage({
+    userId,
+    skillMd: v1WithExecMd,
+    scripts: { 'scripts/check.mjs': 'console.log("v1-script");' },
+    source: 'created',
+    trustLevel: 'DRAFT',
+    enabled: false,
+  });
+  assert.equal(v1Saved.ok, true);
+  const rbSkillId = v1Saved.skill!.id;
+
+  // Update to clean v2 (READ only, no scripts) and approve it
+  const v2CleanMd = readOnlyMd
+    .replace('name: p0-script-gate-skill', 'name: p0-rollback-demote-skill')
+    .replace('version: 1.0.0', 'version: 2.0.0');
+  const v2Saved = await saveUserSkillPackage({
+    userId,
+    skillId: rbSkillId,
+    skillMd: v2CleanMd,
+    scripts: {},
+    source: 'created',
+    trustLevel: 'APPROVED',
+    enabled: true,
+    changelog: 'Clean v2 without scripts',
+  });
+  assert.equal(v2Saved.ok, true);
+  assert.equal(v2Saved.skill?.trustLevel, 'APPROVED');
+  assert.equal(v2Saved.skill?.enabled, true);
+
+  const rbVersions = db
+    .prepare('SELECT id, version FROM skill_versions WHERE skill_id = ? ORDER BY created_at ASC')
+    .all(rbSkillId) as Array<{ id: string; version: string }>;
+  const v1Version = rbVersions.find((v) => v.version === '1.0.0');
+  assert.ok(v1Version, 'v1 version record must exist');
+
+  // Rollback from APPROVED v2 back to v1 (which reintroduces EXECUTE + script) -> MUST demote to DRAFT + disabled
+  const rolledBack = await rollbackSkillVersion(rbSkillId, userId, v1Version!.id);
+  assert.equal(rolledBack.ok, true);
+  assert.equal(rolledBack.skill?.trustLevel, 'DRAFT', 'Rollback introducing scripts/EXECUTE must demote to DRAFT');
+  assert.equal(rolledBack.skill?.enabled, false, 'Rollback introducing scripts/EXECUTE must disable skill');
 });
 
 

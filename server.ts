@@ -90,6 +90,7 @@ import {
   setCachedModels,
   type ProviderAdapterConfig,
 } from './server/providers';
+import { getSecretsToScrub } from './server/providers/types';
 import {
   checkAndReserveSharedKeyQuota,
   closeSharedQuotaRedis,
@@ -128,6 +129,9 @@ import {
   sha256,
   validateApkConfig,
   validateCustomBaseUrl,
+  validateProviderChatPath,
+  validateProviderExtraHeaders,
+  validateProviderHeaderName,
   verifyPassword,
   verifyPreviewToken,
 } from './server/security';
@@ -818,8 +822,8 @@ async function getUserByokAdapterConfigs(userId: string): Promise<ProviderAdapte
 }
 
 async function getAllUserSecrets(userId: string): Promise<string[]> {
-  const rows = await asyncDb.all<{ encrypted_key: string; is_server_env: unknown }>(
-    'SELECT encrypted_key, is_server_env FROM provider_keys WHERE user_id = ?',
+  const rows = await asyncDb.all<{ encrypted_key: string; extra_headers_enc: string | null; is_server_env: unknown }>(
+    'SELECT encrypted_key, extra_headers_enc, is_server_env FROM provider_keys WHERE user_id = ?',
     userId
   );
   const secrets: string[] = [];
@@ -830,10 +834,22 @@ async function getAllUserSecrets(userId: string): Promise<string[]> {
     } catch {
       // Ignore
     }
+    if (r.extra_headers_enc) {
+      try {
+        const parsed = JSON.parse(decryptSecret(r.extra_headers_enc)) as Record<string, unknown>;
+        for (const v of Object.values(parsed || {})) {
+          if (typeof v === 'string' && v.trim().length >= 8) {
+            secrets.push(v.trim());
+          }
+        }
+      } catch {
+        // Ignore malformed encrypted headers
+      }
+    }
   }
   for (const p of listAvailablePlatformFallbackProviders()) {
     const cfg = buildPlatformFallbackAdapterConfig(p.provider);
-    if (cfg?.apiKey) secrets.push(cfg.apiKey);
+    if (cfg) secrets.push(...getSecretsToScrub(cfg));
   }
   return secrets;
 }
@@ -1251,6 +1267,25 @@ app.post('/api/providers/keys', requireAuth, asyncHandler(async (req: AuthedRequ
     normalizedBaseUrl = check.normalized ?? null;
   }
 
+  let normalizedAuthHeader: string | null = null;
+  if (authHeader !== undefined && authHeader.trim()) {
+    const authCheck = validateProviderHeaderName(authHeader);
+    if (!authCheck.valid) {
+      return res.status(400).json({ error: authCheck.error });
+    }
+    normalizedAuthHeader = authCheck.normalized ?? null;
+  }
+
+  const chatPathCheck = validateProviderChatPath(chatPath ?? '/chat/completions');
+  if (!chatPathCheck.valid) {
+    return res.status(400).json({ error: chatPathCheck.error });
+  }
+
+  const extraHeadersCheck = validateProviderExtraHeaders(extraHeaders);
+  if (!extraHeadersCheck.valid) {
+    return res.status(400).json({ error: extraHeadersCheck.error });
+  }
+
   const keyId = `key_${crypto.randomUUID().slice(0, 12)}`;
   const cleanLabel =
     (label || '').trim().slice(0, 80) ||
@@ -1268,7 +1303,9 @@ app.post('/api/providers/keys', requireAuth, asyncHandler(async (req: AuthedRequ
   const encryptedKey = encryptSecret(apiKey.trim());
   const keyLast4 = maskSecretLast4(apiKey.trim());
   const extraHeadersEnc =
-    extraHeaders && Object.keys(extraHeaders).length > 0 ? encryptSecret(JSON.stringify(extraHeaders)) : null;
+    extraHeadersCheck.normalized && Object.keys(extraHeadersCheck.normalized).length > 0
+      ? encryptSecret(JSON.stringify(extraHeadersCheck.normalized))
+      : null;
 
   await asyncDb.run(
     `INSERT INTO provider_keys (
@@ -1284,8 +1321,8 @@ app.post('/api/providers/keys', requireAuth, asyncHandler(async (req: AuthedRequ
     keyLast4,
     tierDeclared,
     normalizedBaseUrl,
-    authHeader?.trim() || null,
-    chatPath?.trim() || '/chat/completions',
+    normalizedAuthHeader,
+    chatPathCheck.normalized || '/chat/completions',
     JSON.stringify((customModels || []).map((m) => m.trim()).filter(Boolean)),
     extraHeadersEnc,
     supportsTools,
@@ -1332,6 +1369,24 @@ app.patch('/api/providers/keys/:id', requireAuth, asyncHandler(async (req: Authe
     }
   }
 
+  let nextAuthHeader = row.auth_header as string | null;
+  if (authHeader !== undefined) {
+    if (!authHeader.trim()) {
+      nextAuthHeader = null;
+    } else {
+      const authCheck = validateProviderHeaderName(authHeader);
+      if (!authCheck.valid) return res.status(400).json({ error: authCheck.error });
+      nextAuthHeader = authCheck.normalized ?? null;
+    }
+  }
+
+  let nextChatPath = row.chat_path as string | null;
+  if (chatPath !== undefined) {
+    const pathCheck = validateProviderChatPath(chatPath);
+    if (!pathCheck.valid) return res.status(400).json({ error: pathCheck.error });
+    nextChatPath = pathCheck.normalized || '/chat/completions';
+  }
+
   if (apiKey && apiKey.trim().length >= 4) {
     const keyConfigErr = getMasterKeyConfigurationError();
     if (keyConfigErr) {
@@ -1353,8 +1408,8 @@ app.patch('/api/providers/keys/:id', requireAuth, asyncHandler(async (req: Authe
     nextLast4,
     tierDeclared || String(row.tier_declared),
     nextBaseUrl,
-    authHeader !== undefined ? authHeader.trim() || null : (row.auth_header as string | null),
-    chatPath !== undefined ? chatPath.trim() || '/chat/completions' : (row.chat_path as string | null),
+    nextAuthHeader,
+    nextChatPath,
     customModels !== undefined
       ? JSON.stringify(customModels.map((m) => m.trim()).filter(Boolean))
       : (row.custom_models_json as string | null),
@@ -1395,7 +1450,7 @@ app.post('/api/providers/keys/:id/test', requireAuth, asyncHandler(async (req: A
     if (!platConfig) return res.status(404).json({ error: 'Key platform fallback tidak dikonfigurasi.' });
     const adapter = getProviderAdapter(platConfig.provider);
     const result = await adapter.testConnection(platConfig);
-    const cleanMessage = scrubSecrets(result.message, [platConfig.apiKey]);
+    const cleanMessage = scrubSecrets(result.message, getSecretsToScrub(platConfig));
     return res.json({ ok: result.ok, message: cleanMessage, errorCode: result.errorCode });
   }
 
@@ -1418,7 +1473,7 @@ app.post('/api/providers/keys/:id/test', requireAuth, asyncHandler(async (req: A
   }
   const adapter = getProviderAdapter(config.provider);
   const result = await adapter.testConnection(config);
-  const cleanMessage = scrubSecrets(result.message, [config.apiKey]);
+  const cleanMessage = scrubSecrets(result.message, getSecretsToScrub(config));
 
   await asyncDb.run(
     'UPDATE provider_keys SET last_test_status = ?, last_test_message = ? WHERE id = ? AND user_id = ?',
@@ -1432,7 +1487,7 @@ app.post('/api/providers/keys/:id/test', requireAuth, asyncHandler(async (req: A
 }));
 
 app.post('/api/providers/test-ephemeral', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
-  const { provider, label, apiKey, baseUrl, authHeader, chatPath, customModels, tierDeclared = 'unknown' } =
+  const { provider, label, apiKey, baseUrl, authHeader, chatPath, customModels, extraHeaders, tierDeclared = 'unknown' } =
     req.body as {
       provider?: ProviderType;
       label?: string;
@@ -1441,6 +1496,7 @@ app.post('/api/providers/test-ephemeral', requireAuth, asyncHandler(async (req: 
       authHeader?: string;
       chatPath?: string;
       customModels?: string[];
+      extraHeaders?: Record<string, string>;
       tierDeclared?: ModelTier;
     };
   if (!provider || !['anthropic', 'openai', 'openrouter', 'groq', 'gemini', 'coarena', 'custom'].includes(provider)) {
@@ -1456,19 +1512,36 @@ app.post('/api/providers/test-ephemeral', requireAuth, asyncHandler(async (req: 
     const check = validateCustomBaseUrl(baseUrl);
     if (!check.valid) return res.status(400).json({ ok: false, message: check.error });
   }
-  const adapter = getProviderAdapter(provider);
-  const result = await adapter.testConnection({
+  let normalizedAuthHeader: string | undefined;
+  if (authHeader !== undefined && authHeader.trim()) {
+    const authCheck = validateProviderHeaderName(authHeader);
+    if (!authCheck.valid) return res.status(400).json({ ok: false, message: authCheck.error });
+    normalizedAuthHeader = authCheck.normalized;
+  }
+  const chatPathCheck = validateProviderChatPath(chatPath ?? '/chat/completions');
+  if (!chatPathCheck.valid) return res.status(400).json({ ok: false, message: chatPathCheck.error });
+  const extraHeadersCheck = validateProviderExtraHeaders(extraHeaders);
+  if (!extraHeadersCheck.valid) return res.status(400).json({ ok: false, message: extraHeadersCheck.error });
+
+  const ephemeralConfig: ProviderAdapterConfig = {
     providerKeyId: 'ephemeral',
     provider,
     label: label || provider,
     apiKey: apiKey.trim(),
     tierDeclared,
     baseUrl,
-    authHeader,
-    chatPath,
+    authHeader: normalizedAuthHeader,
+    chatPath: chatPathCheck.normalized,
     customModels,
+    extraHeaders: extraHeadersCheck.normalized,
+  };
+  const adapter = getProviderAdapter(provider);
+  const result = await adapter.testConnection(ephemeralConfig);
+  return res.json({
+    ok: result.ok,
+    message: scrubSecrets(result.message, getSecretsToScrub(ephemeralConfig)),
+    errorCode: result.errorCode,
   });
-  return res.json({ ok: result.ok, message: scrubSecrets(result.message, [apiKey]), errorCode: result.errorCode });
 }));
 
 app.get('/api/providers/shared-quota', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
@@ -1486,6 +1559,7 @@ app.post('/api/providers/models/ephemeral', requireAuth, asyncHandler(async (req
     authHeader,
     chatPath,
     customModels,
+    extraHeaders,
     tierDeclared = 'unknown',
     supportsTools = 'unknown',
     supportsVision = 'unknown',
@@ -1498,6 +1572,7 @@ app.post('/api/providers/models/ephemeral', requireAuth, asyncHandler(async (req
     authHeader?: string;
     chatPath?: string;
     customModels?: string[];
+    extraHeaders?: Record<string, string>;
     tierDeclared?: ModelTier;
     supportsTools?: TriState;
     supportsVision?: TriState;
@@ -1515,6 +1590,16 @@ app.post('/api/providers/models/ephemeral', requireAuth, asyncHandler(async (req
     const check = validateCustomBaseUrl(baseUrl);
     if (!check.valid) return res.status(400).json({ error: check.error });
   }
+  let normalizedAuthHeader: string | undefined;
+  if (authHeader !== undefined && authHeader.trim()) {
+    const authCheck = validateProviderHeaderName(authHeader);
+    if (!authCheck.valid) return res.status(400).json({ error: authCheck.error });
+    normalizedAuthHeader = authCheck.normalized;
+  }
+  const chatPathCheck = validateProviderChatPath(chatPath ?? '/chat/completions');
+  if (!chatPathCheck.valid) return res.status(400).json({ error: chatPathCheck.error });
+  const extraHeadersCheck = validateProviderExtraHeaders(extraHeaders);
+  if (!extraHeadersCheck.valid) return res.status(400).json({ error: extraHeadersCheck.error });
 
   const resolvedKeyId = String(keyId || 'local_device').slice(0, 64);
   const config: ProviderAdapterConfig = {
@@ -1524,9 +1609,10 @@ app.post('/api/providers/models/ephemeral', requireAuth, asyncHandler(async (req
     apiKey: apiKey.trim(),
     tierDeclared,
     baseUrl,
-    authHeader,
-    chatPath,
+    authHeader: normalizedAuthHeader,
+    chatPath: chatPathCheck.normalized,
     customModels,
+    extraHeaders: extraHeadersCheck.normalized,
     supportsTools,
     supportsVision,
   };
@@ -1535,7 +1621,7 @@ app.post('/api/providers/models/ephemeral', requireAuth, asyncHandler(async (req
     const list = await adapter.listModels(config);
     return res.json({ models: deduplicateModels(list), warnings: [] });
   } catch (err) {
-    const msg = scrubSecrets(err instanceof Error ? err.message : String(err), [config.apiKey]);
+    const msg = scrubSecrets(err instanceof Error ? err.message : String(err), getSecretsToScrub(config));
     const fallbackModels: ProviderModel[] = [];
     if (provider === 'custom' && customModels?.length) {
       const { tier } = resolveModelTier({ provider: 'custom', tierDeclared });
@@ -1613,7 +1699,7 @@ app.get('/api/providers/models', requireAuth, asyncHandler(async (req: AuthedReq
       setCachedModels(keyId, list);
       allModels.push(...list);
     } catch (err) {
-      const msg = scrubSecrets(err instanceof Error ? err.message : String(err), [config.apiKey]);
+      const msg = scrubSecrets(err instanceof Error ? err.message : String(err), getSecretsToScrub(config));
       warnings.push(`${config.label}: ${msg}`);
       if (config.provider === 'custom' && config.customModels?.length) {
         const { tier } = resolveModelTier({ provider: 'custom', tierDeclared: config.tierDeclared });
@@ -2649,6 +2735,18 @@ app.post('/api/projects/:id/chat', requireAuth, requireProjectOwner, chatRateLim
         return res.status(400).json({ error: check.error || 'Base URL Coarena AI tidak valid.' });
       }
     }
+    let normalizedLocalAuthHeader: string | undefined;
+    if (localProviderConfig.authHeader !== undefined && localProviderConfig.authHeader.trim()) {
+      const authCheck = validateProviderHeaderName(localProviderConfig.authHeader);
+      if (!authCheck.valid) {
+        return res.status(400).json({ error: authCheck.error });
+      }
+      normalizedLocalAuthHeader = authCheck.normalized;
+    }
+    const localChatPathCheck = validateProviderChatPath(localProviderConfig.chatPath ?? '/chat/completions');
+    if (!localChatPathCheck.valid) {
+      return res.status(400).json({ error: localChatPathCheck.error });
+    }
     adapterConfig = {
       providerKeyId: 'local_device',
       provider: localProviderConfig.provider,
@@ -2656,8 +2754,8 @@ app.post('/api/projects/:id/chat', requireAuth, requireProjectOwner, chatRateLim
       apiKey: localProviderConfig.apiKey,
       tierDeclared: localProviderConfig.tierDeclared,
       baseUrl: localProviderConfig.baseUrl,
-      authHeader: localProviderConfig.authHeader,
-      chatPath: localProviderConfig.chatPath,
+      authHeader: normalizedLocalAuthHeader,
+      chatPath: localChatPathCheck.normalized,
     };
   } else {
     const userByokConfigs = await getUserByokAdapterConfigs(req.user!.id);
@@ -2930,7 +3028,11 @@ app.post('/api/projects/:id/chat', requireAuth, requireProjectOwner, chatRateLim
       ).catch(() => {});
     }
   } catch (err) {
-    const msg = scrubSecrets(err instanceof Error ? err.message : String(err), [adapterConfig.apiKey]);
+    const allChatSecrets = [
+      ...getSecretsToScrub(adapterConfig),
+      ...fallbackCandidates.flatMap((c) => getSecretsToScrub(c.adapterConfig)),
+    ];
+    const msg = scrubSecrets(err instanceof Error ? err.message : String(err), allChatSecrets);
     emit('error', { code: 'UNKNOWN', message: msg });
   } finally {
     clearInterval(heartbeat);
