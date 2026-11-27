@@ -689,7 +689,7 @@ export function ChatPanel({
               }
             }}
             placeholder={isMac ? t.promptChatMacPlaceholder : t.promptChatOtherPlaceholder}
-            className="w-full resize-none bg-transparent px-2.5 pt-2 pb-1 text-[13px] text-[var(--text)] placeholder:text-[var(--text-muted)] focus:outline-none read-only:opacity-65"
+            className="w-full resize-none bg-transparent px-2.5 pt-2 pb-1 text-[16px] sm:text-[13px] text-[var(--text)] placeholder:text-[var(--text-muted)] focus:outline-none read-only:opacity-65"
           />
           <div className="flex items-center justify-between gap-2 px-2 pb-1.5">
             <div className="flex items-center gap-1.5 min-w-0 flex-1">
@@ -704,7 +704,7 @@ export function ChatPanel({
                   placement="top"
                   compact
                   showTierFilter
-                  popoverClassName="w-[340px]"
+                  popoverClassName="w-[min(340px,calc(100vw-24px))]"
                 />
               </div>
               {activeModel && <TierBadge tier={activeModel.tier} locale={locale} note={activeModel.tierNote} />}
@@ -714,7 +714,7 @@ export function ChatPanel({
               <button
                 type="button"
                 onClick={onStop}
-                className="h-7 px-2.5 rounded-[6px] border border-[var(--error)] text-[var(--error-text)] text-[12px] font-medium flex items-center gap-1 shrink-0 cursor-pointer"
+                className="h-9 sm:h-7 px-2.5 rounded-[6px] border border-[var(--error)] text-[var(--error-text)] text-[12px] font-medium flex items-center gap-1 shrink-0 cursor-pointer"
               >
                 <Square className="w-3 h-3 fill-current" />
                 <span>{t.stop}</span>
@@ -726,7 +726,7 @@ export function ChatPanel({
                 onClick={submit}
                 aria-label={t.send}
                 title={isMac ? 'Cmd+Enter' : 'Ctrl+Enter'}
-                className="h-7 w-7 rounded-[6px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed shrink-0 cursor-pointer"
+                className="h-9 w-9 sm:h-7 sm:w-7 rounded-[6px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed shrink-0 cursor-pointer"
               >
                 <ArrowUp className="w-4 h-4" strokeWidth={1.5} />
               </button>

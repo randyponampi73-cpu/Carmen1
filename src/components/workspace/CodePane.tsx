@@ -20,6 +20,7 @@ import {
   FolderOpen,
   FolderPlus,
   Loader2,
+  MoreHorizontal,
   PanelLeft,
   Pencil,
   Save,
@@ -620,32 +621,50 @@ export function CodePane({
       }
 
       return (
-        <button
+        <div
           key={`file:${node.path}`}
-          type="button"
-          onClick={() => openFile(node.path)}
           onContextMenu={(e) => {
             e.preventDefault();
             setContextMenu({ x: e.clientX, y: e.clientY, path: node.path, type: 'file' });
           }}
           style={{ paddingLeft: `${paddingLeft + 16}px` }}
-          className={`w-full h-7 pr-2 flex items-center justify-between gap-1.5 text-[13px] text-left select-none cursor-pointer ${
+          className={`group w-full min-h-[36px] sm:min-h-0 sm:h-7 pr-1.5 flex items-center justify-between gap-1 text-[13px] select-none ${
             active
               ? 'bg-[var(--surface-2)] text-[var(--text)] font-medium'
               : 'text-[var(--text)] hover:bg-[var(--surface-2)]'
           }`}
         >
-          <span className="flex items-center gap-1.5 min-w-0">
+          <button
+            type="button"
+            onClick={() => openFile(node.path)}
+            className="flex-1 min-w-0 h-full flex items-center gap-1.5 text-left cursor-pointer"
+          >
             <FileIcon fileName={node.name} />
             <span className="truncate">{node.name}</span>
-          </span>
-          {dirty && (
-            <span
-              aria-label={t.unsavedIndicatorAria}
-              className="w-2 h-2 rounded-full shrink-0 bg-[var(--warning)]"
-            />
-          )}
-        </button>
+          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            {dirty && (
+              <span
+                aria-label={t.unsavedIndicatorAria}
+                className="w-2 h-2 rounded-full shrink-0 bg-[var(--warning)]"
+              />
+            )}
+            <button
+              type="button"
+              aria-label={`Actions for ${node.name}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                const rect = e.currentTarget.getBoundingClientRect();
+                const clampedX = Math.max(8, Math.min(rect.left - 120, window.innerWidth - 180));
+                const clampedY = Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - 140));
+                setContextMenu({ x: clampedX, y: clampedY, path: node.path, type: 'file' });
+              }}
+              className="h-7 w-7 sm:h-6 sm:w-6 rounded-[4px] flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface)] sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 cursor-pointer"
+            >
+              <MoreHorizontal className="w-3.5 h-3.5" strokeWidth={1.6} />
+            </button>
+          </div>
+        </div>
       );
     });
   }

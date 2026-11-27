@@ -963,21 +963,34 @@ export function validateTenantWorkspacePath(
   let probe = realWorkspace;
   for (const part of parts) {
     probe = path.join(probe, part);
+    let lstat: fs.Stats;
     try {
-      const lstat = fs.lstatSync(probe);
-      if (lstat.isSymbolicLink()) {
-        const realLink = fs.realpathSync(probe);
-        if (realLink !== realWorkspace && !realLink.startsWith(realWorkspace + path.sep)) {
-          return {
-            valid: false,
-            reason: 'Symlink mengarah ke luar workspace tenant dan diblokir.',
-          };
-        }
-        probe = realLink;
-      }
+      lstat = fs.lstatSync(probe);
     } catch {
       // Segment does not yet exist on disk; lexical containment above guarantees it stays inside workspace
       break;
+    }
+    if (lstat.isSymbolicLink()) {
+      let realLink: string;
+      try {
+        realLink = fs.realpathSync(probe);
+      } catch {
+        // Dangling or cyclic symlink: fail closed so subsequent writes cannot create files outside workspace
+        return {
+          valid: false,
+          reason: 'Symlink tidak valid atau dangling di dalam workspace tenant diblokir.',
+        };
+      }
+      if (
+        (realLink !== realWorkspace && !realLink.startsWith(realWorkspace + path.sep)) ||
+        isSensitiveHostResourcePath(realLink)
+      ) {
+        return {
+          valid: false,
+          reason: 'Symlink mengarah ke luar workspace tenant dan diblokir.',
+        };
+      }
+      probe = realLink;
     }
   }
 

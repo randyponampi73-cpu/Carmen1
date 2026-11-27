@@ -2,7 +2,10 @@
 <html lang="id">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0E0F11" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>CARMEN — Platform Pembuat Aplikasi Web & Android</title>
     <meta name="description" content="Platform pembuat aplikasi web dan Android (APK) fullstack berbasis prompt dengan BYOK multi-provider." />
@@ -14,11 +17,13 @@
       (function () {
         try {
           var saved = localStorage.getItem('carmen_theme');
-          var useDark = saved === 'dark' || (saved !== 'light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          var useDark = saved === 'dark' || (saved !== 'light' && (!window.matchMedia || window.matchMedia('(prefers-color-scheme: dark)').matches || !saved));
           document.documentElement.classList.toggle('dark', Boolean(useDark));
+          var themeMeta = document.querySelector('meta[name="theme-color"]');
+          if (themeMeta) themeMeta.setAttribute('content', useDark ? '#0E0F11' : '#F8F9FB');
           var accentId = localStorage.getItem('carmen_accent');
           var accents = {
-            crimson: { light: ['#B52A42', '#B52A42', '#9E2338'], dark: ['#C8324B', '#E8566C', '#B22A41'] },
+            crimson: { light: ['#B52A42', '#B52A42', '#9E2338'], dark: ['#C8324B', '#EE667B', '#B02840'] },
             cobalt: { light: ['#1D4ED8', '#1D4ED8', '#1E40AF'], dark: ['#2563EB', '#60A5FA', '#1D4ED8'] },
             emerald: { light: ['#15803D', '#15803D', '#166534'], dark: ['#16A34A', '#4ADE80', '#15803D'] },
             amber: { light: ['#B45309', '#B45309', '#92400E'], dark: ['#D97706', '#FBBF24', '#B45309'] },
@@ -38,7 +43,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
   </head>

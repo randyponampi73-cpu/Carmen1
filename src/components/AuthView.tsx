@@ -3,6 +3,7 @@ import { useId, useState } from 'react';
 import { COPY, PROVIDER_CATALOG_META, PROVIDER_KEY_PLACEHOLDERS } from '../i18n';
 import { ApiError, api } from '../lib/api';
 import type { Locale, ModelTier, ProviderType, ThemeMode, UserProfile } from '../types';
+import { CarmenBrandMark } from './AppHeader';
 import { CustomSelect } from './CustomSelect';
 
 const LAST_EMAIL_STORAGE_KEY = 'carmen_last_email';
@@ -146,21 +147,21 @@ export function AuthView({
   }
 
   return (
-    <div className="min-h-dvh bg-[var(--bg)] text-[var(--text)] flex flex-col items-center justify-center px-4 py-8">
-      <div className="w-full max-w-[400px] rounded-[8px] border border-[var(--border)] bg-[var(--surface)] p-6">
-        <div className="flex items-center justify-between gap-2 mb-5">
-          <div className="flex items-center gap-2">
-            <span className="h-3 w-3 rounded-[6px] bg-[var(--accent)]" aria-hidden="true" />
-            <span className="text-[16px] font-semibold tracking-tight">CARMEN</span>
+    <div className="min-h-dvh bg-[var(--bg)] text-[var(--text)] flex flex-col items-center justify-center px-3 sm:px-4 py-6 sm:py-8 pt-safe pb-safe">
+      <div className="w-full max-w-[408px] rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-5 sm:p-6">
+        <div className="flex items-center justify-between gap-2 mb-6">
+          <div className="flex items-center gap-2.5">
+            <CarmenBrandMark size="md" />
+            <span className="text-[15px] font-bold tracking-[0.04em]">CARMEN</span>
           </div>
           <div className="flex items-center gap-1.5">
             <button
               type="button"
               onClick={onToggleLocale}
               aria-label={t.switchLangLabel}
-              className="h-8 px-2 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] hover:border-[var(--text-muted)] text-[12px] font-medium text-[var(--text)] flex items-center gap-1 cursor-pointer"
+              className="h-9 sm:h-8 px-2.5 sm:px-2 rounded-[6px] border border-[var(--border)] bg-[var(--surface-2)] hover:border-[var(--border-strong)] text-[12px] font-medium text-[var(--text)] flex items-center gap-1 cursor-pointer"
             >
-              <Globe className="w-3.5 h-3.5" strokeWidth={1.5} />
+              <Globe className="w-3.5 h-3.5 text-[var(--text-muted)]" strokeWidth={1.6} />
               <span>{locale.toUpperCase()}</span>
             </button>
             <button
@@ -168,18 +169,18 @@ export function AuthView({
               onClick={onToggleTheme}
               aria-label={theme === 'dark' ? t.switchThemeToLight : t.switchThemeToDark}
               title={theme === 'dark' ? t.themeLightTitle : t.themeDarkTitle}
-              className="h-8 w-8 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] hover:border-[var(--text-muted)] text-[var(--text)] flex items-center justify-center cursor-pointer"
+              className="h-9 w-9 sm:h-8 sm:w-8 rounded-[6px] border border-[var(--border)] bg-[var(--surface-2)] hover:border-[var(--border-strong)] text-[var(--text)] flex items-center justify-center cursor-pointer"
             >
               {theme === 'dark' ? (
-                <Sun className="w-4 h-4" strokeWidth={1.5} />
+                <Sun className="w-4 h-4" strokeWidth={1.6} />
               ) : (
-                <Moon className="w-4 h-4" strokeWidth={1.5} />
+                <Moon className="w-4 h-4" strokeWidth={1.6} />
               )}
             </button>
           </div>
         </div>
 
-        <h1 className="text-[20px] font-semibold leading-tight mb-1">
+        <h1 className="text-[20px] font-semibold tracking-tight leading-tight mb-1">
           {effectiveMode === 'login'
             ? t.authLoginTitle
             : effectiveMode === 'register'
@@ -191,7 +192,7 @@ export function AuthView({
         <div
           role="tablist"
           aria-label={t.authModeTabsAria}
-          className={`grid ${emailEnabled ? 'grid-cols-3' : 'grid-cols-2'} gap-1 p-1 rounded-[6px] bg-[var(--surface-2)] border border-[var(--border)] mb-5`}
+          className={`grid ${emailEnabled ? 'grid-cols-3' : 'grid-cols-2'} gap-1 p-1 rounded-[8px] bg-[var(--surface-2)] border border-[var(--border)] mb-5`}
         >
           {availableTabs.map((item, idx) => (
             <button
@@ -204,7 +205,7 @@ export function AuthView({
               tabIndex={effectiveMode === item.id ? 0 : -1}
               onClick={() => switchAuthMode(item.id)}
               onKeyDown={(e) => handleTabKeyDown(e, idx)}
-              className={`h-7 rounded-[6px] text-[12px] font-medium cursor-pointer ${
+              className={`h-9 sm:h-7 rounded-[6px] text-[12px] font-medium cursor-pointer ${
                 effectiveMode === item.id
                   ? 'bg-[var(--surface)] text-[var(--text)] border border-[var(--border)]'
                   : 'text-[var(--text-muted)] hover:text-[var(--text)]'
@@ -265,7 +266,7 @@ export function AuthView({
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder={t.authNamePlaceholder}
-                  className="w-full h-9 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] px-3 text-[13px] text-[var(--text)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)] focus:outline-none"
+                  className="w-full h-11 sm:h-9 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] px-3 text-[16px] sm:text-[13px] text-[var(--text)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)] focus:outline-none"
                 />
               </div>
             )}
@@ -285,7 +286,7 @@ export function AuthView({
                   if (registeredEmailConflict) setRegisteredEmailConflict(false);
                 }}
                 placeholder={t.authEmailPlaceholder}
-                className="w-full h-9 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] px-3 text-[13px] text-[var(--text)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)] focus:outline-none"
+                className="w-full h-11 sm:h-9 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] px-3 text-[16px] sm:text-[13px] text-[var(--text)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)] focus:outline-none"
               />
             </div>
 
@@ -302,7 +303,7 @@ export function AuthView({
                   value={magicToken}
                   onChange={(e) => setMagicToken(e.target.value)}
                   placeholder={t.authMagicTokenPlaceholder}
-                  className="w-full h-9 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] px-3 text-[13px] font-mono text-[var(--text)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)] focus:outline-none"
+                  className="w-full h-11 sm:h-9 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] px-3 text-[16px] sm:text-[13px] font-mono text-[var(--text)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)] focus:outline-none"
                 />
               </div>
             )}
@@ -321,7 +322,7 @@ export function AuthView({
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full h-9 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] px-3 text-[13px] text-[var(--text)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)] focus:outline-none"
+                  className="w-full h-11 sm:h-9 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] px-3 text-[16px] sm:text-[13px] text-[var(--text)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)] focus:outline-none"
                 />
               </div>
             )}
@@ -329,7 +330,7 @@ export function AuthView({
             <button
               type="submit"
               disabled={loading}
-              className="w-full h-9 rounded-[6px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-[13px] font-medium flex items-center justify-center gap-2 disabled:opacity-60 cursor-pointer"
+              className="w-full h-11 sm:h-9 rounded-[6px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-[13px] font-semibold flex items-center justify-center gap-2 disabled:opacity-60 cursor-pointer"
             >
               {loading && <Loader2 className="w-4 h-4 animate-spin" strokeWidth={1.5} />}
               <span>
@@ -345,12 +346,12 @@ export function AuthView({
           </form>
 
           {effectiveMode !== 'magic' && (
-            <div className="mt-3 text-center text-[12px] text-[var(--text-muted)]">
+            <div className="mt-3.5 text-center text-[12px] text-[var(--text-muted)]">
               <span>{effectiveMode === 'register' ? t.authPromptHaveAccount : t.authPromptNeedAccount} </span>
               <button
                 type="button"
                 onClick={() => switchAuthMode(effectiveMode === 'register' ? 'login' : 'register')}
-                className="font-medium text-[var(--text)] hover:text-[var(--accent-text)] underline cursor-pointer"
+                className="font-semibold text-[var(--text)] hover:text-[var(--accent-text)] underline cursor-pointer"
               >
                 {effectiveMode === 'register' ? t.authTabLogin : t.authTabRegister}
               </button>
@@ -363,7 +364,7 @@ export function AuthView({
                 type="button"
                 disabled={loading}
                 onClick={() => void handleDemoLogin()}
-                className="w-full h-9 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] hover:border-[var(--text-muted)] text-[13px] font-medium text-[var(--text)] disabled:opacity-50 cursor-pointer"
+                className="w-full h-11 sm:h-9 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] hover:border-[var(--text-muted)] text-[13px] font-medium text-[var(--text)] disabled:opacity-50 cursor-pointer"
               >
                 {t.authDemoButton}
               </button>

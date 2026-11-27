@@ -191,8 +191,8 @@ export function ActivityPane({
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="relative w-[200px] sm:w-[220px]">
+          <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2 w-full sm:w-auto">
+            <div className="relative w-full sm:w-[220px]">
               <Search
                 className="w-3.5 h-3.5 text-[var(--text-muted)] absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
                 strokeWidth={1.5}
@@ -203,14 +203,14 @@ export function ActivityPane({
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder={t.activitySearchPlaceholder}
                 aria-label={t.activitySearchPlaceholder}
-                className="w-full h-7 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface)] pl-8 pr-2.5 text-[12px] text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-none"
+                className="w-full h-9 sm:h-7 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface)] pl-8 pr-2.5 text-[16px] sm:text-[12px] text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-none"
               />
             </div>
 
             <div
               role="group"
               aria-label={t.activityTabTitle}
-              className="inline-flex items-center gap-0.5 rounded-[6px] border border-[var(--border)] bg-[var(--surface)] p-0.5"
+              className="inline-flex items-center gap-0.5 rounded-[6px] border border-[var(--border)] bg-[var(--surface)] p-0.5 max-w-full overflow-x-auto no-scrollbar"
             >
               {(
                 [
@@ -225,7 +225,7 @@ export function ActivityPane({
                   type="button"
                   aria-pressed={filter === id}
                   onClick={() => setFilter(id)}
-                  className={`h-6 px-2 rounded-[5px] text-[12px] font-medium whitespace-nowrap cursor-pointer ${
+                  className={`h-7 sm:h-6 px-2.5 sm:px-2 rounded-[5px] text-[12px] font-medium whitespace-nowrap cursor-pointer ${
                     filter === id
                       ? 'bg-[var(--surface-2)] text-[var(--text)] border border-[var(--border)]'
                       : 'text-[var(--text-muted)] hover:text-[var(--text)]'
@@ -269,7 +269,7 @@ export function ActivityPane({
               return (
                 <div
                   key={item.id}
-                  className="px-4 py-3 flex items-start justify-between gap-3 hover:bg-[var(--surface-2)] transition-colors"
+                  className="px-3.5 sm:px-4 py-3 flex flex-col sm:flex-row sm:items-start justify-between gap-2.5 sm:gap-3 hover:bg-[var(--surface-2)] transition-colors"
                 >
                   <div className="flex items-start gap-3 min-w-0 flex-1">
                     <div className="mt-0.5 h-7 w-7 rounded-[6px] border border-[var(--border)] bg-[var(--surface-2)] flex items-center justify-center shrink-0 text-[var(--text-muted)]">

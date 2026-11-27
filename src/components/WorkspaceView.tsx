@@ -66,7 +66,7 @@ interface WorkspaceViewProps {
 }
 
 type MainTab = 'preview' | 'code' | 'terminal' | 'database' | 'activity';
-type MobileTab = 'chat' | 'preview' | 'code' | 'activity';
+type MobileTab = 'chat' | 'preview' | 'code' | 'database' | 'activity';
 
 export function WorkspaceView({
   projectId,
@@ -992,13 +992,13 @@ export function WorkspaceView({
   return (
     <div className="h-dvh w-full flex flex-col bg-[var(--bg)] text-[var(--text)] overflow-hidden">
       {/* WORKSPACE TOP BAR */}
-      <header className="h-11 px-2.5 sm:px-3 border-b border-[var(--border)] bg-[var(--surface)] flex items-center justify-between gap-2 sm:gap-3 shrink-0">
-        <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+      <header className="min-h-11 pt-safe px-2 sm:px-3 border-b border-[var(--border)] bg-[var(--surface)] flex items-center justify-between gap-1.5 sm:gap-3 shrink-0">
+        <div className="flex items-center gap-1 sm:gap-2 min-w-0">
           <button
             type="button"
             onClick={handleBackClick}
             aria-label={t.backToProjectsAria}
-            className="h-7 w-7 rounded-[6px] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface-2)] flex items-center justify-center shrink-0 cursor-pointer"
+            className="h-8 w-8 sm:h-7 sm:w-7 rounded-[6px] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface-2)] flex items-center justify-center shrink-0 cursor-pointer"
           >
             <ArrowLeft className="w-4 h-4" strokeWidth={1.5} />
           </button>
@@ -1057,7 +1057,7 @@ export function WorkspaceView({
                 setEditingName(true);
               }}
               title={t.clickToRenameProject}
-              className="text-[13px] font-semibold text-[var(--text)] hover:underline truncate max-w-[120px] sm:max-w-[240px] cursor-pointer"
+              className="text-[13px] font-semibold text-[var(--text)] hover:underline truncate max-w-[84px] min-[360px]:max-w-[116px] min-[412px]:max-w-[148px] sm:max-w-[240px] cursor-pointer"
             >
               {data.project.name}
             </button>
@@ -1074,11 +1074,11 @@ export function WorkspaceView({
               aria-expanded={versionsOpen}
               aria-haspopup="menu"
               aria-label={t.versionsButtonAria}
-              className="h-7 px-2 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] hover:border-[var(--text-muted)] text-[12px] text-[var(--text-muted)] hover:text-[var(--text)] flex items-center gap-1 whitespace-nowrap cursor-pointer"
+              className="h-8 sm:h-7 px-1.5 sm:px-2 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] hover:border-[var(--text-muted)] text-[12px] text-[var(--text-muted)] hover:text-[var(--text)] flex items-center gap-1 whitespace-nowrap cursor-pointer"
             >
               <History className="w-3.5 h-3.5" strokeWidth={1.5} />
               <span className="font-mono tabular-nums">v{data.versions.length}</span>
-              <ChevronDown className="w-3 h-3" strokeWidth={1.5} />
+              <ChevronDown className="w-3 h-3 hidden min-[375px]:inline" strokeWidth={1.5} />
             </button>
 
             {versionsOpen && (
@@ -1138,7 +1138,7 @@ export function WorkspaceView({
         </div>
 
         {/* Right Actions */}
-        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+        <div className="flex items-center gap-1 sm:gap-2 shrink-0">
           <div className="relative" ref={projectMenuRef}>
             <button
               type="button"
@@ -1148,7 +1148,7 @@ export function WorkspaceView({
               }}
               aria-expanded={projectMenuOpen}
               aria-haspopup="menu"
-              className="h-7 px-2.5 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] hover:border-[var(--text-muted)] text-[12px] font-medium text-[var(--text)] flex items-center gap-1 whitespace-nowrap cursor-pointer"
+              className="h-8 sm:h-7 px-2 sm:px-2.5 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] hover:border-[var(--text-muted)] text-[12px] font-medium text-[var(--text)] flex items-center gap-1 whitespace-nowrap cursor-pointer"
             >
               <span>{t.projectMenu}</span>
               <ChevronDown className="w-3.5 h-3.5 text-[var(--text-muted)]" strokeWidth={1.5} />
@@ -1204,7 +1204,7 @@ export function WorkspaceView({
             <button
               type="button"
               onClick={() => setModal('apk')}
-              className="h-7 px-2.5 sm:px-3 rounded-[6px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-[12px] font-medium flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+              className="h-8 sm:h-7 px-2 sm:px-3 rounded-[6px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-[12px] font-medium flex items-center gap-1 sm:gap-1.5 whitespace-nowrap cursor-pointer"
             >
               <Smartphone className="w-3.5 h-3.5" strokeWidth={1.5} />
               <span className="hidden sm:inline">{t.buildApk}</span>
@@ -1214,7 +1214,7 @@ export function WorkspaceView({
             <button
               type="button"
               onClick={() => setModal('deploy')}
-              className="h-7 px-2.5 sm:px-3 rounded-[6px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-[12px] font-medium flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+              className="h-8 sm:h-7 px-2 sm:px-3 rounded-[6px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-[12px] font-medium flex items-center gap-1 sm:gap-1.5 whitespace-nowrap cursor-pointer"
             >
               <Rocket className="w-3.5 h-3.5" strokeWidth={1.5} />
               <span>{t.deploy}</span>
@@ -1362,6 +1362,43 @@ export function WorkspaceView({
         </div>
       ) : (
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+          {mobileTab === 'code' && (
+            <div
+              role="tablist"
+              aria-label={t.workspaceTabsAria}
+              className="h-9 px-2.5 border-b border-[var(--border)] bg-[var(--surface)] flex items-center gap-1.5 shrink-0"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mobileCodeSubtab === 'code'}
+                onClick={() => setMobileCodeSubtab('code')}
+                className={`h-7 px-2.5 rounded-[6px] text-[12px] font-medium flex items-center gap-1.5 cursor-pointer ${
+                  mobileCodeSubtab === 'code'
+                    ? 'bg-[var(--surface-2)] text-[var(--text)] border border-[var(--border)]'
+                    : 'text-[var(--text-muted)] hover:text-[var(--text)]'
+                }`}
+              >
+                <Code2 className="w-3.5 h-3.5" strokeWidth={1.5} />
+                <span>{t.code}</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mobileCodeSubtab === 'terminal'}
+                onClick={() => setMobileCodeSubtab('terminal')}
+                className={`h-7 px-2.5 rounded-[6px] text-[12px] font-medium flex items-center gap-1.5 cursor-pointer ${
+                  mobileCodeSubtab === 'terminal'
+                    ? 'bg-[var(--surface-2)] text-[var(--text)] border border-[var(--border)]'
+                    : 'text-[var(--text-muted)] hover:text-[var(--text)]'
+                }`}
+              >
+                <TerminalIcon className="w-3.5 h-3.5" strokeWidth={1.5} />
+                <span>{t.terminal}</span>
+              </button>
+            </div>
+          )}
+
           <div className="flex-1 min-h-0 overflow-hidden relative">
             <div className={mobileTab === 'chat' ? 'h-full' : 'hidden'} aria-hidden={mobileTab !== 'chat'}>
               {chatPanelElement}
@@ -1380,6 +1417,9 @@ export function WorkspaceView({
               aria-hidden={!(mobileTab === 'code' && mobileCodeSubtab === 'terminal')}
             >
               {terminalPaneElement}
+            </div>
+            <div className={mobileTab === 'database' ? 'h-full' : 'hidden'} aria-hidden={mobileTab !== 'database'}>
+              <DatabasePane projectId={projectId} locale={locale} reloadKey={reloadKey} />
             </div>
             <div className={mobileTab === 'activity' ? 'h-full' : 'hidden'} aria-hidden={mobileTab !== 'activity'}>
               <ActivityPane
@@ -1401,13 +1441,14 @@ export function WorkspaceView({
 
           <nav
             aria-label={t.mobileNavAria}
-            className="border-t border-[var(--border)] bg-[var(--surface)] grid grid-cols-4 shrink-0 pb-[env(safe-area-inset-bottom)]"
+            className="border-t border-[var(--border)] bg-[var(--surface)] grid grid-cols-5 shrink-0 pb-safe"
           >
             {(
               [
                 ['chat', MessageSquare, 'Chat'],
                 ['preview', Eye, t.preview],
                 ['code', Code2, t.code],
+                ['database', Database, 'Data'],
                 ['activity', Activity, t.activity],
               ] as const
             ).map(([id, Icon, label]) => {
@@ -1418,17 +1459,16 @@ export function WorkspaceView({
                   type="button"
                   onClick={() => {
                     setMobileTab(id);
-                    if (id === 'code') setMobileCodeSubtab('code');
                   }}
                   aria-current={active ? 'page' : undefined}
-                  className={`min-h-[48px] flex flex-col items-center justify-center gap-0.5 text-[12px] font-medium border-t-2 cursor-pointer ${
+                  className={`min-h-[50px] px-1 flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium border-t-2 cursor-pointer transition-colors ${
                     active
                       ? 'border-t-[var(--accent)] text-[var(--accent-text)]'
                       : 'border-t-transparent text-[var(--text-muted)]'
                   }`}
                 >
-                  <Icon className="w-4 h-4" strokeWidth={1.5} />
-                  <span>{label}</span>
+                  <Icon className="w-4 h-4 shrink-0" strokeWidth={active ? 1.85 : 1.5} />
+                  <span className="truncate max-w-full">{label}</span>
                 </button>
               );
             })}

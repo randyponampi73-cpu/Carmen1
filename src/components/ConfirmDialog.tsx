@@ -117,7 +117,7 @@ export function ModalShell({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/65 flex items-center justify-center p-4 overflow-y-auto"
+      className="fixed inset-0 z-50 bg-black/70 backdrop-blur-[2px] flex items-center justify-center p-3 sm:p-4 pb-safe overflow-y-auto"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget && !busy) {
           onClose();
@@ -131,7 +131,7 @@ export function ModalShell({
         aria-labelledby={ariaLabelledBy}
         aria-label={ariaLabel}
         tabIndex={-1}
-        className={`w-full ${maxWidthClass} rounded-[8px] border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] my-auto outline-none ${className}`}
+        className={`w-full ${maxWidthClass} max-h-[90dvh] overflow-y-auto rounded-[10px] border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] my-auto outline-none ${className}`}
         style={{ boxShadow: 'var(--shadow-float)' }}
       >
         {children}
@@ -194,7 +194,7 @@ export function ConfirmDialog({
           type="button"
           disabled={busy}
           onClick={onClose}
-          className="h-8 px-3 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] hover:border-[var(--text-muted)] text-[13px] text-[var(--text)] disabled:opacity-50 cursor-pointer"
+          className="h-10 sm:h-8 px-3.5 sm:px-3 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] hover:border-[var(--text-muted)] text-[13px] text-[var(--text)] disabled:opacity-50 cursor-pointer"
         >
           {cancelLabel || t.cancel}
         </button>
@@ -202,7 +202,7 @@ export function ConfirmDialog({
           type="button"
           disabled={busy}
           onClick={() => void onConfirm()}
-          className={`h-8 px-4 rounded-[6px] text-white text-[13px] font-medium flex items-center gap-1.5 disabled:opacity-50 cursor-pointer ${
+          className={`h-10 sm:h-8 px-4 rounded-[6px] text-white text-[13px] font-medium flex items-center gap-1.5 disabled:opacity-50 cursor-pointer ${
             danger ? 'bg-[var(--error-fill)] hover:opacity-90' : 'bg-[var(--accent)] hover:bg-[var(--accent-hover)]'
           }`}
         >

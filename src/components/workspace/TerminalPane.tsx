@@ -98,7 +98,7 @@ export function TerminalPane({ locale, logs, sandboxStatus, onRunCommand, onStop
 
   return (
     <div className="h-full flex flex-col bg-[var(--bg)]">
-      <div className="h-9 px-3 border-b border-[var(--border)] bg-[var(--surface)] flex items-center justify-between gap-2 shrink-0 overflow-x-auto">
+      <div className="h-9 px-3 border-b border-[var(--border)] bg-[var(--surface)] flex items-center justify-between gap-2 shrink-0 overflow-x-auto no-scrollbar">
         <div role="group" aria-label={t.terminalFilterAria} className="inline-flex items-center gap-1 shrink-0">
           {(['all', 'dev', 'install', 'build'] as const).map((tab) => (
             <button
@@ -146,7 +146,7 @@ export function TerminalPane({ locale, logs, sandboxStatus, onRunCommand, onStop
         </div>
       </div>
 
-      <div className="px-3 py-1.5 border-b border-[var(--border)] bg-[var(--surface)] flex items-center gap-1.5 overflow-x-auto shrink-0">
+      <div className="px-3 py-1.5 border-b border-[var(--border)] bg-[var(--surface)] flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0">
         {QUICK_COMMANDS.map((quick) => (
           <button
             key={quick}
@@ -208,13 +208,13 @@ export function TerminalPane({ locale, logs, sandboxStatus, onRunCommand, onStop
           onKeyDown={handleInputKeyDown}
           placeholder={t.terminalInputPlaceholder}
           aria-label={t.terminalInputAria}
-          className="flex-1 h-7 bg-transparent font-mono text-[12px] text-[var(--text)] placeholder:text-[var(--text-muted)] focus:outline-none read-only:opacity-55"
+          className="flex-1 h-9 sm:h-7 bg-transparent font-mono text-[16px] sm:text-[12px] text-[var(--text)] placeholder:text-[var(--text-muted)] focus:outline-none read-only:opacity-55"
         />
         {running && onStopProcess ? (
           <button
             type="button"
             onClick={() => void handleStop()}
-            className="h-7 px-2.5 rounded-[6px] border border-[var(--error)] text-[var(--error-text)] text-[12px] flex items-center gap-1 cursor-pointer"
+            className="h-9 sm:h-7 px-2.5 rounded-[6px] border border-[var(--error)] text-[var(--error-text)] text-[12px] flex items-center gap-1 cursor-pointer"
           >
             <Square className="w-3 h-3 fill-current" />
             <span>{t.stop}</span>
@@ -223,7 +223,7 @@ export function TerminalPane({ locale, logs, sandboxStatus, onRunCommand, onStop
           <button
             type="submit"
             disabled={!cmd.trim() || running}
-            className="h-7 px-2.5 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] hover:border-[var(--text-muted)] text-[12px] text-[var(--text)] flex items-center gap-1 disabled:opacity-40 cursor-pointer"
+            className="h-9 sm:h-7 px-2.5 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] hover:border-[var(--text-muted)] text-[12px] text-[var(--text)] flex items-center gap-1 disabled:opacity-40 cursor-pointer"
           >
             {running ? (
               <Loader2 className="w-3 h-3 animate-spin" strokeWidth={1.5} />

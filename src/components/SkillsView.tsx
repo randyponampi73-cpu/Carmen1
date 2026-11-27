@@ -388,7 +388,7 @@ export function SkillsView({ locale }: SkillsViewProps) {
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="h-8 px-3 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] hover:border-[var(--text-muted)] text-[13px] font-medium text-[var(--text)] flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+            className="h-10 sm:h-8 px-3 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] hover:border-[var(--text-muted)] text-[13px] font-medium text-[var(--text)] flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
           >
             <Upload className="w-3.5 h-3.5" strokeWidth={1.5} />
             <span>{t.skillsImportZip}</span>
@@ -396,7 +396,7 @@ export function SkillsView({ locale }: SkillsViewProps) {
           <button
             type="button"
             onClick={() => setTab('create')}
-            className="h-8 px-3 rounded-[6px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-[13px] font-medium flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+            className="h-10 sm:h-8 px-3 rounded-[6px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-[13px] font-medium flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
           >
             <Plus className="w-3.5 h-3.5" strokeWidth={1.6} />
             <span>{t.skillsCreateBtn}</span>
@@ -405,23 +405,23 @@ export function SkillsView({ locale }: SkillsViewProps) {
       </div>
 
       {/* Concise Metric Strip */}
-      <div className="grid grid-cols-3 gap-3">
-        <div className="rounded-[8px] border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 flex items-baseline justify-between gap-2">
-          <span className="text-[12px] text-[var(--text-muted)] capitalize">{t.skillsRegisteredCount}</span>
-          <span className="text-[18px] font-semibold font-mono tabular-nums text-[var(--text)]">{skills.length}</span>
+      <div className="grid grid-cols-3 gap-2 sm:gap-3">
+        <div className="rounded-[8px] border border-[var(--border)] bg-[var(--surface)] px-2.5 sm:px-3.5 py-2.5 flex flex-col sm:flex-row sm:items-baseline justify-between gap-0.5 sm:gap-2 min-w-0">
+          <span className="text-[11px] sm:text-[12px] text-[var(--text-muted)] capitalize truncate">{t.skillsRegisteredCount}</span>
+          <span className="text-[17px] sm:text-[18px] font-semibold font-mono tabular-nums text-[var(--text)]">{skills.length}</span>
         </div>
-        <div className="rounded-[8px] border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 flex items-baseline justify-between gap-2">
-          <span className="text-[12px] text-[var(--text-muted)] capitalize">{t.skillsEnabledCount}</span>
-          <span className="text-[18px] font-semibold font-mono tabular-nums text-[var(--success-text)]">{enabledCount}</span>
+        <div className="rounded-[8px] border border-[var(--border)] bg-[var(--surface)] px-2.5 sm:px-3.5 py-2.5 flex flex-col sm:flex-row sm:items-baseline justify-between gap-0.5 sm:gap-2 min-w-0">
+          <span className="text-[11px] sm:text-[12px] text-[var(--text-muted)] capitalize truncate">{t.skillsEnabledCount}</span>
+          <span className="text-[17px] sm:text-[18px] font-semibold font-mono tabular-nums text-[var(--success-text)]">{enabledCount}</span>
         </div>
-        <div className="rounded-[8px] border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 flex items-baseline justify-between gap-2">
-          <span className="text-[12px] text-[var(--text-muted)] capitalize">{t.skillsToolsCount}</span>
-          <span className="text-[18px] font-semibold font-mono tabular-nums text-[var(--text)]">{tools.length}</span>
+        <div className="rounded-[8px] border border-[var(--border)] bg-[var(--surface)] px-2.5 sm:px-3.5 py-2.5 flex flex-col sm:flex-row sm:items-baseline justify-between gap-0.5 sm:gap-2 min-w-0">
+          <span className="text-[11px] sm:text-[12px] text-[var(--text-muted)] capitalize truncate">{t.skillsToolsCount}</span>
+          <span className="text-[17px] sm:text-[18px] font-semibold font-mono tabular-nums text-[var(--text)]">{tools.length}</span>
         </div>
       </div>
 
       {/* Primary Section Tabs */}
-      <div role="tablist" aria-label={t.skillsTitle} className="flex items-center gap-2 border-b border-[var(--border)] overflow-x-auto">
+      <div role="tablist" aria-label={t.skillsTitle} className="flex items-center gap-1 sm:gap-2 border-b border-[var(--border)] overflow-x-auto no-scrollbar">
         {(
           [
             ['installed', t.skillsTabInstalled],
@@ -438,7 +438,7 @@ export function SkillsView({ locale }: SkillsViewProps) {
               role="tab"
               aria-selected={active}
               onClick={() => setTab(id)}
-              className={`h-9 px-3 border-b-2 text-[13px] font-medium whitespace-nowrap cursor-pointer ${
+              className={`h-10 sm:h-9 px-3 border-b-2 text-[13px] font-medium whitespace-nowrap cursor-pointer ${
                 active
                   ? 'border-[var(--accent)] text-[var(--text)]'
                   : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text)]'
@@ -479,15 +479,15 @@ export function SkillsView({ locale }: SkillsViewProps) {
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder={t.skillsSearchPlaceholder}
                 aria-label={t.skillsSearchPlaceholder}
-                className="w-full h-9 pl-8 pr-3 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface)] text-[13px] text-[var(--text)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                className="w-full h-10 sm:h-9 pl-8 pr-3 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface)] text-[16px] sm:text-[13px] text-[var(--text)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
               />
             </div>
 
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1">
               <button
                 type="button"
                 onClick={() => setCategoryFilter('all')}
-                className={`h-7 px-2.5 rounded-[6px] text-[12px] font-medium whitespace-nowrap cursor-pointer border ${
+                className={`h-8 sm:h-7 px-2.5 rounded-[6px] text-[12px] font-medium whitespace-nowrap cursor-pointer border ${
                   categoryFilter === 'all'
                     ? 'border-[var(--accent)] bg-[var(--surface-2)] text-[var(--text)]'
                     : 'border-[var(--border)] bg-[var(--surface)] text-[var(--text-muted)] hover:text-[var(--text)]'
@@ -500,7 +500,7 @@ export function SkillsView({ locale }: SkillsViewProps) {
                   key={cat}
                   type="button"
                   onClick={() => setCategoryFilter(cat)}
-                  className={`h-7 px-2.5 rounded-[6px] text-[12px] font-medium capitalize whitespace-nowrap cursor-pointer border ${
+                  className={`h-8 sm:h-7 px-2.5 rounded-[6px] text-[12px] font-medium capitalize whitespace-nowrap cursor-pointer border ${
                     categoryFilter === cat
                       ? 'border-[var(--accent)] bg-[var(--surface-2)] text-[var(--text)]'
                       : 'border-[var(--border)] bg-[var(--surface)] text-[var(--text-muted)] hover:text-[var(--text)]'

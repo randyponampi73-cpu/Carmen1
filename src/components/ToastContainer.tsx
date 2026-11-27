@@ -16,7 +16,7 @@ export function ToastContainer({ toasts, closeLabel, onDismiss, onOpenProject, o
     <div
       aria-live="polite"
       aria-atomic="false"
-      className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 w-[min(380px,calc(100vw-32px))] pointer-events-none"
+      className="fixed bottom-[68px] sm:bottom-4 right-3 sm:right-4 z-50 flex flex-col gap-2 w-[min(380px,calc(100vw-24px))] pointer-events-none"
     >
       {toasts.map((toast) => {
         const isSuccess = toast.type === 'success';

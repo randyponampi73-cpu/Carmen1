@@ -25,8 +25,8 @@ export const ACCENT_PRESETS: AccentPreset[] = [
     labelId: 'Merah Karmen',
     labelEn: 'Carmen Crimson',
     swatch: '#C8324B',
-    light: { accent: '#B52A42', accentText: '#B52A42', accentHover: '#9E2338' },
-    dark: { accent: '#C8324B', accentText: '#E8566C', accentHover: '#B22A41' },
+    light: { accent: '#B52A42', accentText: '#A8223A', accentHover: '#961E34' },
+    dark: { accent: '#C8324B', accentText: '#EE667B', accentHover: '#B02840' },
   },
   {
     id: 'cobalt',
@@ -91,4 +91,8 @@ export function applyAccentCssVariables(accentId: AccentColorId, theme: ThemeMod
   root.style.setProperty('--accent', palette.accent);
   root.style.setProperty('--accent-text', palette.accentText);
   root.style.setProperty('--accent-hover', palette.accentHover);
+  const themeMeta = document.querySelector('meta[name="theme-color"]');
+  if (themeMeta) {
+    themeMeta.setAttribute('content', theme === 'light' ? '#F8F9FB' : '#0E0F11');
+  }
 }

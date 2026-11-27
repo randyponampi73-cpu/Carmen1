@@ -415,20 +415,20 @@ export function PreviewPane({
   return (
     <div className="h-full flex flex-col bg-[var(--bg)]">
       {/* Preview Toolbar */}
-      <div className="h-9 px-3 border-b border-[var(--border)] bg-[var(--surface)] flex items-center justify-between gap-2 shrink-0">
+      <div className="h-10 sm:h-9 px-2.5 sm:px-3 border-b border-[var(--border)] bg-[var(--surface)] flex items-center justify-between gap-2 shrink-0">
         <div className="flex items-center gap-1.5 min-w-0">
           <button
             type="button"
             onClick={onRefresh}
             aria-label={t.refreshPreviewAria}
             title={t.refreshPreviewTitle}
-            className="h-7 w-7 rounded-[6px] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface-2)] flex items-center justify-center cursor-pointer"
+            className="h-8 w-8 sm:h-7 sm:w-7 rounded-[6px] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface-2)] flex items-center justify-center shrink-0 cursor-pointer"
           >
             <RefreshCw className="w-3.5 h-3.5" strokeWidth={1.5} />
           </button>
           <div
             title={t.previewIsolationTooltip}
-            className="h-7 px-2.5 rounded-[6px] border border-[var(--border)] bg-[var(--surface-2)] text-[12px] font-mono text-[var(--text-muted)] flex items-center gap-1.5 truncate max-w-[320px]"
+            className="h-7 px-2 sm:px-2.5 rounded-[6px] border border-[var(--border)] bg-[var(--surface-2)] text-[12px] font-mono text-[var(--text-muted)] flex items-center gap-1.5 truncate max-w-[200px] sm:max-w-[320px]"
           >
             <ShieldCheck className="w-3.5 h-3.5 text-[var(--success-text)] shrink-0" strokeWidth={1.5} />
             <span className="truncate">/preview/{projectId}/</span>
@@ -444,7 +444,7 @@ export function PreviewPane({
           <div
             role="group"
             aria-label={t.previewViewportAria}
-            className="inline-flex items-center rounded-[6px] border border-[var(--border)] bg-[var(--surface-2)] p-0.5"
+            className="hidden sm:inline-flex items-center rounded-[6px] border border-[var(--border)] bg-[var(--surface-2)] p-0.5"
           >
             {(
               [
@@ -486,7 +486,7 @@ export function PreviewPane({
             }}
             aria-label={t.openPreviewNewTabAria}
             title={t.openPreviewNewTabTitle}
-            className="h-7 w-7 rounded-[6px] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface-2)] flex items-center justify-center"
+            className="h-8 w-8 sm:h-7 sm:w-7 rounded-[6px] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface-2)] flex items-center justify-center"
           >
             <ExternalLink className="w-3.5 h-3.5" strokeWidth={1.5} />
           </a>

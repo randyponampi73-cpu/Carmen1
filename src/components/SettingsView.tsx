@@ -647,8 +647,8 @@ export function SettingsView({
                     models={models}
                     value={user.defaultProviderKeyId && user.defaultModelId ? `${user.defaultProviderKeyId}::${user.defaultModelId}` : ''}
                     allowEmptyLabel={t.defaultModelEmpty}
-                    triggerClassName="h-9"
-                    popoverClassName="w-full min-w-[300px]"
+                    triggerClassName="h-10 sm:h-9"
+                    popoverClassName="w-full min-w-0 sm:min-w-[300px]"
                     onChange={async (val) => {
                       setSettingsError(null);
                       const sepIdx = val.indexOf('::');
@@ -673,8 +673,8 @@ export function SettingsView({
                     models={models}
                     value={user.fallbackProviderKeyId && user.fallbackModelId ? `${user.fallbackProviderKeyId}::${user.fallbackModelId}` : ''}
                     allowEmptyLabel={t.fallbackModelEmpty}
-                    triggerClassName="h-9"
-                    popoverClassName="w-full min-w-[300px]"
+                    triggerClassName="h-10 sm:h-9"
+                    popoverClassName="w-full min-w-0 sm:min-w-[300px]"
                     onChange={async (val) => {
                       setSettingsError(null);
                       const sepIdx = val.indexOf('::');
@@ -944,14 +944,14 @@ export function SettingsView({
               <div className="rounded-[8px] border border-[var(--error)] bg-[var(--surface)] p-5 space-y-3">
                 <h2 className="text-[16px] font-semibold text-[var(--error-text)]">{t.deleteAccountTitle}</h2>
                 <p className="text-[13px] text-[var(--text-muted)]">{t.deleteAccountDesc}</p>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                   <input
                     type="text"
                     value={deleteConfirm}
                     onChange={(e) => setDeleteConfirm(e.target.value)}
                     placeholder="HAPUS"
                     aria-label={t.deleteAccountAria}
-                    className="h-8 flex-1 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] px-3 text-[13px] font-mono text-[var(--text)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)] focus:outline-none"
+                    className="h-10 sm:h-8 flex-1 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] px-3 text-[16px] sm:text-[13px] font-mono text-[var(--text)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)] focus:outline-none"
                   />
                   <button
                     type="button"
@@ -960,7 +960,7 @@ export function SettingsView({
                       setDeleteAccountError(null);
                       setConfirmDeleteAccountOpen(true);
                     }}
-                    className="h-8 px-3.5 rounded-[6px] bg-[var(--error-fill)] hover:opacity-90 text-white text-[13px] font-medium disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                    className="h-10 sm:h-8 px-3.5 rounded-[6px] bg-[var(--error-fill)] hover:opacity-90 text-white text-[13px] font-medium disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                   >
                     {t.deleteAccountButton}
                   </button>

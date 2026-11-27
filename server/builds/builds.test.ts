@@ -325,4 +325,43 @@ describe('APK/AAB Build Queue Recovery, Redis Validation & Artifact Lifecycle (F
       delete process.env.CARMEN_APK_WORKER_HEALTH_FILE;
     }
   });
+
+  it('recovers only stale running builds past threshold while preserving active fresh running builds', async () => {
+    const userId = `usr_${crypto.randomUUID().slice(0, 8)}`;
+    const projectId = `prj_${crypto.randomUUID().slice(0, 8)}`;
+    dbMod.db
+      .prepare('INSERT INTO users (id, email, name, password_hash) VALUES (?, ?, ?, ?)')
+      .run(userId, `${userId}@example.com`, 'Stale Sweeper User', 'hash');
+    dbMod.db
+      .prepare(
+        'INSERT INTO projects (id, user_id, name, type, stack, rules, apk_config_json) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      )
+      .run(projectId, userId, 'Stale Sweeper App', 'android', 'Capacitor', '', '{}');
+
+    const nowMs = Date.now();
+    const staleCreated = new Date(nowMs - 20 * 60_000).toISOString();
+    const freshCreated = new Date(nowMs - 30_000).toISOString();
+    const expiresAt = new Date(nowMs + 3_600_000).toISOString();
+    const staleId = `bld_stl_${crypto.randomUUID().slice(0, 6)}`;
+    const freshId = `bld_frs_${crypto.randomUUID().slice(0, 6)}`;
+
+    dbMod.db
+      .prepare(
+        `INSERT INTO builds (id, project_id, type, status, config_json, logs_json, created_at, expires_at) VALUES (?, ?, 'apk', 'running', '{}', '[]', ?, ?)`
+      )
+      .run(staleId, projectId, staleCreated, expiresAt);
+    dbMod.db
+      .prepare(
+        `INSERT INTO builds (id, project_id, type, status, config_json, logs_json, created_at, expires_at) VALUES (?, ?, 'apk', 'running', '{}', '[]', ?, ?)`
+      )
+      .run(freshId, projectId, freshCreated, expiresAt);
+
+    const res = await apkMod.recoverStaleRunningApkBuildsAsync(15 * 60_000, nowMs);
+    assert.equal(res.recoveredStaleRunning, 1);
+
+    const staleRec = await apkMod.getBuildRecordAsync(staleId);
+    const freshRec = await apkMod.getBuildRecordAsync(freshId);
+    assert.equal(staleRec?.status, 'failed');
+    assert.equal(freshRec?.status, 'running');
+  });
 });

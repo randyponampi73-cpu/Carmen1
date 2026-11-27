@@ -311,7 +311,7 @@ export function HomeView({
               )}
 
               {/* Rectangular Prompt Box — 1px border, 2px accent focus ring, no glow */}
-              <div className="mt-5 rounded-[8px] border border-[var(--border-strong)] bg-[var(--surface)] focus-within:ring-2 focus-within:ring-[var(--accent)] focus-within:border-[var(--accent)]">
+              <div className="mt-5 rounded-[10px] border border-[var(--border-strong)] bg-[var(--surface)] focus-within:ring-2 focus-within:ring-[var(--accent)] focus-within:border-[var(--accent)]">
                 <label htmlFor="home-prompt" className="sr-only">
                   {t.heroTitle}
                 </label>
@@ -327,17 +327,17 @@ export function HomeView({
                   }}
                   onKeyDown={handleKeyDown}
                   placeholder={t.promptPlaceholder}
-                  className="w-full resize-none bg-transparent px-4 pt-3.5 pb-2 text-[14px] text-[var(--text)] placeholder:text-[var(--text-muted)] focus:outline-none disabled:opacity-60"
+                  className="w-full resize-none bg-transparent px-3.5 sm:px-4 pt-3.5 pb-2 text-[16px] sm:text-[14px] text-[var(--text)] placeholder:text-[var(--text-muted)] focus:outline-none disabled:opacity-60"
                 />
 
                 {attachedImage && (
-                  <div className="px-4 pb-2 flex items-center gap-2.5 text-[12px] text-[var(--text-muted)]">
+                  <div className="px-3.5 sm:px-4 pb-2 flex items-center gap-2.5 text-[12px] text-[var(--text-muted)]">
                     <img
                       src={attachedImage.previewUrl}
                       alt={attachedImage.name}
                       className="w-8 h-8 object-cover rounded-[6px] border border-[var(--border)] shrink-0"
                     />
-                    <span className="font-mono truncate max-w-[260px] text-[var(--text)]">{attachedImage.name}</span>
+                    <span className="font-mono truncate max-w-[200px] sm:max-w-[260px] text-[var(--text)]">{attachedImage.name}</span>
                     <button
                       type="button"
                       onClick={() => {
@@ -345,26 +345,26 @@ export function HomeView({
                         if (fileInputRef.current) fileInputRef.current.value = '';
                       }}
                       aria-label={t.removeImageAria}
-                      className="h-7 w-7 rounded-[6px] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface-2)] flex items-center justify-center cursor-pointer"
+                      className="h-8 w-8 sm:h-7 sm:w-7 rounded-[6px] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface-2)] flex items-center justify-center cursor-pointer"
                     >
                       <X className="w-3.5 h-3.5" strokeWidth={1.5} />
                     </button>
                   </div>
                 )}
 
-                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] px-3 py-2">
-                  <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-2.5 sm:gap-2 border-t border-[var(--border)] px-3 py-2.5 sm:py-2">
+                  <div className="flex flex-wrap items-center gap-2 min-w-0">
                     {/* Web | Android segmented toggle */}
                     <div
                       role="group"
                       aria-label={t.projectTypeGroupAria}
-                      className="inline-flex items-center rounded-[6px] border border-[var(--border)] bg-[var(--surface-2)] p-0.5"
+                      className="inline-flex items-center rounded-[6px] border border-[var(--border)] bg-[var(--surface-2)] p-0.5 shrink-0"
                     >
                       <button
                         type="button"
                         onClick={() => setProjectType('web')}
                         aria-pressed={projectType === 'web'}
-                        className={`h-7 px-2.5 rounded-[6px] text-[12px] font-medium flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
+                        className={`h-8 sm:h-7 px-2.5 rounded-[5px] text-[12px] font-medium flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
                           projectType === 'web'
                             ? 'bg-[var(--surface)] text-[var(--text)] border border-[var(--border)]'
                             : 'text-[var(--text-muted)] hover:text-[var(--text)]'
@@ -377,7 +377,7 @@ export function HomeView({
                         type="button"
                         onClick={() => setProjectType('android')}
                         aria-pressed={projectType === 'android'}
-                        className={`h-7 px-2.5 rounded-[6px] text-[12px] font-medium flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
+                        className={`h-8 sm:h-7 px-2.5 rounded-[5px] text-[12px] font-medium flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
                           projectType === 'android'
                             ? 'bg-[var(--surface)] text-[var(--text)] border border-[var(--border)]'
                             : 'text-[var(--text-muted)] hover:text-[var(--text)]'
@@ -389,7 +389,7 @@ export function HomeView({
                     </div>
 
                     {/* Model dropdown */}
-                    <div className="w-[260px] max-w-[75vw]">
+                    <div className="flex-1 min-w-[160px] sm:flex-none sm:w-[250px] max-w-full">
                       <ModelSelect
                         ariaLabel={t.selectModelLabel}
                         locale={locale}
@@ -397,7 +397,7 @@ export function HomeView({
                         value={activeModel ? `${activeModel.providerKeyId}::${activeModel.id}` : ''}
                         onChange={onSelectModelKey}
                         showTierFilter
-                        popoverClassName="w-[360px]"
+                        popoverClassName="w-[min(360px,calc(100vw-24px))]"
                       />
                     </div>
 
@@ -421,7 +421,7 @@ export function HomeView({
                             : t.attachImage
                       }
                       aria-label={t.attachImage}
-                      className="h-8 w-8 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] hover:border-[var(--text-muted)] text-[var(--text-muted)] hover:text-[var(--text)] flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                      className="h-10 w-10 sm:h-8 sm:w-8 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] hover:border-[var(--text-muted)] text-[var(--text-muted)] hover:text-[var(--text)] flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer shrink-0"
                     >
                       <ImagePlus className="w-4 h-4" strokeWidth={1.5} />
                     </button>
@@ -432,7 +432,7 @@ export function HomeView({
                     disabled={!hasValidKey || !prompt.trim() || submitting}
                     onClick={() => void handleSubmit()}
                     title={isMac ? t.shortcutHintMac : t.shortcutHintOther}
-                    className="h-8 px-4 rounded-[6px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-[13px] font-medium flex items-center gap-1.5 disabled:opacity-45 disabled:cursor-not-allowed whitespace-nowrap cursor-pointer"
+                    className="h-10 sm:h-8 w-full sm:w-auto px-4 rounded-[6px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-[13px] font-semibold flex items-center justify-center gap-1.5 disabled:opacity-45 disabled:cursor-not-allowed whitespace-nowrap cursor-pointer shrink-0"
                   >
                     {submitting ? (
                       <Loader2 className="w-3.5 h-3.5 animate-spin" strokeWidth={1.5} />
@@ -556,59 +556,93 @@ export function HomeView({
                   </button>
                 </div>
               ) : (
-                <div className="rounded-[8px] border border-[var(--border)] bg-[var(--surface)] overflow-x-auto">
-                  <table aria-label={t.recentProjectsTableAria} className="w-full text-left border-collapse text-[13px]">
-                    <thead>
-                      <tr className="border-b border-[var(--border)] text-[12px] text-[var(--text-muted)]">
-                        <th scope="col" className="py-2.5 px-4 font-medium">{t.colProjectName}</th>
-                        <th scope="col" className="py-2.5 px-3 font-medium">{t.colType}</th>
-                        <th scope="col" className="py-2.5 px-3 font-medium hidden sm:table-cell">{t.colStack}</th>
-                        <th scope="col" className="py-2.5 px-3 font-medium text-right tabular-nums">{t.colFile}</th>
-                        <th scope="col" className="py-2.5 px-4 font-medium text-right">{t.colAction}</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[var(--border)]">
-                      {recentProjects.map((proj) => (
-                        <tr key={proj.id} className="hover:bg-[var(--surface-2)]">
-                          <td className="py-2.5 px-4 font-medium text-[var(--text)]">
-                            <button
-                              type="button"
-                              onClick={() => onOpenProject(proj.id)}
-                              className="hover:underline text-left cursor-pointer"
-                            >
-                              {proj.name}
-                            </button>
-                          </td>
-                          <td className="py-2.5 px-3 text-[var(--text-muted)] whitespace-nowrap">
-                            <span className="inline-flex items-center gap-1.5">
+                <>
+                  {/* Mobile card list (zero horizontal table scroll on 320px-639px) */}
+                  <div className="sm:hidden rounded-[8px] border border-[var(--border)] bg-[var(--surface)] divide-y divide-[var(--border)]">
+                    {recentProjects.map((proj) => (
+                      <button
+                        key={proj.id}
+                        type="button"
+                        onClick={() => onOpenProject(proj.id)}
+                        className="w-full px-3.5 py-3 flex items-center justify-between gap-3 text-left hover:bg-[var(--surface-2)] cursor-pointer min-h-[56px]"
+                      >
+                        <div className="min-w-0 flex-1 space-y-0.5">
+                          <div className="text-[13px] font-semibold text-[var(--text)] truncate">{proj.name}</div>
+                          <div className="text-[12px] text-[var(--text-muted)] flex items-center gap-2 font-mono tabular-nums">
+                            <span className="inline-flex items-center gap-1 font-sans">
                               {proj.type === 'android' ? (
-                                <Smartphone className="w-3.5 h-3.5" strokeWidth={1.5} />
+                                <Smartphone className="w-3 h-3" strokeWidth={1.6} />
                               ) : (
-                                <Globe className="w-3.5 h-3.5" strokeWidth={1.5} />
+                                <Globe className="w-3 h-3" strokeWidth={1.6} />
                               )}
                               <span>{proj.type === 'android' ? t.android : t.web}</span>
                             </span>
-                          </td>
-                          <td className="py-2.5 px-3 text-[var(--text-muted)] hidden sm:table-cell truncate max-w-[260px]">
-                            {proj.stack}
-                          </td>
-                          <td className="py-2.5 px-3 text-right font-mono text-[12px] text-[var(--text-muted)] tabular-nums">
-                            {proj.fileCount}
-                          </td>
-                          <td className="py-2.5 px-4 text-right">
-                            <button
-                              type="button"
-                              onClick={() => onOpenProject(proj.id)}
-                              className="h-7 px-2.5 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface)] hover:border-[var(--text-muted)] text-[12px] font-medium text-[var(--text)] cursor-pointer"
-                            >
-                              {t.open}
-                            </button>
-                          </td>
+                            <span aria-hidden="true">·</span>
+                            <span>{proj.fileCount} {t.colFile.toLowerCase()}</span>
+                          </div>
+                        </div>
+                        <span className="h-8 px-2.5 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] text-[12px] font-medium text-[var(--text)] inline-flex items-center shrink-0">
+                          {t.open}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Desktop & Tablet table */}
+                  <div className="hidden sm:block rounded-[8px] border border-[var(--border)] bg-[var(--surface)] overflow-x-auto">
+                    <table aria-label={t.recentProjectsTableAria} className="w-full text-left border-collapse text-[13px]">
+                      <thead>
+                        <tr className="border-b border-[var(--border)] text-[12px] text-[var(--text-muted)]">
+                          <th scope="col" className="py-2.5 px-4 font-medium">{t.colProjectName}</th>
+                          <th scope="col" className="py-2.5 px-3 font-medium">{t.colType}</th>
+                          <th scope="col" className="py-2.5 px-3 font-medium hidden md:table-cell">{t.colStack}</th>
+                          <th scope="col" className="py-2.5 px-3 font-medium text-right tabular-nums">{t.colFile}</th>
+                          <th scope="col" className="py-2.5 px-4 font-medium text-right">{t.colAction}</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody className="divide-y divide-[var(--border)]">
+                        {recentProjects.map((proj) => (
+                          <tr key={proj.id} className="hover:bg-[var(--surface-2)]">
+                            <td className="py-2.5 px-4 font-medium text-[var(--text)]">
+                              <button
+                                type="button"
+                                onClick={() => onOpenProject(proj.id)}
+                                className="hover:underline text-left cursor-pointer"
+                              >
+                                {proj.name}
+                              </button>
+                            </td>
+                            <td className="py-2.5 px-3 text-[var(--text-muted)] whitespace-nowrap">
+                              <span className="inline-flex items-center gap-1.5">
+                                {proj.type === 'android' ? (
+                                  <Smartphone className="w-3.5 h-3.5" strokeWidth={1.5} />
+                                ) : (
+                                  <Globe className="w-3.5 h-3.5" strokeWidth={1.5} />
+                                )}
+                                <span>{proj.type === 'android' ? t.android : t.web}</span>
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-[var(--text-muted)] hidden md:table-cell truncate max-w-[260px]">
+                              {proj.stack}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono text-[12px] text-[var(--text-muted)] tabular-nums">
+                              {proj.fileCount}
+                            </td>
+                            <td className="py-2.5 px-4 text-right">
+                              <button
+                                type="button"
+                                onClick={() => onOpenProject(proj.id)}
+                                className="h-7 px-2.5 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface)] hover:border-[var(--text-muted)] text-[12px] font-medium text-[var(--text)] cursor-pointer"
+                              >
+                                {t.open}
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
               )}
             </section>
 

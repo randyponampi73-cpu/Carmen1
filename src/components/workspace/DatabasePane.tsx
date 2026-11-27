@@ -56,14 +56,14 @@ export function DatabasePane({ projectId, locale, reloadKey }: DatabasePaneProps
 
   return (
     <div className="h-full flex flex-col sm:flex-row bg-[var(--bg)] min-w-0">
-      <aside className="w-full sm:w-[190px] max-h-40 sm:max-h-none border-b sm:border-b-0 sm:border-r border-[var(--border)] bg-[var(--surface)] flex flex-col shrink-0">
+      <aside className="w-full sm:w-[190px] max-h-36 sm:max-h-none border-b sm:border-b-0 sm:border-r border-[var(--border)] bg-[var(--surface)] flex flex-col shrink-0">
         <div className="h-9 px-3 border-b border-[var(--border)] flex items-center justify-between">
           <span className="text-[12px] font-medium text-[var(--text-muted)]">SQLite</span>
           <button
             type="button"
             onClick={() => void loadTables()}
             aria-label={t.dbRefreshAria}
-            className="h-7 w-7 rounded-[6px] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface-2)] flex items-center justify-center cursor-pointer"
+            className="h-8 w-8 sm:h-7 sm:w-7 rounded-[6px] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface-2)] flex items-center justify-center cursor-pointer"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} strokeWidth={1.5} />
           </button>
@@ -82,7 +82,7 @@ export function DatabasePane({ projectId, locale, reloadKey }: DatabasePaneProps
                 key={tbl.name}
                 type="button"
                 onClick={() => setSelectedTable(tbl.name)}
-                className={`w-full h-8 px-3 flex items-center justify-between text-[12px] font-mono cursor-pointer ${
+                className={`w-full min-h-[36px] sm:min-h-0 sm:h-8 px-3 flex items-center justify-between text-[12px] font-mono cursor-pointer ${
                   active?.name === tbl.name
                     ? 'bg-[var(--surface-2)] text-[var(--text)] font-medium'
                     : 'text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface-2)]'

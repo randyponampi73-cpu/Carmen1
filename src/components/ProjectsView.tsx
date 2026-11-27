@@ -1,17 +1,18 @@
 import {
   Archive,
+  Check,
   Copy,
   Edit3,
   Globe,
   Loader2,
-  MoreHorizontal,
   Plus,
   Search,
   Smartphone,
   Trash2,
   Upload,
+  X,
 } from 'lucide-react';
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
 import { COPY, formatDateTime } from '../i18n';
 import { api } from '../lib/api';
 import type { Locale, ProjectSummary, ProjectType } from '../types';
@@ -42,29 +43,9 @@ export function ProjectsView({ locale, projects, loading, onRefresh, onOpenProje
   const [error, setError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ProjectSummary | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [mobileMenuRowId, setMobileMenuRowId] = useState<string | null>(null);
 
   const zipInputRef = useRef<HTMLInputElement>(null);
   const createTitleId = useId();
-
-  useEffect(() => {
-    if (!mobileMenuRowId) return;
-    function onDocMouseDown(e: MouseEvent) {
-      const target = e.target as HTMLElement | null;
-      if (target && !target.closest('[data-project-row-menu]')) {
-        setMobileMenuRowId(null);
-      }
-    }
-    function onDocKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') setMobileMenuRowId(null);
-    }
-    document.addEventListener('mousedown', onDocMouseDown);
-    document.addEventListener('keydown', onDocKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onDocMouseDown);
-      document.removeEventListener('keydown', onDocKeyDown);
-    };
-  }, [mobileMenuRowId]);
 
   const activeProjectsCount = useMemo(() => projects.filter((p) => !p.archived).length, [projects]);
   const archivedProjectsCount = useMemo(() => projects.filter((p) => p.archived).length, [projects]);
@@ -205,7 +186,7 @@ export function ProjectsView({ locale, projects, loading, onRefresh, onOpenProje
   }
 
   return (
-    <main className="flex-1 overflow-y-auto px-4 sm:px-8 py-6 sm:py-8">
+    <main className="flex-1 overflow-y-auto px-4 sm:px-8 pt-5 pb-24 sm:py-8">
       <div className="mx-auto max-w-[1080px] space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -222,7 +203,7 @@ export function ProjectsView({ locale, projects, loading, onRefresh, onOpenProje
               type="button"
               onClick={() => zipInputRef.current?.click()}
               disabled={busyId === 'import'}
-              className="h-8 px-3 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface)] hover:bg-[var(--surface-2)] text-[13px] font-medium text-[var(--text)] flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50 cursor-pointer"
+              className="h-10 sm:h-8 px-3 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface)] hover:bg-[var(--surface-2)] text-[13px] font-medium text-[var(--text)] flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50 cursor-pointer"
             >
               {busyId === 'import' ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" strokeWidth={1.5} />
@@ -239,7 +220,7 @@ export function ProjectsView({ locale, projects, loading, onRefresh, onOpenProje
                 setNewType('web');
                 setCreateOpen(true);
               }}
-              className="h-8 px-3.5 rounded-[6px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-[13px] font-medium flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+              className="h-10 sm:h-8 px-3.5 rounded-[6px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-[13px] font-medium flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
             >
               <Plus className="w-4 h-4" strokeWidth={1.5} />
               <span>{t.newProject}</span>
@@ -248,8 +229,8 @@ export function ProjectsView({ locale, projects, loading, onRefresh, onOpenProje
         </div>
 
         {/* Search & segmented filter bar */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="relative flex-1 min-w-[220px] max-w-[360px]">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center justify-between gap-2.5 sm:gap-3">
+          <div className="relative w-full sm:flex-1 sm:min-w-[220px] sm:max-w-[360px]">
             <Search
               className="w-4 h-4 text-[var(--text-muted)] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
               strokeWidth={1.5}
@@ -260,14 +241,14 @@ export function ProjectsView({ locale, projects, loading, onRefresh, onOpenProje
               onChange={(e) => setSearch(e.target.value)}
               placeholder={t.searchProjects}
               aria-label={t.searchProjects}
-              className="w-full h-8 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface)] pl-9 pr-3 text-[13px] text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)] focus:outline-none"
+              className="w-full h-10 sm:h-8 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface)] pl-9 pr-3 text-[16px] sm:text-[13px] text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)] focus:outline-none"
             />
           </div>
 
           <div
             role="group"
             aria-label={t.filterProjectsAria}
-            className="inline-flex items-center gap-1 rounded-[6px] border border-[var(--border)] bg-[var(--surface)] p-0.5 overflow-x-auto max-w-full"
+            className="inline-flex items-center gap-1 rounded-[6px] border border-[var(--border)] bg-[var(--surface)] p-0.5 overflow-x-auto no-scrollbar max-w-full"
           >
             {(
               [
@@ -282,7 +263,7 @@ export function ProjectsView({ locale, projects, loading, onRefresh, onOpenProje
                 type="button"
                 aria-pressed={filter === id}
                 onClick={() => setFilter(id)}
-                className={`h-7 px-2.5 rounded-[6px] text-[12px] font-medium whitespace-nowrap cursor-pointer ${
+                className={`h-8 sm:h-7 px-2.5 rounded-[5px] text-[12px] font-medium whitespace-nowrap cursor-pointer ${
                   filter === id
                     ? 'bg-[var(--surface-2)] text-[var(--text)] border border-[var(--border)]'
                     : 'text-[var(--text-muted)] hover:text-[var(--text)]'
@@ -339,64 +320,82 @@ export function ProjectsView({ locale, projects, loading, onRefresh, onOpenProje
             )}
           </div>
         ) : (
-          <div className="rounded-[8px] border border-[var(--border)] bg-[var(--surface)] overflow-x-auto">
-            <table aria-label={t.projectsTableAria} className="w-full text-left border-collapse text-[13px]">
-              <thead>
-                <tr className="border-b border-[var(--border)] text-[12px] text-[var(--text-muted)]">
-                  <th scope="col" className="py-2.5 px-4 font-medium">{t.colName}</th>
-                  <th scope="col" className="py-2.5 px-3 font-medium hidden sm:table-cell">{t.colType}</th>
-                  <th scope="col" className="py-2.5 px-3 font-medium hidden md:table-cell">{t.colStack}</th>
-                  <th scope="col" className="py-2.5 px-3 font-medium text-right tabular-nums">{t.colVersions}</th>
-                  <th scope="col" className="py-2.5 px-3 font-medium hidden sm:table-cell tabular-nums">{t.colUpdated}</th>
-                  <th scope="col" className="py-2.5 px-4 font-medium text-right">{t.colActions}</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--border)]">
-                {filtered.map((proj) => {
-                  const rowBusy = busyId === proj.id;
-                  return (
-                    <tr key={proj.id} className="hover:bg-[var(--surface-2)] group">
-                      <td className="py-2.5 px-4 font-medium text-[var(--text)] max-w-[200px] sm:max-w-[320px]">
-                        {renamingId === proj.id ? (
-                          <form
-                            onSubmit={(e) => {
-                              e.preventDefault();
-                              void handleRenameSubmit(proj.id);
+          <>
+            {/* Mobile dedicated project cards — direct unobstructed actions (no overflow-clipped dropdowns) */}
+            <div className="sm:hidden space-y-2.5" aria-label={t.projectsTableAria}>
+              {filtered.map((proj) => {
+                const rowBusy = busyId === proj.id;
+                return (
+                  <article
+                    key={proj.id}
+                    className="rounded-[8px] border border-[var(--border)] bg-[var(--surface)] p-3.5 space-y-3"
+                  >
+                    <div className="space-y-1.5">
+                      {renamingId === proj.id ? (
+                        <form
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            void handleRenameSubmit(proj.id);
+                          }}
+                          className="flex items-center gap-1.5"
+                        >
+                          <input
+                            autoFocus
+                            value={renameValue}
+                            aria-label={t.projectNameLabel}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Escape') {
+                                e.preventDefault();
+                                renameSubmittingRef.current = true;
+                                setRenamingId(null);
+                                requestAnimationFrame(() => {
+                                  renameSubmittingRef.current = false;
+                                });
+                              }
                             }}
-                            className="flex items-center gap-1.5"
+                            className="flex-1 min-w-0 h-9 rounded-[6px] border border-[var(--accent)] bg-[var(--bg)] px-2.5 text-[16px] text-[var(--text)] focus:ring-2 focus:ring-[var(--accent)] focus:outline-none"
+                          />
+                          <button
+                            type="submit"
+                            disabled={rowBusy || !renameValue.trim()}
+                            aria-label={t.save}
+                            className="h-9 w-9 rounded-[6px] bg-[var(--accent)] text-white flex items-center justify-center shrink-0 disabled:opacity-50 cursor-pointer"
                           >
-                            <input
-                              autoFocus
-                              value={renameValue}
-                              aria-label={t.projectNameLabel}
-                              onChange={(e) => setRenameValue(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Escape') {
-                                  e.preventDefault();
-                                  renameSubmittingRef.current = true;
-                                  setRenamingId(null);
-                                  requestAnimationFrame(() => {
-                                    renameSubmittingRef.current = false;
-                                  });
-                                }
-                              }}
-                              onBlur={() => void handleRenameSubmit(proj.id)}
-                              className="h-7 w-full rounded-[6px] border border-[var(--accent)] bg-[var(--bg)] px-2 text-[13px] text-[var(--text)] focus:ring-2 focus:ring-[var(--accent)] focus:outline-none"
-                            />
-                          </form>
-                        ) : (
+                            <Check className="w-4 h-4" strokeWidth={1.75} />
+                          </button>
+                          <button
+                            type="button"
+                            aria-label={t.cancel}
+                            onClick={() => {
+                              renameSubmittingRef.current = true;
+                              setRenamingId(null);
+                              requestAnimationFrame(() => {
+                                renameSubmittingRef.current = false;
+                              });
+                            }}
+                            className="h-9 w-9 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] text-[var(--text-muted)] flex items-center justify-center shrink-0 cursor-pointer"
+                          >
+                            <X className="w-4 h-4" strokeWidth={1.75} />
+                          </button>
+                        </form>
+                      ) : (
+                        <div className="flex items-start justify-between gap-2">
                           <button
                             type="button"
                             onClick={() => onOpenProject(proj.id)}
-                            title={proj.name}
-                            className="hover:underline text-left truncate max-w-full block cursor-pointer"
+                            className="text-[14px] font-semibold text-[var(--text)] hover:underline text-left truncate min-w-0 flex-1 cursor-pointer"
                           >
                             {proj.name}
                           </button>
-                        )}
-                      </td>
-                      <td className="py-2.5 px-3 text-[var(--text-muted)] whitespace-nowrap hidden sm:table-cell">
-                        <span className="inline-flex items-center gap-1.5">
+                          <span className="font-mono text-[11px] text-[var(--text-muted)] tabular-nums shrink-0 px-1.5 py-0.5 rounded-[4px] border border-[var(--border)] bg-[var(--surface-2)]">
+                            v{proj.versionCount}
+                          </span>
+                        </div>
+                      )}
+
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12px] text-[var(--text-muted)]">
+                        <span className="inline-flex items-center gap-1">
                           {proj.type === 'android' ? (
                             <Smartphone className="w-3.5 h-3.5" strokeWidth={1.5} />
                           ) : (
@@ -404,166 +403,220 @@ export function ProjectsView({ locale, projects, loading, onRefresh, onOpenProje
                           )}
                           <span>{proj.type === 'android' ? t.android : t.web}</span>
                         </span>
-                      </td>
-                      <td className="py-2.5 px-3 text-[var(--text-muted)] hidden md:table-cell truncate max-w-[260px]">
-                        {proj.stack}
-                      </td>
-                      <td className="py-2.5 px-3 text-right font-mono text-[12px] text-[var(--text-muted)] tabular-nums">
-                        v{proj.versionCount}
-                      </td>
-                      <td className="py-2.5 px-3 text-[12px] text-[var(--text-muted)] hidden sm:table-cell tabular-nums whitespace-nowrap">
-                        {formatDateTime(proj.updatedAt, locale)}
-                      </td>
-                      <td className="py-2.5 px-4 text-right">
-                        {/* Desktop & Tablet inline row actions */}
-                        <div className="hidden sm:inline-flex items-center justify-end gap-1">
-                          {rowBusy && <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--text-muted)] mr-1" strokeWidth={1.5} />}
-                          <button
-                            type="button"
-                            disabled={rowBusy}
-                            onClick={() => onOpenProject(proj.id)}
-                            className="h-7 px-2.5 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface)] hover:border-[var(--text-muted)] text-[12px] font-medium text-[var(--text)] disabled:opacity-50 cursor-pointer"
-                          >
-                            {t.open}
-                          </button>
-                          <button
-                            type="button"
-                            disabled={rowBusy}
-                            aria-label={`${t.rename} ${proj.name}`}
-                            title={t.rename}
-                            onClick={() => {
-                              setRenamingId(proj.id);
-                              setRenameValue(proj.name);
-                            }}
-                            className="h-8 w-8 rounded-[6px] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface)] disabled:opacity-50 flex items-center justify-center cursor-pointer"
-                          >
-                            <Edit3 className="w-3.5 h-3.5" strokeWidth={1.5} />
-                          </button>
-                          <button
-                            type="button"
-                            disabled={rowBusy}
-                            aria-label={`${t.duplicate} ${proj.name}`}
-                            title={t.duplicate}
-                            onClick={() => void handleDuplicate(proj)}
-                            className="h-8 w-8 rounded-[6px] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface)] disabled:opacity-50 flex items-center justify-center cursor-pointer"
-                          >
-                            <Copy className="w-3.5 h-3.5" strokeWidth={1.5} />
-                          </button>
-                          <button
-                            type="button"
-                            disabled={rowBusy}
-                            aria-label={`${proj.archived ? t.unarchive : t.archive} ${proj.name}`}
-                            title={proj.archived ? t.unarchive : t.archive}
-                            onClick={() => void handleToggleArchive(proj)}
-                            className="h-8 w-8 rounded-[6px] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface)] disabled:opacity-50 flex items-center justify-center cursor-pointer"
-                          >
-                            <Archive className="w-3.5 h-3.5" strokeWidth={1.5} />
-                          </button>
-                          <button
-                            type="button"
-                            disabled={rowBusy}
-                            aria-label={`${t.delete} ${proj.name}`}
-                            title={t.delete}
-                            onClick={() => {
-                              setDeleteError(null);
-                              setDeleteTarget(proj);
-                            }}
-                            className="h-8 w-8 rounded-[6px] text-[var(--text-muted)] hover:text-[var(--error-text)] hover:bg-[var(--surface)] disabled:opacity-50 flex items-center justify-center cursor-pointer"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" strokeWidth={1.5} />
-                          </button>
-                        </div>
+                        <span aria-hidden="true">·</span>
+                        <span className="tabular-nums">{formatDateTime(proj.updatedAt, locale)}</span>
+                      </div>
+                    </div>
 
-                        {/* Mobile compact row menu */}
-                        <div data-project-row-menu className="relative inline-flex sm:hidden">
-                          <button
-                            type="button"
-                            disabled={rowBusy}
-                            aria-label={`${t.colActions} ${proj.name}`}
-                            aria-haspopup="menu"
-                            aria-expanded={mobileMenuRowId === proj.id}
-                            onClick={() => setMobileMenuRowId((cur) => (cur === proj.id ? null : proj.id))}
-                            className="min-h-[40px] min-w-[40px] rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface)] text-[var(--text)] flex items-center justify-center cursor-pointer"
-                          >
-                            {rowBusy ? (
-                              <Loader2 className="w-4 h-4 animate-spin" strokeWidth={1.5} />
-                            ) : (
-                              <MoreHorizontal className="w-4 h-4" strokeWidth={1.5} />
-                            )}
-                          </button>
-                          {mobileMenuRowId === proj.id && (
-                            <div
-                              role="menu"
-                              className="absolute right-0 top-11 z-40 w-44 rounded-[8px] border border-[var(--border)] bg-[var(--surface)] p-1 text-left space-y-0.5 text-[13px]"
-                              style={{ boxShadow: 'var(--shadow-float)' }}
+                    <div className="pt-2.5 border-t border-[var(--border)] flex items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        disabled={rowBusy}
+                        onClick={() => onOpenProject(proj.id)}
+                        className="h-9 px-3.5 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] hover:border-[var(--text-muted)] text-[13px] font-medium text-[var(--text)] disabled:opacity-50 cursor-pointer"
+                      >
+                        {t.open}
+                      </button>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {rowBusy && (
+                          <Loader2 className="w-4 h-4 animate-spin text-[var(--text-muted)] mr-0.5" strokeWidth={1.5} />
+                        )}
+                        <button
+                          type="button"
+                          disabled={rowBusy}
+                          aria-label={`${t.rename} ${proj.name}`}
+                          title={t.rename}
+                          onClick={() => {
+                            setRenamingId(proj.id);
+                            setRenameValue(proj.name);
+                          }}
+                          className="h-9 w-9 rounded-[6px] border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-muted)] hover:text-[var(--text)] disabled:opacity-50 flex items-center justify-center cursor-pointer"
+                        >
+                          <Edit3 className="w-4 h-4" strokeWidth={1.5} />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={rowBusy}
+                          aria-label={`${t.duplicate} ${proj.name}`}
+                          title={t.duplicate}
+                          onClick={() => void handleDuplicate(proj)}
+                          className="h-9 w-9 rounded-[6px] border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-muted)] hover:text-[var(--text)] disabled:opacity-50 flex items-center justify-center cursor-pointer"
+                        >
+                          <Copy className="w-4 h-4" strokeWidth={1.5} />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={rowBusy}
+                          aria-label={`${proj.archived ? t.unarchive : t.archive} ${proj.name}`}
+                          title={proj.archived ? t.unarchive : t.archive}
+                          onClick={() => void handleToggleArchive(proj)}
+                          className="h-9 w-9 rounded-[6px] border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-muted)] hover:text-[var(--text)] disabled:opacity-50 flex items-center justify-center cursor-pointer"
+                        >
+                          <Archive className="w-4 h-4" strokeWidth={1.5} />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={rowBusy}
+                          aria-label={`${t.delete} ${proj.name}`}
+                          title={t.delete}
+                          onClick={() => {
+                            setDeleteError(null);
+                            setDeleteTarget(proj);
+                          }}
+                          className="h-9 w-9 rounded-[6px] border border-[var(--error)]/40 bg-[var(--surface-2)] text-[var(--error-text)] hover:bg-[var(--error)]/10 disabled:opacity-50 flex items-center justify-center cursor-pointer"
+                        >
+                          <Trash2 className="w-4 h-4" strokeWidth={1.5} />
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+
+            {/* Desktop & Tablet table */}
+            <div className="hidden sm:block rounded-[8px] border border-[var(--border)] bg-[var(--surface)] overflow-x-auto">
+              <table aria-label={t.projectsTableAria} className="w-full text-left border-collapse text-[13px]">
+                <thead>
+                  <tr className="border-b border-[var(--border)] text-[12px] text-[var(--text-muted)]">
+                    <th scope="col" className="py-2.5 px-4 font-medium">{t.colName}</th>
+                    <th scope="col" className="py-2.5 px-3 font-medium">{t.colType}</th>
+                    <th scope="col" className="py-2.5 px-3 font-medium hidden md:table-cell">{t.colStack}</th>
+                    <th scope="col" className="py-2.5 px-3 font-medium text-right tabular-nums">{t.colVersions}</th>
+                    <th scope="col" className="py-2.5 px-3 font-medium tabular-nums">{t.colUpdated}</th>
+                    <th scope="col" className="py-2.5 px-4 font-medium text-right">{t.colActions}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[var(--border)]">
+                  {filtered.map((proj) => {
+                    const rowBusy = busyId === proj.id;
+                    return (
+                      <tr key={proj.id} className="hover:bg-[var(--surface-2)] group">
+                        <td className="py-2.5 px-4 font-medium text-[var(--text)] max-w-[320px]">
+                          {renamingId === proj.id ? (
+                            <form
+                              onSubmit={(e) => {
+                                e.preventDefault();
+                                void handleRenameSubmit(proj.id);
+                              }}
+                              className="flex items-center gap-1.5"
                             >
-                              <button
-                                type="button"
-                                role="menuitem"
-                                onClick={() => {
-                                  setMobileMenuRowId(null);
-                                  onOpenProject(proj.id);
+                              <input
+                                autoFocus
+                                value={renameValue}
+                                aria-label={t.projectNameLabel}
+                                onChange={(e) => setRenameValue(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Escape') {
+                                    e.preventDefault();
+                                    renameSubmittingRef.current = true;
+                                    setRenamingId(null);
+                                    requestAnimationFrame(() => {
+                                      renameSubmittingRef.current = false;
+                                    });
+                                  }
                                 }}
-                                className="w-full h-8 px-2.5 rounded-[6px] hover:bg-[var(--surface-2)] text-[var(--text)] text-left cursor-pointer"
-                              >
-                                {t.open}
-                              </button>
-                              <button
-                                type="button"
-                                role="menuitem"
-                                onClick={() => {
-                                  setMobileMenuRowId(null);
-                                  setRenamingId(proj.id);
-                                  setRenameValue(proj.name);
-                                }}
-                                className="w-full h-8 px-2.5 rounded-[6px] hover:bg-[var(--surface-2)] text-[var(--text)] text-left cursor-pointer"
-                              >
-                                {t.rename}
-                              </button>
-                              <button
-                                type="button"
-                                role="menuitem"
-                                onClick={() => {
-                                  setMobileMenuRowId(null);
-                                  void handleDuplicate(proj);
-                                }}
-                                className="w-full h-8 px-2.5 rounded-[6px] hover:bg-[var(--surface-2)] text-[var(--text)] text-left cursor-pointer"
-                              >
-                                {t.duplicate}
-                              </button>
-                              <button
-                                type="button"
-                                role="menuitem"
-                                onClick={() => {
-                                  setMobileMenuRowId(null);
-                                  void handleToggleArchive(proj);
-                                }}
-                                className="w-full h-8 px-2.5 rounded-[6px] hover:bg-[var(--surface-2)] text-[var(--text)] text-left cursor-pointer"
-                              >
-                                {proj.archived ? t.unarchive : t.archive}
-                              </button>
-                              <button
-                                type="button"
-                                role="menuitem"
-                                onClick={() => {
-                                  setMobileMenuRowId(null);
-                                  setDeleteError(null);
-                                  setDeleteTarget(proj);
-                                }}
-                                className="w-full h-8 px-2.5 rounded-[6px] hover:bg-[var(--surface-2)] text-[var(--error-text)] text-left cursor-pointer"
-                              >
-                                {t.delete}
-                              </button>
-                            </div>
+                                onBlur={() => void handleRenameSubmit(proj.id)}
+                                className="h-7 w-full rounded-[6px] border border-[var(--accent)] bg-[var(--bg)] px-2 text-[13px] text-[var(--text)] focus:ring-2 focus:ring-[var(--accent)] focus:outline-none"
+                              />
+                            </form>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => onOpenProject(proj.id)}
+                              title={proj.name}
+                              className="hover:underline text-left truncate max-w-full block cursor-pointer"
+                            >
+                              {proj.name}
+                            </button>
                           )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                        </td>
+                        <td className="py-2.5 px-3 text-[var(--text-muted)] whitespace-nowrap">
+                          <span className="inline-flex items-center gap-1.5">
+                            {proj.type === 'android' ? (
+                              <Smartphone className="w-3.5 h-3.5" strokeWidth={1.5} />
+                            ) : (
+                              <Globe className="w-3.5 h-3.5" strokeWidth={1.5} />
+                            )}
+                            <span>{proj.type === 'android' ? t.android : t.web}</span>
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 text-[var(--text-muted)] hidden md:table-cell truncate max-w-[260px]">
+                          {proj.stack}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono text-[12px] text-[var(--text-muted)] tabular-nums">
+                          v{proj.versionCount}
+                        </td>
+                        <td className="py-2.5 px-3 text-[12px] text-[var(--text-muted)] tabular-nums whitespace-nowrap">
+                          {formatDateTime(proj.updatedAt, locale)}
+                        </td>
+                        <td className="py-2.5 px-4 text-right">
+                          <div className="inline-flex items-center justify-end gap-1">
+                            {rowBusy && <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--text-muted)] mr-1" strokeWidth={1.5} />}
+                            <button
+                              type="button"
+                              disabled={rowBusy}
+                              onClick={() => onOpenProject(proj.id)}
+                              className="h-7 px-2.5 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface)] hover:border-[var(--text-muted)] text-[12px] font-medium text-[var(--text)] disabled:opacity-50 cursor-pointer"
+                            >
+                              {t.open}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={rowBusy}
+                              aria-label={`${t.rename} ${proj.name}`}
+                              title={t.rename}
+                              onClick={() => {
+                                setRenamingId(proj.id);
+                                setRenameValue(proj.name);
+                              }}
+                              className="h-8 w-8 rounded-[6px] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface)] disabled:opacity-50 flex items-center justify-center cursor-pointer"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" strokeWidth={1.5} />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={rowBusy}
+                              aria-label={`${t.duplicate} ${proj.name}`}
+                              title={t.duplicate}
+                              onClick={() => void handleDuplicate(proj)}
+                              className="h-8 w-8 rounded-[6px] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface)] disabled:opacity-50 flex items-center justify-center cursor-pointer"
+                            >
+                              <Copy className="w-3.5 h-3.5" strokeWidth={1.5} />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={rowBusy}
+                              aria-label={`${proj.archived ? t.unarchive : t.archive} ${proj.name}`}
+                              title={proj.archived ? t.unarchive : t.archive}
+                              onClick={() => void handleToggleArchive(proj)}
+                              className="h-8 w-8 rounded-[6px] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--surface)] disabled:opacity-50 flex items-center justify-center cursor-pointer"
+                            >
+                              <Archive className="w-3.5 h-3.5" strokeWidth={1.5} />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={rowBusy}
+                              aria-label={`${t.delete} ${proj.name}`}
+                              title={t.delete}
+                              onClick={() => {
+                                setDeleteError(null);
+                                setDeleteTarget(proj);
+                              }}
+                              className="h-8 w-8 rounded-[6px] text-[var(--text-muted)] hover:text-[var(--error-text)] hover:bg-[var(--surface)] disabled:opacity-50 flex items-center justify-center cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" strokeWidth={1.5} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
 
@@ -590,7 +643,7 @@ export function ProjectsView({ locale, projects, loading, onRefresh, onOpenProje
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               placeholder={t.projectNamePlaceholder}
-              className="w-full h-9 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] px-3 text-[13px] text-[var(--text)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)] focus:outline-none"
+              className="w-full h-10 sm:h-9 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] px-3 text-[16px] sm:text-[13px] text-[var(--text)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)] focus:outline-none"
             />
           </div>
           <div>
@@ -604,7 +657,7 @@ export function ProjectsView({ locale, projects, loading, onRefresh, onOpenProje
                   type="button"
                   aria-pressed={newType === typeOpt}
                   onClick={() => setNewType(typeOpt)}
-                  className={`h-9 rounded-[6px] border text-[13px] font-medium flex items-center justify-center gap-2 cursor-pointer ${
+                  className={`h-10 sm:h-9 rounded-[6px] border text-[13px] font-medium flex items-center justify-center gap-2 cursor-pointer ${
                     newType === typeOpt
                       ? 'border-[var(--accent)] bg-[var(--surface-2)] text-[var(--text)]'
                       : 'border-[var(--border-strong)] bg-[var(--surface)] text-[var(--text-muted)]'
@@ -635,14 +688,14 @@ export function ProjectsView({ locale, projects, loading, onRefresh, onOpenProje
               type="button"
               disabled={busyId === 'create'}
               onClick={() => setCreateOpen(false)}
-              className="h-8 px-3 rounded-[6px] border border-[var(--border-strong)] text-[13px] text-[var(--text-muted)] hover:text-[var(--text)] disabled:opacity-50 cursor-pointer"
+              className="h-10 sm:h-8 px-3 rounded-[6px] border border-[var(--border-strong)] text-[13px] text-[var(--text-muted)] hover:text-[var(--text)] disabled:opacity-50 cursor-pointer"
             >
               {t.cancel}
             </button>
             <button
               type="submit"
               disabled={busyId === 'create' || !newName.trim()}
-              className="h-8 px-4 rounded-[6px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-[13px] font-medium flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              className="h-10 sm:h-8 px-4 rounded-[6px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-[13px] font-medium flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
             >
               {busyId === 'create' && <Loader2 className="w-3.5 h-3.5 animate-spin" strokeWidth={1.5} />}
               <span>{t.newProject}</span>

@@ -1151,14 +1151,15 @@ export async function cancelApkBuildAsync(
 
 /**
  * Claims and executes the oldest queued build from the shared database (for standalone DB-poll workers).
- * Uses atomic UPDATE ... WHERE status = 'queued' inside processApkBuild to prevent duplicate execution.
+ * Performs an atomic UPDATE ... WHERE status = 'queued' per candidate so concurrent workers
+ * skip already-claimed jobs cleanly instead of starving or double-executing.
  */
 export async function claimAndProcessNextQueuedApkBuildAsync(): Promise<boolean> {
   const candidates = await asyncDb.all<{
     id: string;
     project_id: string;
     config_json: unknown;
-  }>(`SELECT id, project_id, config_json FROM builds WHERE status = 'queued' ORDER BY created_at ASC LIMIT 5`);
+  }>(`SELECT id, project_id, config_json FROM builds WHERE status = 'queued' ORDER BY created_at ASC LIMIT 10`);
 
   for (const row of candidates) {
     if (activeBuildExecutions.has(row.id) || cancelledBuilds.has(row.id)) continue;
@@ -1168,10 +1169,18 @@ export async function claimAndProcessNextQueuedApkBuildAsync(): Promise<boolean>
     if (hadKeystore && !ephemeralLocalSigning.has(row.id)) {
       continue;
     }
+    const claim = await asyncDb.run(
+      `UPDATE builds SET status = 'running' WHERE id = ? AND status = 'queued'`,
+      row.id
+    );
+    if (claim.changes === 0) {
+      // Another worker claimed or cancelled this build first; move to next candidate
+      continue;
+    }
     const signing = ephemeralLocalSigning.get(row.id);
     ephemeralLocalSigning.delete(row.id);
     try {
-      await processApkBuild(row.id, row.project_id, cfg, signing);
+      await processApkBuild(row.id, row.project_id, cfg, signing, undefined, true);
     } finally {
       if (signing) signing.keystoreBuffer.fill(0);
     }
@@ -1186,7 +1195,8 @@ export async function processApkBuild(
   projectId: string,
   config: ApkConfig,
   validatedSigning?: { keystoreBuffer: Buffer; sanitizedCreds: ApkSigningCredentials },
-  encryptedSigning?: string
+  encryptedSigning?: string,
+  preClaimed = false
 ): Promise<void> {
   if (activeBuildExecutions.has(buildId)) {
     return;
@@ -1203,12 +1213,16 @@ export async function processApkBuild(
     return;
   }
 
-  // Atomic DB claim prevents duplicate workers/processes from building the same buildId concurrently
-  const claim = await asyncDb.run(
-    `UPDATE builds SET status = 'running' WHERE id = ? AND status = 'queued'`,
-    buildId
-  );
-  if (claim.changes === 0) {
+  if (!preClaimed) {
+    // Atomic DB claim prevents duplicate workers/processes from building the same buildId concurrently
+    const claim = await asyncDb.run(
+      `UPDATE builds SET status = 'running' WHERE id = ? AND status = 'queued'`,
+      buildId
+    );
+    if (claim.changes === 0) {
+      return;
+    }
+  } else if (existingRow.status !== 'running') {
     return;
   }
 
@@ -1342,13 +1356,21 @@ export async function processApkBuild(
         throw new Error(`Artefak hasil kompilasi ${format.toUpperCase()} kosong atau hilang.`);
       }
       const downloadToken = crypto.randomBytes(24).toString('hex');
-      await asyncDb.run(
-        `UPDATE builds SET status = 'success', artifact_path = ?, download_token = ?, artifact_size_bytes = ? WHERE id = ?`,
+      const finishRes = await asyncDb.run(
+        `UPDATE builds SET status = 'success', artifact_path = ?, download_token = ?, artifact_size_bytes = ? WHERE id = ? AND status = 'running'`,
         artifactPath,
         downloadToken,
         stat.size,
         buildId
       );
+      if (finishRes.changes === 0 || cancelledBuilds.has(buildId)) {
+        try {
+          fs.rmSync(artifactPath, { force: true });
+        } catch {
+          // Ignore cleanup failure
+        }
+        return;
+      }
 
       const label =
         config.buildType === 'release'
@@ -1423,13 +1445,21 @@ export async function processApkBuild(
       return;
     }
 
-    await asyncDb.run(
+    const finishZip = await asyncDb.run(
       `UPDATE builds SET status = 'success', artifact_path = ?, download_token = ?, artifact_size_bytes = ? WHERE id = ? AND status = 'running'`,
       artifactPath,
       downloadToken,
       artifactStat.size,
       buildId
     );
+    if (finishZip.changes === 0 || cancelledBuilds.has(buildId)) {
+      try {
+        fs.rmSync(artifactPath, { force: true });
+      } catch {
+        // Ignore cleanup failure
+      }
+      return;
+    }
 
     await appendBuildLogAsync(
       buildId,
@@ -1522,6 +1552,46 @@ export async function recoverPendingApkBuildsAsync(
   }
 
   return { recoveredRunningFailed, resumedLocalQueued, failedMissingKeystore };
+}
+
+/**
+ * Multi-worker-safe sweeper that marks 'running' builds older than `staleAfterMs` (default 15 minutes)
+ * as failed if they are not actively running in the current process.
+ */
+export async function recoverStaleRunningApkBuildsAsync(
+  staleAfterMs: number = 15 * 60_000,
+  nowMs: number = Date.now()
+): Promise<{ recoveredStaleRunning: number }> {
+  const safeThresholdMs = Math.max(1_000, Math.floor(staleAfterMs));
+  const runningRows = await asyncDb.all<{
+    id: string;
+    created_at: unknown;
+  }>(`SELECT id, created_at FROM builds WHERE status = 'running'`);
+
+  let recoveredStaleRunning = 0;
+  for (const row of runningRows) {
+    if (activeBuildExecutions.has(row.id)) continue;
+    const rawTs = toIsoTimestamp(row.created_at);
+    const normalized = rawTs.includes('T') ? rawTs : `${rawTs.replace(' ', 'T')}Z`;
+    const createdMs = Date.parse(normalized);
+    if (!Number.isFinite(createdMs) || nowMs - createdMs < safeThresholdMs) {
+      continue;
+    }
+    const upd = await asyncDb.run(
+      `UPDATE builds SET status = 'failed' WHERE id = ? AND status = 'running'`,
+      row.id
+    );
+    if (upd.changes > 0) {
+      await appendBuildLogAsync(
+        row.id,
+        'error',
+        'Build melebihi batas waktu maksimum worker dan ditandai gagal otomatis. Silakan jalankan build ulang.',
+        'failed'
+      );
+      recoveredStaleRunning += 1;
+    }
+  }
+  return { recoveredStaleRunning };
 }
 
 /**

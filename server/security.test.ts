@@ -527,6 +527,10 @@ test('isSensitiveHostResourcePath and validateTenantWorkspacePath enforce tenant
 
     fs.symlinkSync(path.join(tenantB, 'secret.txt'), path.join(tenantA, 'src', 'escape.txt'));
     assert.equal(validateTenantWorkspacePath(tenantA, 'src/escape.txt', sandboxesRoot).valid, false);
+
+    // Dangling symlink pointing to non-existent file outside workspace must fail closed
+    fs.symlinkSync(path.join(tenantB, 'future-pwn.txt'), path.join(tenantA, 'src', 'dangling-escape.txt'));
+    assert.equal(validateTenantWorkspacePath(tenantA, 'src/dangling-escape.txt', sandboxesRoot).valid, false);
   } finally {
     fs.rmSync(sandboxesRoot, { recursive: true, force: true });
   }

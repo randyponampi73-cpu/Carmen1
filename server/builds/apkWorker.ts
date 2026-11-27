@@ -10,6 +10,7 @@ import {
   APK_BUILD_QUEUE_NAME,
   claimAndProcessNextQueuedApkBuildAsync,
   processApkBuild,
+  recoverStaleRunningApkBuildsAsync,
   validateRedisConfiguration,
   type ApkBuildJobPayload,
 } from './apkBuilder';
@@ -129,17 +130,29 @@ function createDbPollWorkerInstance(options: { concurrency?: number; pollInterva
     }
   };
 
+  const rawStaleMs = Number(process.env.CARMEN_APK_STALE_MS || 15 * 60_000);
+  const staleAfterMs =
+    Number.isFinite(rawStaleMs) && rawStaleMs >= 60_000 && rawStaleMs <= 4 * 3_600_000
+      ? Math.floor(rawStaleMs)
+      : 15 * 60_000;
+
   syncHeartbeat();
   const pollTimer = setInterval(pollOnce, pollIntervalMs);
   pollTimer.unref();
   const heartbeatTimer = setInterval(() => syncHeartbeat(), 15_000);
   heartbeatTimer.unref();
+  const staleSweepTimer = setInterval(() => {
+    if (closed) return;
+    void recoverStaleRunningApkBuildsAsync(staleAfterMs).catch(() => {});
+  }, 60_000);
+  staleSweepTimer.unref();
   setImmediate(pollOnce);
 
   const close = async () => {
     closed = true;
     clearInterval(pollTimer);
     clearInterval(heartbeatTimer);
+    clearInterval(staleSweepTimer);
     removeHeartbeat(healthFile);
   };
 

@@ -201,7 +201,7 @@ export function CustomSelect({
         aria-activedescendant={activeOptionId}
         onClick={() => !disabled && setOpen((o) => !o)}
         onKeyDown={handleKeyNavigation}
-        className={`w-full h-8 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] hover:border-[var(--text-muted)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] px-2.5 text-[13px] text-[var(--text)] flex items-center justify-between gap-2 text-left cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${triggerClassName}`}
+        className={`w-full h-10 sm:h-8 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] hover:border-[var(--text-muted)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] px-2.5 text-[13px] text-[var(--text)] flex items-center justify-between gap-2 text-left cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${triggerClassName}`}
       >
         <div className="min-w-0 flex-1 flex items-center gap-1.5 truncate">
           {renderTriggerValue ? (
@@ -273,7 +273,7 @@ export function CustomSelect({
                     data-opt-idx={idx}
                     onMouseEnter={() => setActiveIndex(idx)}
                     onClick={() => selectOption(opt)}
-                    className={`w-full min-h-[32px] px-2 py-1.5 rounded-[6px] text-[13px] flex items-center justify-between gap-2 text-left cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                    className={`w-full min-h-[40px] sm:min-h-[32px] px-2.5 sm:px-2 py-2 sm:py-1.5 rounded-[6px] text-[13px] flex items-center justify-between gap-2 text-left cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
                       isSelected || isActive
                         ? 'bg-[var(--surface-2)] text-[var(--text)]'
                         : 'text-[var(--text)] hover:bg-[var(--surface-2)]'
@@ -372,7 +372,7 @@ export function ModelSelect({
   align = 'left',
   compact = false,
   triggerClassName = '',
-  popoverClassName = 'w-[340px]',
+  popoverClassName = 'w-[min(340px,calc(100vw-24px))]',
   showTierFilter = false,
 }: ModelSelectProps) {
   const t = COPY[locale];

@@ -1,10 +1,11 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
-import { AppHeader, type MainRoute } from './components/AppHeader';
+import { AppHeader, MobileBottomNav, type MainRoute } from './components/AppHeader';
 import { AuthView, OnboardingConnectView } from './components/AuthView';
 import { isModelNonChat } from './components/CustomSelect';
 import { HomeView } from './components/HomeView';
 import { ToastContainer } from './components/ToastContainer';
 import { COPY } from './i18n';
+import { useViewportBreakpoints } from './hooks/useMediaQuery';
 import { api, loadLocalOnlyKeys, setDefaultUnauthorizedMessage, setUnauthorizedHandler } from './lib/api';
 import { applyAccentCssVariables, getStoredAccentId, saveStoredAccentId } from './lib/theme';
 import type {
@@ -72,6 +73,7 @@ function getInitialGuestLocale(): Locale {
 }
 
 export default function App() {
+  const { isMobile } = useViewportBreakpoints();
   const [booting, setBooting] = useState(true);
   const [user, setUser] = useState<UserProfile | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -603,7 +605,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-dvh flex flex-col bg-[var(--bg)] text-[var(--text)]">
+    <div className="min-h-dvh flex flex-col bg-[var(--bg)] text-[var(--text)] pb-[62px] sm:pb-0">
       <AppHeader
         user={user}
         route={route}
@@ -698,6 +700,7 @@ export default function App() {
         </Suspense>
       )}
 
+      {isMobile && <MobileBottomNav locale={user.locale} route={route} onNavigate={(next) => setRoute(next)} />}
       {toastPortal}
     </div>
   );

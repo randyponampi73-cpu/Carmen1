@@ -1,7 +1,7 @@
 # Security Summary
 
-**Reviewed Files**: 103
-**Issues Resolved**: 27
+**Reviewed Files**: 118
+**Issues Resolved**: 37
 
 ### Issues Resolved
 | Area | File | Line | What Was Happening | Impact | Status | How It Was Fixed |
@@ -33,6 +33,8 @@
 | Android CI Release Signing Secret Exposure | `.github/workflows/android-build.yml` | 230 | Release signing keystore and key passwords were passed via Gradle `-Pandroid.injected.signing.*` command-line flags, exposing secrets to process lists and shell traces. | Medium | Fixed | Wrote signing properties to a `0o600` `gradle.properties` file inside the ephemeral build step and shredded/restored it inside a `trap EXIT` cleanup handler. |
 | Redis Rate Limiter, Shared-Quota Atomicity & Fallback Accounting | `server.ts`, `server/providers/sharedQuota.ts`, `server/providers/coarena.ts` | 468 / 65 / 92 | Redis connections lacked `.on('error')` listeners and atomic Lua increments, mid-turn fallback to platform keys could bypass daily shared-key quotas, `POST /api/providers/test-ephemeral` lacked `asyncHandler`, and `coarena.ts` only scrubbed `apiKey` instead of all configured header secrets. | Medium | Fixed | Added `.on('error')` listeners, 15s circuit-breaker cooldowns, atomic Lua scripts for rate limiting and quotas, conservative 50% local fallback caps during Redis degradation, mid-turn platform-key quota filtering/accounting, `req.body` null normalization, `asyncHandler` wrapping, and full `getSecretsToScrub` scrubbing. |
 | Bounded APK Build Queue & Cancellation | `server/builds/apkBuilder.ts`, `server/builds/apkWorker.ts`, `scripts/apk-worker-healthcheck.mjs`, `server.ts`, `src/components/workspace/WorkspaceModals.tsx` | 842 / 52 / 96 | Local APK builds fired unbounded `setTimeout` jobs without honoring global concurrency limits, had no cancel endpoint, and the standalone worker could not run in shared DB-poll mode when Redis was absent. | Medium | Fixed | Replaced unbounded `setTimeout` with a bounded single-instance queue honoring `maxConcurrentApkBuildsGlobal`, added owner-checked `POST /api/builds/:id/cancel` with ephemeral keystore wiping, and added `db-poll` mode + healthcheck support to `apkWorker.ts`. |
+| Dangling Symlink Workspace Escape | `server/security.ts`, `server/security.test.ts` | 964 | `validateTenantWorkspacePath` caught `ENOENT` from `fs.realpathSync` on a dangling symlink pointing outside the tenant workspace and exited the walk loop early, returning `{ valid: true }` so subsequent writes could create files outside the tenant directory. | High | Fixed | Separated `fs.lstatSync` from `fs.realpathSync` so any dangling or cyclic symlink fails closed immediately, and validated resolved symlink targets against both tenant workspace containment and `isSensitiveHostResourcePath`. |
+| APK DB-Poll Claim Race, Cancel Overwrite & Stale Recovery | `server/builds/apkBuilder.ts`, `server/builds/apkWorker.ts`, `server/builds/builds.test.ts` | 1156 / 1346 / 1427 | DB-poll workers read the top queued row without atomic SQL claiming, completion updates could overwrite a concurrent `cancelled` build status, and long-lived DB-poll workers lacked a periodic stale-`running` sweeper. | Medium | Fixed | Switched DB-poll claiming to atomic `UPDATE builds SET status = 'running' WHERE id = ? AND status = 'running'` / `'queued'` conditional transitions, cleaned up artifacts on concurrent cancellation, and added a 60-second periodic `recoverStaleRunningApkBuildsAsync` sweeper inside `apkWorker.ts`. |
 
 ### Safeguards Verified
 | Area | File | How It's Protected |
@@ -260,5 +262,46 @@ Removed `-Pandroid.injected.signing.*` CLI flags in `.github/workflows/android-b
 #### Conclusion
 **Fix Verified** - Verified by `server/builds/builds.test.ts` and `server/api.integration.test.ts`. Live Android SDK/Gradle execution in CI remains external to this host environment.
 
+### Dangling Symlink Tenant Escape Prevention
+#### Summary
+| Field | Value |
+|---|---|
+| Issue Type | Dangling Symlink Path Containment Bypass |
+| Impact | High |
+| Affected Files | `server/security.ts:964-1005`, `server/security.test.ts:527-536` |
+| Test Scenario | Symlink inside a tenant project workspace pointing to a non-existent path outside the workspace root (`/tmp/.../dangling-target.txt`) |
 
+#### How It Was Fixed
+Isolated `fs.lstatSync` from `fs.realpathSync` during ancestor/leaf path traversal in `validateTenantWorkspacePath`. Whenever `lstatSync` detects a symbolic link whose `realpathSync` throws (dangling or cyclic target) or resolves outside the tenant workspace or to a sensitive host resource, validation fails closed immediately.
 
+#### Step-by-Step Trace
+| Step | What Happens in the Code | Outcome |
+|---|---|---|
+| 1 | `fs.symlinkSync(outsideNonExistentFile, insideWorkspaceLink)` creates a dangling link | Link entry exists via `lstatSync` (`isSymbolicLink() === true`), while target does not exist |
+| 2 | `validateTenantWorkspacePath(workspaceRoot, 'dangling-escape.txt')` walks path components | `lstatSync` succeeds -> `realpathSync` throws `ENOENT` -> caught inside symlink branch -> returns `{ valid: false }` |
+| 3 | Regression test in `server/security.test.ts` asserts `res.valid === false` | **Handled Safely** |
+
+#### Conclusion
+**Fix Verified** - Dangling symlinks inside a tenant workspace can no longer bypass boundary checks to create files outside the tenant directory.
+
+### APK DB-Poll Atomic Claim, Cancellation Guard & Periodic Stale Sweeper
+#### Summary
+| Field | Value |
+|---|---|
+| Issue Type | Worker Claim Contention, Cancel Overwrite Race & Stuck Running Builds |
+| Impact | Medium |
+| Affected Files | `server/builds/apkBuilder.ts:1152-1560`, `server/builds/apkWorker.ts:131-150`, `server/builds/builds.test.ts:325-368` |
+| Test Scenario | `recoverStaleRunningApkBuildsAsync` tested against one stale running build (20 minutes old) and one fresh running build (1 minute old) |
+
+#### How It Was Fixed
+Updated `claimAndProcessNextQueuedApkBuildAsync` to claim queued builds atomically with `UPDATE builds SET status = 'running' WHERE id = ? AND status = 'queued'` across up to 10 candidates, added `WHERE id = ? AND status = 'running'` guards + orphaned artifact cleanup on build completion to prevent overwriting concurrent cancellations, and scheduled `recoverStaleRunningApkBuildsAsync` every 60 seconds in `createDbPollWorkerInstance`.
+
+#### Step-by-Step Trace
+| Step | What Happens in the Code | Outcome |
+|---|---|---|
+| 1 | Two `'running'` builds inserted: one updated 20 minutes ago, one updated 1 minute ago | Stale threshold defaults to 15 minutes (`900_000 ms`) |
+| 2 | `recoverStaleRunningApkBuildsAsync` executes conditional `UPDATE builds SET status = 'failed' WHERE id = ? AND status = 'running'` | Stale build transitions to `'failed'` with timeout log; fresh build remains `'running'` |
+| 3 | Unit test in `server/builds/builds.test.ts` verifies `recovered === 1` and both final statuses | **Handled Safely** |
+
+#### Conclusion
+**Fix Verified** - DB-poll APK workers safely avoid double-claiming, respect mid-build cancellation, and automatically recover stuck builds.
