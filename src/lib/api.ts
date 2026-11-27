@@ -367,6 +367,8 @@ export const api = {
     }),
   getPreviewHealth: (projectId: string) =>
     request<{ health: PreviewHealthReport }>(`/api/projects/${projectId}/preview-health`),
+  resetPreview: (projectId: string) =>
+    request<{ ok: boolean }>(`/api/projects/${projectId}/preview-reset`, { method: 'POST' }),
   inspectDatabase: (projectId: string) =>
     request<{ tables: DatabaseTableInfo[]; isolation?: DatabaseIsolationInfo }>(`/api/projects/${projectId}/database`),
 

@@ -101,6 +101,7 @@ import {
   detectProjectArchitectureAsync,
   getPreviewIdleTimeoutMs,
   inspectPreviewEntryHealth,
+  invalidatePreviewCache,
   previewLifecycleManager,
   renderPreviewErrorHtml,
   servePreviewStaticAsset,
@@ -3192,10 +3193,13 @@ app.get('/api/projects/:id/preview-health', requireAuth, requireProjectOwner, as
   }
   const backendError = backendStatus?.status === 'error' ? backendStatus.lastError : null;
 
+  const installState = getDependencyInstallState(projectId);
+  const installError = installState.status === 'error' ? installState.error || null : null;
+
   const lastError =
     installingDependencies && !dbError
       ? null
-      : runtimeState.error || dbError || entryError || backendError || null;
+      : runtimeState.error || dbError || entryError || installError || backendError || null;
 
   const status: PreviewHealthReport['status'] =
     installingDependencies && !dbError
@@ -3207,7 +3211,6 @@ app.get('/api/projects/:id/preview-health', requireAuth, requireProjectOwner, as
           : 'running';
 
   const sessionRecord = previewLifecycleManager.getSession(projectId);
-  const installState = getDependencyInstallState(projectId);
   const report: PreviewHealthReport = {
     healthy: status === 'running',
     status,
@@ -3228,6 +3231,18 @@ app.get('/api/projects/:id/preview-health', requireAuth, requireProjectOwner, as
     backend: backendStatus,
   };
   return res.json({ health: report });
+}));
+
+app.post('/api/projects/:id/preview-reset', requireAuth, requireProjectOwner, asyncHandler(async (req: AuthedRequest, res) => {
+  const projectId = req.params.id;
+  invalidatePreviewCache(projectId);
+  invalidateDependencyInstallState(projectId);
+  const backendStatus = backendRuntimeManager.getStatus(projectId);
+  if (backendStatus && backendStatus.status === 'error') {
+    await backendRuntimeManager.stopBackend(projectId);
+  }
+  await projectRuntime.ensureReadyAsync(projectId);
+  return res.json({ ok: true });
 }));
 
 app.get('/api/projects/:id/database', requireAuth, requireProjectOwner, asyncHandler(async (req: AuthedRequest, res) => {
@@ -3817,18 +3832,47 @@ function getPreviewOriginBase(req: Request): { proto: string; host: string; orig
   return { proto, host, origin: `${proto}://${host}` };
 }
 
+function isSafeHttpOrigin(candidate: string): boolean {
+  if (!candidate || candidate.length > 256) return false;
+  try {
+    const u = new URL(candidate);
+    if (u.origin !== candidate) return false;
+    if (u.protocol === 'https:') return true;
+    if (u.protocol === 'http:') {
+      return u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '0.0.0.0';
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 function getTrustedPreviewOrigins(req: Request): Set<string> {
   const origins = new Set<string>();
-  const { origin } = getPreviewOriginBase(req);
+  const { origin, host } = getPreviewOriginBase(req);
   origins.add(origin);
+  if (host && !host.startsWith('localhost') && !host.startsWith('127.0.0.1') && !host.startsWith('0.0.0.0')) {
+    origins.add(`https://${host}`);
+  }
   if (typeof req.headers.host === 'string' && /^[a-zA-Z0-9._:-]+$/.test(req.headers.host)) {
     const proto = isHttpsRequest(req) ? 'https' : 'http';
     origins.add(`${proto}://${req.headers.host}`);
+    if (!req.headers.host.startsWith('localhost') && !req.headers.host.startsWith('127.0.0.1')) {
+      origins.add(`https://${req.headers.host}`);
+    }
   }
   for (const envUrl of [process.env.APP_URL, process.env.PREVIEW_ORIGIN]) {
     if (!envUrl) continue;
     try {
-      origins.add(new URL(envUrl).origin);
+      const parsed = new URL(envUrl);
+      origins.add(parsed.origin);
+      // Pair Google AI Studio dev/pre preview hostnames for the exact same applet ID & region
+      if (/^ais-(dev|pre)-[a-z0-9-]+\.[a-z0-9-]+\.run\.app$/i.test(parsed.hostname)) {
+        const pairedHost = parsed.hostname.startsWith('ais-dev-')
+          ? parsed.hostname.replace(/^ais-dev-/i, 'ais-pre-')
+          : parsed.hostname.replace(/^ais-pre-/i, 'ais-dev-');
+        origins.add(`${parsed.protocol}//${pairedHost}`);
+      }
     } catch {
       // Ignore invalid env URL
     }
@@ -3850,8 +3894,9 @@ function setPreviewCorsHeaders(req: Request, res: Response, allowCredentials = f
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'Content-Type, X-Carmen-Preview-Token, X-Carmen-Preview-Bridge-Nonce, X-Carmen-Preview-Parent-Origin'
+    'Content-Type, X-Carmen-Preview-Token, X-Carmen-Preview-Bridge-Nonce, X-Carmen-Preview-Parent-Origin, X-Carmen-Preview-Request-Id'
   );
+  res.setHeader('Access-Control-Expose-Headers', 'X-Carmen-Preview-State, X-Carmen-Preview-Installing, X-Carmen-Preview-Request-Id');
 }
 
 function getPreviewSessionCookieOptions(req: Request, projectId: string): express.CookieOptions {
@@ -3947,8 +3992,8 @@ function getPreviewConnectAllowlist(): string[] {
     .filter((s) => /^https:\/\/[a-zA-Z0-9._:-]+$/.test(s));
 }
 
-function buildPreviewCspDirectives(req: Request, projectId: string): string[] {
-  const { origin } = getPreviewOriginBase(req);
+function buildPreviewCspDirectives(req: Request, projectId: string, effectiveOrigin?: string): string[] {
+  const origin = effectiveOrigin || getPreviewOriginBase(req).origin;
   const previewBase = `${origin}/preview/${projectId}/`;
   const extraConnect = getPreviewConnectAllowlist();
   const connectSources = [previewBase, ...extraConnect].join(' ');
@@ -3966,20 +4011,25 @@ function buildPreviewCspDirectives(req: Request, projectId: string): string[] {
   ];
 }
 
-function buildPreviewCsp(req: Request, projectId: string): string {
-  const directives = buildPreviewCspDirectives(req, projectId);
-  const trusted = Array.from(getTrustedPreviewOrigins(req)).join(' ');
+function buildPreviewCsp(req: Request, projectId: string, effectiveOrigin?: string): string {
+  const directives = buildPreviewCspDirectives(req, projectId, effectiveOrigin);
+  const trustedSet = getTrustedPreviewOrigins(req);
+  if (effectiveOrigin && isSafeHttpOrigin(effectiveOrigin)) {
+    trustedSet.add(effectiveOrigin);
+  }
+  const trusted = Array.from(trustedSet).join(' ');
   return [...directives, `frame-ancestors ${trusted || "'self'"}`].join('; ');
 }
 
-function buildPreviewMetaCsp(req: Request, projectId: string): string {
+function buildPreviewMetaCsp(req: Request, projectId: string, effectiveOrigin?: string): string {
   // frame-ancestors is ignored/flagged inside <meta http-equiv="Content-Security-Policy">
-  return buildPreviewCspDirectives(req, projectId).join('; ');
+  return buildPreviewCspDirectives(req, projectId, effectiveOrigin).join('; ');
 }
 
 function resolveValidatedBridgeOptions(req: Request, projectId: string): {
   bridgeNonce?: string;
   parentOrigin?: string;
+  effectiveOrigin: string;
   cspMeta: string;
   baseTagHref: string;
 } {
@@ -3995,14 +4045,49 @@ function resolveValidatedBridgeOptions(req: Request, projectId: string): {
       ? req.headers['x-carmen-preview-parent-origin'].trim()
       : '';
   const trusted = getTrustedPreviewOrigins(req);
-  const parentOrigin = rawParentOrigin && trusted.has(rawParentOrigin) ? rawParentOrigin : origin;
+  // Sec-Fetch-Site: same-origin is a browser-enforced forbidden header guaranteeing
+  // the caller's window.location.origin is the exact external origin of this server behind any reverse proxy.
+  const secFetchSite = String(req.headers['sec-fetch-site'] || '').trim().toLowerCase();
+  const isBrowserSameOrigin = secFetchSite === 'same-origin' && isSafeHttpOrigin(rawParentOrigin);
+
+  const parentOrigin =
+    rawParentOrigin && (trusted.has(rawParentOrigin) || isBrowserSameOrigin) ? rawParentOrigin : origin;
+  const effectiveOrigin = !process.env.PREVIEW_ORIGIN ? parentOrigin : origin;
 
   return {
     bridgeNonce,
     parentOrigin,
-    cspMeta: buildPreviewMetaCsp(req, projectId),
-    baseTagHref: `${origin}/preview/${projectId}/`,
+    effectiveOrigin,
+    cspMeta: buildPreviewMetaCsp(req, projectId, effectiveOrigin),
+    baseTagHref: `${effectiveOrigin}/preview/${projectId}/`,
   };
+}
+
+function logPreviewServerEvent(event: {
+  projectId: string;
+  previewRequestId: string;
+  subPath: string;
+  status: number;
+  durationMs: number;
+  lifecycleState?: string;
+  installStatus?: string;
+  reason?: string;
+}): void {
+  if (process.env.NODE_ENV === 'test') return;
+  const safeReason = event.reason ? scrubSecrets(event.reason).slice(0, 200) : undefined;
+  console.info(
+    '[CARMEN PreviewServer]',
+    JSON.stringify({
+      projectId: event.projectId,
+      previewRequestId: event.previewRequestId,
+      subPath: event.subPath,
+      status: event.status,
+      durationMs: Math.round(event.durationMs),
+      lifecycleState: event.lifecycleState,
+      installStatus: event.installStatus,
+      ...(safeReason ? { reason: safeReason } : {}),
+    })
+  );
 }
 
 function rejectUrlTokenPreview(_req: Request, res: Response, projectId: string) {
@@ -4116,9 +4201,19 @@ async function handlePreviewApiDelete(
 }
 
 async function handlePreviewStatic(req: Request, res: Response, projectId: string, rawSub: string) {
+  const startedAt = Date.now();
+  const rawReqId =
+    typeof req.headers['x-carmen-preview-request-id'] === 'string'
+      ? req.headers['x-carmen-preview-request-id'].trim()
+      : '';
+  const previewRequestId = /^[a-zA-Z0-9_-]{4,48}$/.test(rawReqId)
+    ? rawReqId
+    : `prv_${crypto.randomBytes(6).toString('hex')}`;
+  res.setHeader('X-Carmen-Preview-Request-Id', previewRequestId);
+
   setPreviewCorsHeaders(req, res, true);
-  const csp = buildPreviewCsp(req, projectId);
   const bridgeOptions = resolveValidatedBridgeOptions(req, projectId);
+  const csp = buildPreviewCsp(req, projectId, bridgeOptions.effectiveOrigin);
   const auth = await authorizePreviewRequest(req, projectId);
   const isRootRequest = !rawSub || rawSub === '/' || rawSub === 'index.html';
 
@@ -4126,6 +4221,14 @@ async function handlePreviewStatic(req: Request, res: Response, projectId: strin
     res.setHeader('Content-Security-Policy', csp);
     res.setHeader('Cache-Control', 'no-store');
     const errMsg = auth.error || 'Akses pratinjau ditolak.';
+    logPreviewServerEvent({
+      projectId,
+      previewRequestId,
+      subPath: isRootRequest ? 'index.html' : rawSub,
+      status: auth.status,
+      durationMs: Date.now() - startedAt,
+      reason: `auth_failed:${auth.code || 'DENIED'}`,
+    });
     if (isRootRequest) {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       return res.status(auth.status).send(
@@ -4174,14 +4277,34 @@ async function handlePreviewStatic(req: Request, res: Response, projectId: strin
     previewBasePath,
     token: '',
     bridgeOptions,
+    deferMissingDependencyInstall: isRootRequest,
   });
 
-  if (touch) {
-    res.setHeader('X-Carmen-Preview-State', touch.wokeFromSleep ? 'waking' : touch.state);
+  const lifecycleState = touch ? (touch.wokeFromSleep ? 'waking' : touch.state) : undefined;
+  if (lifecycleState) {
+    res.setHeader('X-Carmen-Preview-State', lifecycleState);
+  }
+  if (result.installing) {
+    res.setHeader('X-Carmen-Preview-Installing', '1');
   }
   res.setHeader('Content-Type', result.contentType);
   res.setHeader('Content-Security-Policy', csp);
   res.setHeader('Cache-Control', 'no-store');
+
+  if (isRootRequest || result.status >= 400 || result.installing) {
+    const installState = getDependencyInstallState(projectId);
+    logPreviewServerEvent({
+      projectId,
+      previewRequestId,
+      subPath: cleanedSub,
+      status: result.status,
+      durationMs: Date.now() - startedAt,
+      lifecycleState,
+      installStatus: installState.status,
+      reason: result.installing ? 'installing_deps' : result.errorReason,
+    });
+  }
+
   return res.status(result.status).send(result.body);
 }
 

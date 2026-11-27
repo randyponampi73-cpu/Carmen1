@@ -1464,7 +1464,7 @@ export function injectPreviewRuntimeBridge(
   const safeNonce = serializeJsForHtmlScript(opts?.bridgeNonce || '');
   const safeParentOrigin = serializeJsForHtmlScript(opts?.parentOrigin || '');
 
-  const bridge = `<script>(function(){var PID=${safeProjectId},BASE=${safeBasePath},ABS_BASE=${safeAssetBaseHref},NONCE=${safeNonce},PARENT_ORIGIN=${safeParentOrigin},sentErr=false,sentReady=false,origFetch=window.fetch,pendingFetches={},pendingAssets={};function post(payload){try{if(window.parent&&window.parent!==window){if(NONCE&&payload&&typeof payload==='object'){payload.bridgeNonce=NONCE;}var target=(PARENT_ORIGIN&&PARENT_ORIGIN!=='null')?PARENT_ORIGIN:(window.location.origin&&window.location.origin!=='null'?window.location.origin:'*');window.parent.postMessage(payload,target);}}catch(_){}}function sendErr(msg,extra){sentErr=true;var m=String(msg||'Runtime error').slice(0,500);var p={type:'carmen-preview-error',projectId:PID,message:m};if(extra&&extra.code)p.code=extra.code;if(extra&&typeof extra.status==='number')p.status=extra.status;post(p);}function rewriteRootUrl(val){if(typeof val!=='string')return val;if(val.length>1&&val.charAt(0)==='/'&&val.charAt(1)!=='/'&&val.indexOf('/preview/')!==0&&val.indexOf('/api/')!==0){return ABS_BASE+val.slice(1);}return val;}try{var origSetAttr=Element.prototype.setAttribute;Element.prototype.setAttribute=function(name,value){if(typeof name==='string'&&(name==='src'||name==='poster')&&typeof value==='string'){var t=this.tagName;if(t==='IMG'||t==='SOURCE'||t==='VIDEO'||t==='AUDIO'||t==='TRACK'){value=rewriteRootUrl(value);}}return origSetAttr.call(this,name,value);};[typeof HTMLImageElement!=='undefined'?HTMLImageElement.prototype:null,typeof HTMLMediaElement!=='undefined'?HTMLMediaElement.prototype:null,typeof HTMLSourceElement!=='undefined'?HTMLSourceElement.prototype:null].forEach(function(proto){if(!proto)return;var desc=Object.getOwnPropertyDescriptor(proto,'src');if(desc&&desc.set&&desc.get){Object.defineProperty(proto,'src',{configurable:true,enumerable:desc.enumerable,get:function(){return desc.get.call(this);},set:function(v){return desc.set.call(this,rewriteRootUrl(v));}});}});}catch(_){}window.addEventListener('message',function(ev){if(!ev||ev.source!==window.parent)return;if(PARENT_ORIGIN&&ev.origin!==PARENT_ORIGIN)return;var d=ev.data;if(!d||typeof d!=='object'||d.projectId!==PID||!d.reqId)return;if(NONCE&&d.bridgeNonce!==NONCE)return;if(d.type==='carmen-preview-fetch-result'){var entry=pendingFetches[d.reqId];if(!entry)return;delete pendingFetches[d.reqId];clearTimeout(entry.timer);if(d.error){entry.reject(new Error(d.error));return;}var headers=new Headers({'Content-Type':d.contentType||'application/json'});entry.resolve(new Response(d.body||'',{status:d.status||200,headers:headers}));return;}if(d.type==='carmen-preview-asset-result'){var aEntry=pendingAssets[d.reqId];if(!aEntry)return;delete pendingAssets[d.reqId];clearTimeout(aEntry.timer);aEntry.resolve(d);}});function proxyFetchThroughParent(apiPath,init){return new Promise(function(resolve,reject){if(!window.parent||window.parent===window){reject(new Error('Parent bridge unavailable'));return;}var reqId='cpf_'+Math.random().toString(36).slice(2)+Date.now().toString(36);var timer=setTimeout(function(){delete pendingFetches[reqId];reject(new Error('Preview API bridge timeout'));},12000);pendingFetches[reqId]={resolve:resolve,reject:reject,timer:timer};var bodyStr;if(init&&typeof init.body==='string'){bodyStr=init.body;}else if(init&&init.body!=null){try{bodyStr=String(init.body);}catch(_){bodyStr='';}}post({type:'carmen-preview-fetch',projectId:PID,reqId:reqId,apiPath:apiPath,method:(init&&init.method)||'GET',body:bodyStr});});}function proxyAssetThroughParent(assetPath){return new Promise(function(resolve){if(!window.parent||window.parent===window){resolve({ok:false});return;}var reqId='cpa_'+Math.random().toString(36).slice(2)+Date.now().toString(36);var timer=setTimeout(function(){delete pendingAssets[reqId];resolve({ok:false});},10000);pendingAssets[reqId]={resolve:resolve,timer:timer};post({type:'carmen-preview-asset',projectId:PID,reqId:reqId,assetPath:assetPath});});}function extractPreviewApiPath(rawUrl){if(typeof rawUrl!=='string')return null;if(rawUrl.indexOf('/api/')===0&&rawUrl.indexOf('/preview/')!==0)return 'api/'+rawUrl.slice(5);if(rawUrl.indexOf('./api/')===0)return 'api/'+rawUrl.slice(6);if(rawUrl.indexOf('api/')===0)return rawUrl;var bIdx=rawUrl.indexOf(BASE+'api/');if(bIdx!==-1)return 'api/'+rawUrl.slice(bIdx+(BASE+'api/').length);if(ABS_BASE&&ABS_BASE!==BASE){var abIdx=rawUrl.indexOf(ABS_BASE+'api/');if(abIdx!==-1)return 'api/'+rawUrl.slice(abIdx+(ABS_BASE+'api/').length);}return null;}if(typeof origFetch==='function'){window.fetch=function(input,init){var rawUrl=typeof input==='string'?input:(input&&typeof Request!=='undefined'&&input instanceof Request?input.url:'');var apiPath=extractPreviewApiPath(rawUrl);if(apiPath&&window.location&&window.location.protocol==='about:'&&window.parent&&window.parent!==window){return proxyFetchThroughParent(apiPath,init);}var rewrittenInput=input;try{if(typeof input==='string'&&input.indexOf('/api/')===0&&input.indexOf('/preview/')!==0){rewrittenInput=ABS_BASE+input.slice(1);}else if(input&&typeof Request!=='undefined'&&input instanceof Request){var u=input.url;var idx=u.indexOf('/api/');if(idx>0&&u.indexOf('/preview/')===-1&&u.indexOf(window.location.origin)===0){rewrittenInput=new Request(ABS_BASE+u.slice(idx+1),input);}}}catch(_){}var p=origFetch.call(this,rewrittenInput,init);if(!apiPath)return p;return p.then(function(resp){var ct=(resp.headers&&resp.headers.get('content-type'))||'';if((resp.redirected&&resp.url&&resp.url.indexOf('/preview/')===-1)||ct.indexOf('text/html')!==-1){return proxyFetchThroughParent(apiPath,init);}return resp;}).catch(function(err){if(window.parent&&window.parent!==window){return proxyFetchThroughParent(apiPath,init);}throw err;});};}window.addEventListener('error',function(e){if(!e)return;if(e.target&&e.target!==window){var tag=String(e.target.tagName||'').toUpperCase();var url=e.target.src||e.target.href||'';if(!url)return;if(tag==='LINK'){var rel=String(e.target.rel||'').toLowerCase();if(rel!=='stylesheet')return;}if(tag==='IMG'&&(url.indexOf(BASE)!==-1||(ABS_BASE&&url.indexOf(ABS_BASE)!==-1))&&!e.target.getAttribute('data-carmen-retried')&&window.parent&&window.parent!==window){var matchedBase=(ABS_BASE&&url.indexOf(ABS_BASE)!==-1)?ABS_BASE:BASE;var assetIdx=url.indexOf(matchedBase);var relAsset=url.slice(assetIdx+matchedBase.length).split(/[?#]/)[0];if(relAsset){e.target.setAttribute('data-carmen-retried','1');proxyAssetThroughParent(relAsset).then(function(res){if(res&&res.ok&&res.dataUrl){e.target.src=res.dataUrl;return;}sendErr('Gagal memuat resource img: '+url,{status:res&&res.status});});return;}}if(tag==='SCRIPT'||tag==='LINK'||tag==='IMG'){if(typeof origFetch==='function'&&url.indexOf(BASE)!==-1&&window.location&&window.location.protocol!=='about:'){origFetch.call(window,url).then(function(r){if(!r.ok){return r.text().then(function(txt){sendErr('Gagal memuat '+tag.toLowerCase()+': '+url+' (HTTP '+r.status+')'+(txt?' — '+txt.slice(0,220):''),{status:r.status});});}sendErr('Gagal memuat resource '+tag.toLowerCase()+': '+url);}).catch(function(){sendErr('Gagal memuat resource '+tag.toLowerCase()+': '+url);});}else{sendErr('Gagal memuat resource '+tag.toLowerCase()+': '+url);}return;}}sendErr((e&&e.message)||'Uncaught error');},true);window.addEventListener('unhandledrejection',function(e){var r=e&&e.reason;sendErr((r&&r.message)||String(r||'Unhandled rejection'));});window.addEventListener('securitypolicyviolation',function(e){var dir=(e&&e.violatedDirective)||'CSP';var uri=(e&&e.blockedURI)||'inline';sendErr('CSP memblokir '+dir+': '+uri);});function hasMountedContent(){var root=document.getElementById('root')||document.getElementById('app');if(root&&root.children.length>0)return true;if(document.body){var txt=(document.body.innerText||'').trim();if(txt.length>0)return true;var els=document.body.querySelectorAll('canvas,svg,img,video,iframe,input,button,form,table');if(els.length>0)return true;for(var i=0;i<document.body.children.length;i++){var ch=document.body.children[i];if(ch.tagName!=='SCRIPT'&&ch.tagName!=='STYLE'&&ch.id!=='root'&&ch.id!=='app')return true;}}return false;}function checkMount(){if(sentErr||sentReady)return;if(hasMountedContent()){sentReady=true;post({type:'carmen-preview-ready',projectId:PID});return;}var hasRoot=!!(document.getElementById('root')||document.getElementById('app'));var hasModule=!!document.querySelector('script[type="module"]');if(hasRoot&&hasModule){setTimeout(function(){if(sentErr||sentReady)return;if(hasMountedContent()){sentReady=true;post({type:'carmen-preview-ready',projectId:PID});}else{sendErr('Aplikasi dimuat tetapi tidak merender konten (#root kosong). Periksa error mount React atau console.');}},450);}else{sentReady=true;post({type:'carmen-preview-ready',projectId:PID});}}if(document.readyState==='complete'){setTimeout(checkMount,80);}else{window.addEventListener('load',function(){setTimeout(checkMount,120);});}})();</script>`;
+  const bridge = `<script>(function(){var PID=${safeProjectId},BASE=${safeBasePath},ABS_BASE=${safeAssetBaseHref},NONCE=${safeNonce},PARENT_ORIGIN=${safeParentOrigin},BOOT_AT=Date.now(),sentErr=false,sentReady=false,mountObserver=null,graceTimer=null,origFetch=window.fetch,pendingFetches={},pendingAssets={};function post(payload){try{if(window.parent&&window.parent!==window){if(NONCE&&payload&&typeof payload==='object'){payload.bridgeNonce=NONCE;}var target=(PARENT_ORIGIN&&PARENT_ORIGIN!=='null')?PARENT_ORIGIN:(window.location.origin&&window.location.origin!=='null'?window.location.origin:'*');window.parent.postMessage(payload,target);}}catch(_){}}function stopMountWatchers(){try{if(mountObserver){mountObserver.disconnect();mountObserver=null;}}catch(_){}if(graceTimer){clearTimeout(graceTimer);graceTimer=null;}}function emitReady(){if(sentErr||sentReady)return;sentReady=true;stopMountWatchers();post({type:'carmen-preview-ready',projectId:PID,mountTimeMs:Math.max(0,Date.now()-BOOT_AT)});}function sendErr(msg,extra){sentErr=true;stopMountWatchers();var m=String(msg||'Runtime error').slice(0,500);var p={type:'carmen-preview-error',projectId:PID,message:m};if(extra&&extra.code)p.code=extra.code;if(extra&&typeof extra.status==='number')p.status=extra.status;post(p);}function rewriteRootUrl(val){if(typeof val!=='string')return val;if(val.length>1&&val.charAt(0)==='/'&&val.charAt(1)!=='/'&&val.indexOf('/preview/')!==0&&val.indexOf('/api/')!==0){return ABS_BASE+val.slice(1);}return val;}try{var origSetAttr=Element.prototype.setAttribute;Element.prototype.setAttribute=function(name,value){if(typeof name==='string'&&(name==='src'||name==='poster')&&typeof value==='string'){var t=this.tagName;if(t==='IMG'||t==='SOURCE'||t==='VIDEO'||t==='AUDIO'||t==='TRACK'){value=rewriteRootUrl(value);}}return origSetAttr.call(this,name,value);};[typeof HTMLImageElement!=='undefined'?HTMLImageElement.prototype:null,typeof HTMLMediaElement!=='undefined'?HTMLMediaElement.prototype:null,typeof HTMLSourceElement!=='undefined'?HTMLSourceElement.prototype:null].forEach(function(proto){if(!proto)return;var desc=Object.getOwnPropertyDescriptor(proto,'src');if(desc&&desc.set&&desc.get){Object.defineProperty(proto,'src',{configurable:true,enumerable:desc.enumerable,get:function(){return desc.get.call(this);},set:function(v){return desc.set.call(this,rewriteRootUrl(v));}});}});}catch(_){}window.addEventListener('message',function(ev){if(!ev||ev.source!==window.parent)return;if(PARENT_ORIGIN&&ev.origin!==PARENT_ORIGIN)return;var d=ev.data;if(!d||typeof d!=='object'||d.projectId!==PID||!d.reqId)return;if(NONCE&&d.bridgeNonce!==NONCE)return;if(d.type==='carmen-preview-fetch-result'){var entry=pendingFetches[d.reqId];if(!entry)return;delete pendingFetches[d.reqId];clearTimeout(entry.timer);if(d.error){entry.reject(new Error(d.error));return;}var headers=new Headers({'Content-Type':d.contentType||'application/json'});entry.resolve(new Response(d.body||'',{status:d.status||200,headers:headers}));return;}if(d.type==='carmen-preview-asset-result'){var aEntry=pendingAssets[d.reqId];if(!aEntry)return;delete pendingAssets[d.reqId];clearTimeout(aEntry.timer);aEntry.resolve(d);}});function proxyFetchThroughParent(apiPath,init){return new Promise(function(resolve,reject){if(!window.parent||window.parent===window){reject(new Error('Parent bridge unavailable'));return;}var reqId='cpf_'+Math.random().toString(36).slice(2)+Date.now().toString(36);var timer=setTimeout(function(){delete pendingFetches[reqId];reject(new Error('Preview API bridge timeout'));},12000);pendingFetches[reqId]={resolve:resolve,reject:reject,timer:timer};var bodyStr;if(init&&typeof init.body==='string'){bodyStr=init.body;}else if(init&&init.body!=null){try{bodyStr=String(init.body);}catch(_){bodyStr='';}}post({type:'carmen-preview-fetch',projectId:PID,reqId:reqId,apiPath:apiPath,method:(init&&init.method)||'GET',body:bodyStr});});}function proxyAssetThroughParent(assetPath){return new Promise(function(resolve){if(!window.parent||window.parent===window){resolve({ok:false});return;}var reqId='cpa_'+Math.random().toString(36).slice(2)+Date.now().toString(36);var timer=setTimeout(function(){delete pendingAssets[reqId];resolve({ok:false});},10000);pendingAssets[reqId]={resolve:resolve,timer:timer};post({type:'carmen-preview-asset',projectId:PID,reqId:reqId,assetPath:assetPath});});}function extractPreviewApiPath(rawUrl){if(typeof rawUrl!=='string')return null;if(rawUrl.indexOf('/api/')===0&&rawUrl.indexOf('/preview/')!==0)return 'api/'+rawUrl.slice(5);if(rawUrl.indexOf('./api/')===0)return 'api/'+rawUrl.slice(6);if(rawUrl.indexOf('api/')===0)return rawUrl;var bIdx=rawUrl.indexOf(BASE+'api/');if(bIdx!==-1)return 'api/'+rawUrl.slice(bIdx+(BASE+'api/').length);if(ABS_BASE&&ABS_BASE!==BASE){var abIdx=rawUrl.indexOf(ABS_BASE+'api/');if(abIdx!==-1)return 'api/'+rawUrl.slice(abIdx+(ABS_BASE+'api/').length);}return null;}if(typeof origFetch==='function'){window.fetch=function(input,init){var rawUrl=typeof input==='string'?input:(input&&typeof Request!=='undefined'&&input instanceof Request?input.url:'');var apiPath=extractPreviewApiPath(rawUrl);if(apiPath&&window.location&&window.location.protocol==='about:'&&window.parent&&window.parent!==window){return proxyFetchThroughParent(apiPath,init);}var rewrittenInput=input;try{if(typeof input==='string'&&input.indexOf('/api/')===0&&input.indexOf('/preview/')!==0){rewrittenInput=ABS_BASE+input.slice(1);}else if(input&&typeof Request!=='undefined'&&input instanceof Request){var u=input.url;var idx=u.indexOf('/api/');if(idx>0&&u.indexOf('/preview/')===-1&&u.indexOf(window.location.origin)===0){rewrittenInput=new Request(ABS_BASE+u.slice(idx+1),input);}}}catch(_){}var p=origFetch.call(this,rewrittenInput,init);if(!apiPath)return p;return p.then(function(resp){var ct=(resp.headers&&resp.headers.get('content-type'))||'';if((resp.redirected&&resp.url&&resp.url.indexOf('/preview/')===-1)||ct.indexOf('text/html')!==-1){return proxyFetchThroughParent(apiPath,init);}return resp;}).catch(function(err){if(window.parent&&window.parent!==window){return proxyFetchThroughParent(apiPath,init);}throw err;});};}window.addEventListener('error',function(e){if(!e)return;if(e.target&&e.target!==window){var tag=String(e.target.tagName||'').toUpperCase();var url=e.target.src||e.target.href||'';if(!url)return;if(tag==='LINK'){var rel=String(e.target.rel||'').toLowerCase();if(rel!=='stylesheet')return;}if(tag==='IMG'&&(url.indexOf(BASE)!==-1||(ABS_BASE&&url.indexOf(ABS_BASE)!==-1))&&!e.target.getAttribute('data-carmen-retried')&&window.parent&&window.parent!==window){var matchedBase=(ABS_BASE&&url.indexOf(ABS_BASE)!==-1)?ABS_BASE:BASE;var assetIdx=url.indexOf(matchedBase);var relAsset=url.slice(assetIdx+matchedBase.length).split(/[?#]/)[0];if(relAsset){e.target.setAttribute('data-carmen-retried','1');proxyAssetThroughParent(relAsset).then(function(res){if(res&&res.ok&&res.dataUrl){e.target.src=res.dataUrl;return;}sendErr('Gagal memuat resource img: '+url,{status:res&&res.status});});return;}}if(tag==='SCRIPT'||tag==='LINK'||tag==='IMG'){if(typeof origFetch==='function'&&url.indexOf(BASE)!==-1&&window.location&&window.location.protocol!=='about:'){origFetch.call(window,url).then(function(r){if(!r.ok){return r.text().then(function(txt){sendErr('Gagal memuat '+tag.toLowerCase()+': '+url+' (HTTP '+r.status+')'+(txt?' — '+txt.slice(0,220):''),{status:r.status});});}sendErr('Gagal memuat resource '+tag.toLowerCase()+': '+url);}).catch(function(){sendErr('Gagal memuat resource '+tag.toLowerCase()+': '+url);});}else{sendErr('Gagal memuat resource '+tag.toLowerCase()+': '+url);}return;}}sendErr((e&&e.message)||'Uncaught error');},true);window.addEventListener('unhandledrejection',function(e){var r=e&&e.reason;sendErr((r&&r.message)||String(r||'Unhandled rejection'));});window.addEventListener('securitypolicyviolation',function(e){var dir=(e&&e.violatedDirective)||'CSP';var uri=(e&&e.blockedURI)||'inline';sendErr('CSP memblokir '+dir+': '+uri);});function hasMountedContent(){var root=document.getElementById('root')||document.getElementById('app');if(root&&root.children.length>0)return true;if(document.body){var txt=(document.body.innerText||'').trim();if(txt.length>0)return true;var els=document.body.querySelectorAll('canvas,svg,img,video,iframe,input,button,form,table');if(els.length>0)return true;for(var i=0;i<document.body.children.length;i++){var ch=document.body.children[i];if(ch.tagName!=='SCRIPT'&&ch.tagName!=='STYLE'&&ch.id!=='root'&&ch.id!=='app')return true;}}return false;}function startMountWatch(){if(sentErr||sentReady)return;if(hasMountedContent()){emitReady();return;}var rootEl=document.getElementById('root')||document.getElementById('app');var hasModule=!!document.querySelector('script[type="module"]');if(!rootEl||!hasModule){emitReady();return;}if(typeof MutationObserver==='function'&&!mountObserver){try{mountObserver=new MutationObserver(function(){if(hasMountedContent()){emitReady();}});mountObserver.observe(document.body||rootEl,{childList:true,subtree:true});}catch(_){}}if(!graceTimer){graceTimer=setTimeout(function(){if(sentErr||sentReady)return;if(hasMountedContent()){emitReady();}else{sendErr('Aplikasi dimuat tetapi tidak merender konten (#root kosong). Periksa error mount React atau console.');}},2500);}}if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',function(){setTimeout(startMountWatch,30);});window.addEventListener('load',function(){if(!sentReady&&!sentErr)startMountWatch();});}else{setTimeout(startMountWatch,30);}})();</script>`;
 
   const cspMetaTag = opts?.cspMeta
     ? `<meta http-equiv="Content-Security-Policy" content="${escapeHtml(opts.cspMeta)}" />`
@@ -1601,6 +1601,10 @@ export interface PreviewStaticResult {
   status: number;
   contentType: string;
   body: Buffer | string;
+  installing?: boolean;
+  packageManager?: 'npm' | 'bun';
+  missingPackages?: string[];
+  errorReason?: string;
 }
 
 function escapeScriptBody(js: string): string {
@@ -1609,6 +1613,92 @@ function escapeScriptBody(js: string): string {
 
 function escapeStyleBody(css: string): string {
   return css.replace(/<\/(style)/gi, '<\\/$1');
+}
+
+async function bundleDistModuleEntry(
+  projectId: string,
+  resolvedDistRelPath: string,
+  workspaceDir: string,
+  sourceHash: string
+): Promise<CachedBundle> {
+  const cacheKey = `${projectId}:dist:${resolvedDistRelPath}:${sourceHash}`;
+  const cached = bundleCache.get(cacheKey);
+  if (cached) return cached;
+
+  let realWorkspaceDir: string;
+  try {
+    realWorkspaceDir = fs.realpathSync(workspaceDir);
+  } catch {
+    return { ok: false, error: 'Direktori workspace proyek belum siap.' };
+  }
+
+  const candidateEntry = path.resolve(realWorkspaceDir, resolvedDistRelPath);
+  if (!candidateEntry.startsWith(realWorkspaceDir + path.sep)) {
+    return { ok: false, error: 'Path bundle dist di luar workspace ditolak.' };
+  }
+  let realEntry: string;
+  try {
+    const lstat = fs.lstatSync(candidateEntry);
+    if (!lstat.isFile() || lstat.isSymbolicLink()) {
+      return { ok: false, error: `Bundle dist tidak ditemukan: ${resolvedDistRelPath}` };
+    }
+    realEntry = fs.realpathSync(candidateEntry);
+    if (!realEntry.startsWith(realWorkspaceDir + path.sep)) {
+      return { ok: false, error: 'Path bundle dist tidak valid.' };
+    }
+  } catch {
+    return { ok: false, error: `Bundle dist tidak ditemukan: ${resolvedDistRelPath}` };
+  }
+
+  const distRootDir = path.dirname(realEntry);
+  const distConfinementPlugin: esbuild.Plugin = {
+    name: 'carmen-preview-dist-confinement',
+    setup(build) {
+      build.onResolve({ filter: /.*/ }, (args) => {
+        if (args.kind === 'entry-point') return { path: realEntry };
+        const spec = args.path;
+        if (!spec || /^(https?:\/\/|data:|blob:)/i.test(spec) || spec.startsWith('/preview/')) {
+          return { path: spec, external: true };
+        }
+        if (spec.startsWith('.') || spec.startsWith('/')) {
+          const base = spec.startsWith('/') ? realWorkspaceDir : args.resolveDir || distRootDir;
+          const clean = (spec.startsWith('/') ? spec.slice(1) : spec).split(/[?#]/)[0];
+          const resolved = resolveInsideWorkspace(realWorkspaceDir, base, `./${clean}`);
+          if (resolved) return { path: resolved };
+          return { errors: [{ text: `Chunk dist "${spec}" tidak ditemukan di workspace.` }] };
+        }
+        return { path: spec, external: true };
+      });
+    },
+  };
+
+  let out: CachedBundle;
+  try {
+    const result = await esbuild.build({
+      entryPoints: [realEntry],
+      bundle: true,
+      write: false,
+      format: 'esm',
+      platform: 'browser',
+      target: ['es2020'],
+      plugins: [distConfinementPlugin],
+      logLevel: 'silent',
+    });
+    const jsOut = result.outputFiles.find((f) => f.path.endsWith('.js') || f.path.endsWith('.mjs')) || result.outputFiles[0];
+    out = jsOut
+      ? { ok: true, code: jsOut.text }
+      : { ok: false, error: `Gagal menggabungkan chunk dist untuk ${resolvedDistRelPath}.` };
+  } catch (err) {
+    const msg = scrubSecrets(err instanceof Error ? err.message : String(err)).split(realWorkspaceDir).join('');
+    out = { ok: false, error: msg || `Gagal menggabungkan bundle dist ${resolvedDistRelPath}.` };
+  }
+
+  if (bundleCache.size >= MAX_BUNDLE_CACHE) {
+    const firstKey = bundleCache.keys().next().value;
+    if (firstKey) bundleCache.delete(firstKey);
+  }
+  bundleCache.set(cacheKey, out);
+  return out;
 }
 
 async function preparePreviewHtmlDocument(opts: {
@@ -1620,8 +1710,19 @@ async function preparePreviewHtmlDocument(opts: {
   useDist: boolean;
   sourceHash: string;
   bridgeOptions?: PreviewBridgeOptions;
+  deferMissingDependencyInstall?: boolean;
 }): Promise<PreviewStaticResult> {
-  const { projectId, rawHtml, workspaceDir, previewBasePath, token, useDist, sourceHash, bridgeOptions } = opts;
+  const {
+    projectId,
+    rawHtml,
+    workspaceDir,
+    previewBasePath,
+    token,
+    useDist,
+    sourceHash,
+    bridgeOptions,
+    deferMissingDependencyInstall = false,
+  } = opts;
 
   if (rawHtml.includes('<!-- carmen:blank-starter -->')) {
     const html = injectPreviewRuntimeBridge(
@@ -1634,7 +1735,93 @@ async function preparePreviewHtmlDocument(opts: {
     return { status: 200, contentType: 'text/html; charset=utf-8', body: html };
   }
 
+  // Non-blocking dependency install check for HTML preview requests so GET /preview/:id/ never stalls 120s
+  if (!useDist && deferMissingDependencyInstall) {
+    const extracted = extractLocalAssetsFromHtml(rawHtml);
+    const hasInlineModuleImports = /<script\b[^>]*type=(["'])module\1[^>]*>[\s\S]*?(?:^|\n)\s*(?:import|export)\s+/i.test(rawHtml);
+    let anyNeedsBundle = hasInlineModuleImports;
+    if (!anyNeedsBundle) {
+      for (const entry of extracted.moduleEntries) {
+        const ext = path.extname(entry).toLowerCase();
+        if (ext === '.ts' || ext === '.tsx' || ext === '.jsx' || ext === '.mts' || ext === '.cts') {
+          anyNeedsBundle = true;
+          break;
+        }
+        const f = await resolveFileBytesAsync(projectId, entry, workspaceDir, false);
+        if (f && /(^|\n)\s*(import|export)\s+/.test(f.buffer.toString('utf8'))) {
+          anyNeedsBundle = true;
+          break;
+        }
+      }
+    }
+    if (anyNeedsBundle) {
+      const depCheck = inspectMissingDependencies(workspaceDir);
+      const curState = getDependencyInstallState(projectId);
+      if (depCheck.hasPackageJson && depCheck.missingPackages.length > 0) {
+        const triggered = await triggerProjectDependenciesInstallIfNeededAsync(projectId);
+        const latestState = getDependencyInstallState(projectId);
+        if (triggered.started || latestState.status === 'installing') {
+          const pkgMgr = latestState.packageManager ?? depCheck.packageManager;
+          const missing = latestState.missingPackages.length > 0 ? latestState.missingPackages : depCheck.missingPackages;
+          return {
+            status: 202,
+            contentType: 'application/json; charset=utf-8',
+            installing: true,
+            packageManager: pkgMgr,
+            missingPackages: missing,
+            body: JSON.stringify({
+              installing: true,
+              installStatus: 'installing',
+              packageManager: pkgMgr,
+              missingPackages: missing,
+            }),
+          };
+        }
+        if (latestState.status === 'error' && latestState.error) {
+          return {
+            status: 500,
+            contentType: 'text/html; charset=utf-8',
+            errorReason: 'DEP_INSTALL_FAILED',
+            body: renderPreviewErrorHtml({
+              projectId,
+              status: 500,
+              title: 'Instalasi dependensi gagal',
+              message: latestState.error,
+              code: 'DEP_INSTALL_FAILED',
+              bridgeNonce: bridgeOptions?.bridgeNonce,
+              parentOrigin: bridgeOptions?.parentOrigin,
+              cspMeta: bridgeOptions?.cspMeta,
+            }),
+          };
+        }
+      } else if (curState.status === 'installing') {
+        return {
+          status: 202,
+          contentType: 'application/json; charset=utf-8',
+          installing: true,
+          packageManager: curState.packageManager,
+          missingPackages: curState.missingPackages,
+          body: JSON.stringify({
+            installing: true,
+            installStatus: 'installing',
+            packageManager: curState.packageManager,
+            missingPackages: curState.missingPackages,
+          }),
+        };
+      }
+    }
+  }
+
   let html = rawHtml;
+
+  // 0) Strip local <link rel="modulepreload" ...> tags so opaque-origin srcDoc iframes never fire credential-less CORS chunk preloads
+  html = html.replace(/<link\b([^>]*)>/gi, (fullTag, attrs: string) => {
+    if (!/\brel=(["'])modulepreload\1/i.test(attrs)) return fullTag;
+    const hrefMatch = /\bhref=(["'])([^"']+)\1/i.exec(attrs);
+    if (!hrefMatch) return fullTag;
+    const norm = extractLocalSubPath(hrefMatch[2], previewBasePath);
+    return norm ? '' : fullTag;
+  });
 
   // 1) Resolve & inline local <link rel="stylesheet" href="..."> (from dist/ or compiled CSS)
   const linkMatches = Array.from(html.matchAll(/<link\b([^>]*)>/gi));
@@ -1764,7 +1951,32 @@ async function preparePreviewHtmlDocument(opts: {
         }
         finalJs = bundled.code || '';
       } else if (jsFile.source === 'dist') {
-        finalJs = jsFile.buffer.toString('utf8');
+        const distJs = jsFile.buffer.toString('utf8');
+        const hasRelativeChunkImports =
+          isModule && /(?:^|[;{\n])\s*import\s+[\s\S]*?from\s*["']\.\/|import\s*\(\s*["']\.\//.test(distJs);
+        if (hasRelativeChunkImports) {
+          const bundledDist = await bundleDistModuleEntry(projectId, jsFile.resolvedPath, workspaceDir, sourceHash);
+          if (!bundledDist.ok) {
+            return {
+              status: 500,
+              contentType: 'text/html; charset=utf-8',
+              errorReason: 'DIST_BUNDLE_ERROR',
+              body: renderPreviewErrorHtml({
+                projectId,
+                status: 500,
+                title: 'Gagal memuat bundle dist pratinjau',
+                message: bundledDist.error || `Gagal menggabungkan chunk dist untuk ${norm}.`,
+                code: 'DIST_BUNDLE_ERROR',
+                bridgeNonce: bridgeOptions?.bridgeNonce,
+                parentOrigin: bridgeOptions?.parentOrigin,
+                cspMeta: bridgeOptions?.cspMeta,
+              }),
+            };
+          }
+          finalJs = bundledDist.code || '';
+        } else {
+          finalJs = distJs;
+        }
       }
 
       const typeAttr = isModule ? ' type="module"' : '';
@@ -1840,8 +2052,16 @@ export async function servePreviewStaticAsset(opts: {
   previewBasePath: string;
   token: string;
   bridgeOptions?: PreviewBridgeOptions;
+  deferMissingDependencyInstall?: boolean;
 }): Promise<PreviewStaticResult> {
-  const { projectId, cleanedSub, previewBasePath, token, bridgeOptions } = opts;
+  const {
+    projectId,
+    cleanedSub,
+    previewBasePath,
+    token,
+    bridgeOptions,
+    deferMissingDependencyInstall = false,
+  } = opts;
   const workspaceDir = getProjectWorkspaceDir(projectId);
   const useDist = isFreshDistAvailable(workspaceDir);
   const sourceHash = await computeProjectSourceHashAsync(projectId);
@@ -1854,6 +2074,7 @@ export async function servePreviewStaticAsset(opts: {
       return {
         status: 404,
         contentType: 'text/html; charset=utf-8',
+        errorReason: 'MISSING_INDEX',
         body: renderPreviewErrorHtml({
           projectId,
           status: 404,
@@ -1875,6 +2096,7 @@ export async function servePreviewStaticAsset(opts: {
       useDist,
       sourceHash,
       bridgeOptions,
+      deferMissingDependencyInstall,
     });
   }
 
@@ -1902,6 +2124,7 @@ export async function servePreviewStaticAsset(opts: {
         return {
           status: 500,
           contentType: 'text/plain; charset=utf-8',
+          errorReason: 'JS_BUILD_ERROR',
           body: bundled.error || `Gagal mengompilasi modul ${cleanedSub}.`,
         };
       }
@@ -1925,6 +2148,7 @@ export async function servePreviewStaticAsset(opts: {
         return {
           status: 500,
           contentType: 'text/plain; charset=utf-8',
+          errorReason: 'CSS_BUILD_ERROR',
           body: compiledCss.error || `Gagal memproses CSS ${cleanedSub}.`,
         };
       }
@@ -1946,6 +2170,7 @@ export async function servePreviewStaticAsset(opts: {
       useDist,
       sourceHash,
       bridgeOptions,
+      deferMissingDependencyInstall,
     });
   }
 
@@ -1979,21 +2204,23 @@ export async function inspectPreviewEntryHealth(projectId: string): Promise<{
 
   const { moduleEntries, classicScripts, stylesheets } = extractLocalAssetsFromHtml(html);
 
-  let anyEntryNeedsBundle = false;
-  for (const entry of moduleEntries) {
-    const jsFile = await resolveFileBytesAsync(projectId, entry, workspaceDir, false);
-    if (!jsFile) continue;
-    const ext = path.extname(entry).toLowerCase();
-    if (
-      ext === '.ts' ||
-      ext === '.tsx' ||
-      ext === '.jsx' ||
-      ext === '.mts' ||
-      ext === '.cts' ||
-      /(^|\n)\s*(import|export)\s+/.test(jsFile.buffer.toString('utf8'))
-    ) {
-      anyEntryNeedsBundle = true;
-      break;
+  let anyEntryNeedsBundle = /<script\b[^>]*type=(["'])module\1[^>]*>[\s\S]*?(?:^|\n)\s*(?:import|export)\s+/i.test(html);
+  if (!anyEntryNeedsBundle) {
+    for (const entry of moduleEntries) {
+      const jsFile = await resolveFileBytesAsync(projectId, entry, workspaceDir, false);
+      if (!jsFile) continue;
+      const ext = path.extname(entry).toLowerCase();
+      if (
+        ext === '.ts' ||
+        ext === '.tsx' ||
+        ext === '.jsx' ||
+        ext === '.mts' ||
+        ext === '.cts' ||
+        /(^|\n)\s*(import|export)\s+/.test(jsFile.buffer.toString('utf8'))
+      ) {
+        anyEntryNeedsBundle = true;
+        break;
+      }
     }
   }
 
@@ -2007,7 +2234,15 @@ export async function inspectPreviewEntryHealth(projectId: string): Promise<{
           ok: false,
           installing: true,
           packageManager: curState.packageManager,
-          missingPackages: curState.missingPackages,
+          missingPackages: curState.missingPackages.length > 0 ? curState.missingPackages : depCheck.missingPackages,
+        };
+      }
+      if (curState.status === 'error' && curState.error) {
+        return {
+          ok: false,
+          error: curState.error,
+          packageManager: curState.packageManager,
+          missingPackages: curState.missingPackages.length > 0 ? curState.missingPackages : depCheck.missingPackages,
         };
       }
     }

@@ -2,6 +2,14 @@ import { AlertCircle, ExternalLink, Loader2, Monitor, RefreshCw, ShieldCheck, Sm
 import { useEffect, useRef, useState } from 'react';
 import { COPY } from '../../i18n';
 import { api } from '../../lib/api';
+import {
+  classifyPreviewHttpResponse,
+  createPreviewRequestId,
+  logPreviewDiagnostic,
+  resolvePreviewFetchCredentials,
+  scrubClientPreviewMessage,
+  type PreviewLifecycleStage,
+} from '../../lib/previewState';
 import type { Locale, ProjectType } from '../../types';
 
 interface PreviewPaneProps {
@@ -20,13 +28,15 @@ interface PreviewPaneProps {
   lifecycleState?: 'active' | 'sleeping' | 'waking';
   onRefresh: () => void;
   onFixWithAi: (errorText: string) => void;
-  onTokenExpired?: () => Promise<void> | void;
-  onPreviewStatusChange?: (status: 'ready' | 'error', errorMessage?: string) => void;
+  onTokenExpired?: () => Promise<string | null | void> | string | null | void;
+  onPreviewStatusChange?: (status: 'ready' | 'error' | 'installing', errorMessage?: string) => void;
 }
 
 type ViewportPreset = 'desktop' | 'tablet' | 'mobile';
 
-const PREVIEW_LOAD_TIMEOUT_MS = 12_000;
+const PREVIEW_HTML_TIMEOUT_MS = 15_000;
+const PREVIEW_IFRAME_LOAD_TIMEOUT_MS = 10_000;
+const PREVIEW_BRIDGE_HANDSHAKE_TIMEOUT_MS = 6_000;
 const SAFE_REQ_ID_REGEX = /^[a-zA-Z0-9_-]{4,64}$/;
 
 function generateBridgeNonce(): string {
@@ -39,13 +49,6 @@ function generateBridgeNonce(): string {
     }
   }
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-function scrubClientPreviewMessage(text: string): string {
-  return text
-    .replace(/(\/preview\/[^/\s?#]+\/t\/)[A-Za-z0-9._-]+/gi, '$1[REDACTED_TOKEN]')
-    .replace(/([?&]pt=)[A-Za-z0-9._-]+/gi, '$1[REDACTED_TOKEN]')
-    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{16,}\b/g, '[REDACTED_TOKEN]');
 }
 
 export function PreviewPane({
@@ -69,36 +72,89 @@ export function PreviewPane({
 }: PreviewPaneProps) {
   const t = COPY[locale];
   const [viewport, setViewport] = useState<ViewportPreset>(projectType === 'android' ? 'mobile' : 'desktop');
+  const [stage, setStage] = useState<PreviewLifecycleStage>(
+    isEmptyApp ? 'empty' : installingDependencies ? 'installing' : 'loading_html'
+  );
   const [iframeError, setIframeError] = useState<string | null>(null);
   const [errorStatusCode, setErrorStatusCode] = useState<number | null>(null);
-  const [iframeLoading, setIframeLoading] = useState(!isEmptyApp);
   const [iframeLoaded, setIframeLoaded] = useState(false);
-  const [previewReady, setPreviewReady] = useState(false);
   const [srcDocHtml, setSrcDocHtml] = useState<string | null>(null);
   const [renderNonce, setRenderNonce] = useState<string>('');
+  const [localInstallMeta, setLocalInstallMeta] = useState<{
+    packageManager?: 'npm' | 'bun';
+    missingPackages?: string[];
+  } | null>(null);
+
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const bridgeNonceRef = useRef<string>('');
-  const tokenRecoveryAttemptedRef = useRef(false);
-  const readyNotifiedRef = useRef(false);
+  const previewRequestIdRef = useRef<string>('');
+  const runCounterRef = useRef<number>(0);
+  const loadStartMsRef = useRef<number>(0);
+  const readyNotifiedRef = useRef<boolean>(false);
+
+  // Keep volatile token/callbacks in refs so background token rotation or workspace reloads
+  // never tear down an already-rendered preview iframe.
+  const previewTokenRef = useRef<string | undefined>(previewToken);
+  const onTokenExpiredRef = useRef(onTokenExpired);
+  const onPreviewStatusChangeRef = useRef(onPreviewStatusChange);
+  const lifecycleStateRef = useRef(lifecycleState);
+  const copyRef = useRef(t);
+
+  useEffect(() => {
+    previewTokenRef.current = previewToken;
+  }, [previewToken]);
+
+  useEffect(() => {
+    onTokenExpiredRef.current = onTokenExpired;
+  }, [onTokenExpired]);
+
+  useEffect(() => {
+    onPreviewStatusChangeRef.current = onPreviewStatusChange;
+  }, [onPreviewStatusChange]);
+
+  useEffect(() => {
+    lifecycleStateRef.current = lifecycleState;
+  }, [lifecycleState]);
+
+  useEffect(() => {
+    copyRef.current = t;
+  }, [t]);
 
   const normalizedOrigin = previewOrigin ? previewOrigin.replace(/\/+$/, '') : '';
   const previewBasePath = `${normalizedOrigin}/preview/${projectId}/`;
 
   useEffect(() => {
+    const runId = ++runCounterRef.current;
     let cancelled = false;
     const controller = new AbortController();
+    const isStale = () => cancelled || runCounterRef.current !== runId;
 
-    if (isEmptyApp || installingDependencies) {
+    if (isEmptyApp) {
       queueMicrotask(() => {
-        if (cancelled) return;
+        if (isStale()) return;
+        setStage('empty');
         setSrcDocHtml(null);
         setIframeError(null);
         setErrorStatusCode(null);
-        setPreviewReady(false);
         setIframeLoaded(false);
-        setIframeLoading(false);
+        setLocalInstallMeta(null);
         readyNotifiedRef.current = false;
-        tokenRecoveryAttemptedRef.current = false;
+      });
+      return () => {
+        cancelled = true;
+        controller.abort();
+      };
+    }
+
+    if (installingDependencies) {
+      queueMicrotask(() => {
+        if (isStale()) return;
+        setStage('installing');
+        setSrcDocHtml(null);
+        setIframeError(null);
+        setErrorStatusCode(null);
+        setIframeLoaded(false);
+        readyNotifiedRef.current = false;
       });
       return () => {
         cancelled = true;
@@ -107,65 +163,200 @@ export function PreviewPane({
     }
 
     const nonce = generateBridgeNonce();
+    const reqId = createPreviewRequestId();
     bridgeNonceRef.current = nonce;
+    previewRequestIdRef.current = reqId;
+    loadStartMsRef.current = Date.now();
+    readyNotifiedRef.current = false;
 
     queueMicrotask(() => {
-      if (cancelled) return;
+      if (isStale()) return;
       setRenderNonce(nonce);
+      setStage('loading_html');
       setSrcDocHtml(null);
       setIframeError(null);
       setErrorStatusCode(null);
-      setPreviewReady(false);
       setIframeLoaded(false);
-      setIframeLoading(true);
-      readyNotifiedRef.current = false;
-      tokenRecoveryAttemptedRef.current = false;
+      setLocalInstallMeta(null);
     });
 
-    const loadPreviewHtml = async () => {
-      try {
-        const headers: Record<string, string> = {
-          'X-Carmen-Preview-Bridge-Nonce': nonce,
-          'X-Carmen-Preview-Parent-Origin': window.location.origin,
-        };
-        if (previewToken) {
-          headers['X-Carmen-Preview-Token'] = previewToken;
-        }
+    const fetchCredentials = resolvePreviewFetchCredentials(normalizedOrigin, window.location.origin);
 
-        const resp = await fetch(`${previewBasePath}?v=${reloadKey}`, {
+    const fetchPreviewOnce = async (tokenOverride?: string): Promise<Response> => {
+      const activeToken = tokenOverride ?? previewTokenRef.current;
+      const headers: Record<string, string> = {
+        'X-Carmen-Preview-Bridge-Nonce': nonce,
+        'X-Carmen-Preview-Parent-Origin': window.location.origin,
+        'X-Carmen-Preview-Request-Id': reqId,
+      };
+      if (activeToken) {
+        headers['X-Carmen-Preview-Token'] = activeToken;
+      }
+
+      const timeoutHandle = window.setTimeout(() => controller.abort(), PREVIEW_HTML_TIMEOUT_MS);
+      try {
+        return await fetch(`${previewBasePath}?v=${reloadKey}`, {
           method: 'GET',
           headers,
-          credentials: previewToken ? 'omit' : 'include',
+          credentials: fetchCredentials,
           cache: 'no-store',
           signal: controller.signal,
         });
+      } finally {
+        window.clearTimeout(timeoutHandle);
+      }
+    };
 
-        if (cancelled) return;
+    const failWithError = (message: string, statusCode: number | null, reason: string) => {
+      if (isStale()) return;
+      const clean = scrubClientPreviewMessage(message).slice(0, 400);
+      setStage('error');
+      setSrcDocHtml(null);
+      setIframeLoaded(false);
+      setIframeError(clean);
+      setErrorStatusCode(statusCode);
+      logPreviewDiagnostic({
+        projectId,
+        previewRequestId: reqId,
+        stage: 'error',
+        event: 'html_load_failed',
+        status: statusCode ?? undefined,
+        durationMs: Date.now() - loadStartMsRef.current,
+        lifecycleState: lifecycleStateRef.current,
+        reason,
+      });
+      onPreviewStatusChangeRef.current?.('error', clean);
+    };
 
-        if ((resp.status === 401 || resp.status === 403) && onTokenExpired && !tokenRecoveryAttemptedRef.current) {
-          tokenRecoveryAttemptedRef.current = true;
-          void onTokenExpired();
+    const loadPreviewHtml = async () => {
+      logPreviewDiagnostic({
+        projectId,
+        previewRequestId: reqId,
+        stage: 'loading_html',
+        event: 'html_fetch_start',
+        lifecycleState: lifecycleStateRef.current,
+      });
+
+      try {
+        let resp = await fetchPreviewOnce();
+        if (isStale()) return;
+
+        let body = await resp.text();
+        if (isStale()) return;
+
+        let classified = classifyPreviewHttpResponse({
+          status: resp.status,
+          redirected: resp.redirected,
+          url: resp.url,
+          contentType: resp.headers.get('content-type') || '',
+          body,
+          installingHeader: resp.headers.get('x-carmen-preview-installing'),
+          previewBasePath,
+        });
+
+        // Bounded 1-shot inline token recovery for 401/403 — never triggers an infinite reloadKey loop
+        if (classified.kind === 'auth_failed' && onTokenExpiredRef.current) {
+          logPreviewDiagnostic({
+            projectId,
+            previewRequestId: reqId,
+            stage: 'loading_html',
+            event: 'token_recovery_attempt',
+            status: classified.status,
+            durationMs: Date.now() - loadStartMsRef.current,
+            reason: classified.code,
+          });
+          const refreshed = await onTokenExpiredRef.current();
+          if (isStale()) return;
+          if (typeof refreshed === 'string' && refreshed.trim()) {
+            previewTokenRef.current = refreshed.trim();
+            resp = await fetchPreviewOnce(refreshed.trim());
+            if (isStale()) return;
+            body = await resp.text();
+            if (isStale()) return;
+            classified = classifyPreviewHttpResponse({
+              status: resp.status,
+              redirected: resp.redirected,
+              url: resp.url,
+              contentType: resp.headers.get('content-type') || '',
+              body,
+              installingHeader: resp.headers.get('x-carmen-preview-installing'),
+              previewBasePath,
+            });
+          }
+        }
+
+        if (classified.kind === 'installing') {
+          setStage('installing');
+          setSrcDocHtml(null);
+          setIframeError(null);
+          setErrorStatusCode(null);
+          setLocalInstallMeta({
+            packageManager: classified.packageManager,
+            missingPackages: classified.missingPackages,
+          });
+          logPreviewDiagnostic({
+            projectId,
+            previewRequestId: reqId,
+            stage: 'installing',
+            event: 'deps_installing_202',
+            status: classified.status,
+            durationMs: Date.now() - loadStartMsRef.current,
+            installStatus: 'installing',
+          });
+          onPreviewStatusChangeRef.current?.('installing');
           return;
         }
 
-        const html = await resp.text();
-        if (cancelled) return;
+        if (classified.kind === 'auth_failed') {
+          failWithError(classified.message, classified.status, `auth_failed:${classified.code}`);
+          return;
+        }
 
-        setSrcDocHtml(html);
+        if (classified.kind === 'proxy_redirect') {
+          failWithError(classified.message, classified.status, 'proxy_redirect');
+          return;
+        }
+
+        if (classified.kind === 'non_html_error') {
+          failWithError(classified.message, classified.status, `http_${classified.status}`);
+          return;
+        }
+
+        if (classified.kind === 'html_error') {
+          failWithError(classified.fallbackMessage, classified.status, `html_error_${classified.status}`);
+          return;
+        }
+
+        logPreviewDiagnostic({
+          projectId,
+          previewRequestId: reqId,
+          stage: 'mounting_iframe',
+          event: 'html_fetch_ok',
+          status: classified.status,
+          durationMs: Date.now() - loadStartMsRef.current,
+          lifecycleState: resp.headers.get('x-carmen-preview-state') || lifecycleStateRef.current,
+        });
+
+        setStage('mounting_iframe');
+        setSrcDocHtml(classified.html);
 
         // Sync path-scoped HttpOnly preview cookie silently for new-tab launch (never exposed in URL)
+        const activeToken = previewTokenRef.current;
         void fetch(`${previewBasePath}session`, {
           method: 'POST',
           credentials: 'include',
-          headers: previewToken ? { 'X-Carmen-Preview-Token': previewToken } : undefined,
+          headers: activeToken ? { 'X-Carmen-Preview-Token': activeToken } : undefined,
         }).catch(() => {});
       } catch (err) {
-        if (cancelled || (err instanceof DOMException && err.name === 'AbortError')) return;
-        const rawMsg = err instanceof Error ? err.message : t.previewLoadTimeout;
-        const msg = scrubClientPreviewMessage(rawMsg);
-        setIframeLoading(false);
-        setIframeError(msg);
-        onPreviewStatusChange?.('error', msg);
+        if (isStale()) return;
+        const isAbort = err instanceof DOMException && err.name === 'AbortError';
+        if (isAbort && cancelled) return;
+        const msg = isAbort
+          ? copyRef.current.previewHtmlTimeout
+          : err instanceof Error
+            ? err.message
+            : copyRef.current.previewLoadTimeout;
+        failWithError(msg, null, isAbort ? 'html_fetch_timeout' : 'html_fetch_network_error');
       }
     };
 
@@ -175,47 +366,36 @@ export function PreviewPane({
       cancelled = true;
       controller.abort();
     };
-  }, [
-    reloadKey,
-    projectId,
-    previewToken,
-    previewBasePath,
-    isEmptyApp,
-    installingDependencies,
-    t.previewLoadTimeout,
-    onTokenExpired,
-    onPreviewStatusChange,
-  ]);
+  }, [reloadKey, projectId, previewBasePath, normalizedOrigin, isEmptyApp, installingDependencies]);
 
+  // Deterministic bounded mount/bridge timeouts: never leave an indefinite spinner or trigger infinite reloads
   useEffect(() => {
-    if (isEmptyApp || previewReady || iframeError || installingDependencies) return;
-    const timeoutMs = iframeLoaded ? 3_500 : PREVIEW_LOAD_TIMEOUT_MS;
+    if (stage !== 'mounting_iframe') return;
+    const timeoutMs = iframeLoaded ? PREVIEW_BRIDGE_HANDSHAKE_TIMEOUT_MS : PREVIEW_IFRAME_LOAD_TIMEOUT_MS;
+    const timeoutMessage = iframeLoaded ? copyRef.current.previewBridgeTimeout : copyRef.current.previewLoadTimeout;
+    const timeoutReason = iframeLoaded ? 'bridge_handshake_timeout' : 'iframe_onload_timeout';
+
     const timer = window.setTimeout(() => {
-      if (iframeLoaded && !tokenRecoveryAttemptedRef.current && onTokenExpired) {
-        tokenRecoveryAttemptedRef.current = true;
-        void onTokenExpired();
-        return;
-      }
-      setIframeLoading(false);
-      setIframeError((prev) => prev || t.previewLoadTimeout);
-      onPreviewStatusChange?.('error', t.previewLoadTimeout);
+      setStage('error');
+      setIframeError((prev) => prev || timeoutMessage);
+      logPreviewDiagnostic({
+        projectId,
+        previewRequestId: previewRequestIdRef.current,
+        stage: 'error',
+        event: 'preview_timeout',
+        durationMs: Date.now() - loadStartMsRef.current,
+        lifecycleState: lifecycleStateRef.current,
+        reason: timeoutReason,
+      });
+      onPreviewStatusChangeRef.current?.('error', timeoutMessage);
     }, timeoutMs);
+
     return () => window.clearTimeout(timer);
-  }, [
-    isEmptyApp,
-    installingDependencies,
-    iframeLoaded,
-    previewReady,
-    iframeError,
-    reloadKey,
-    projectId,
-    previewToken,
-    t.previewLoadTimeout,
-    onTokenExpired,
-    onPreviewStatusChange,
-  ]);
+  }, [stage, iframeLoaded, projectId]);
 
   useEffect(() => {
+    const fetchCredentials = resolvePreviewFetchCredentials(normalizedOrigin, window.location.origin);
+
     function handleMessage(event: MessageEvent) {
       if (!iframeRef.current || event.source !== iframeRef.current.contentWindow) return;
       const expectedOrigins = new Set<string>(['null', window.location.origin]);
@@ -235,6 +415,7 @@ export function PreviewPane({
             assetPath?: string;
             method?: string;
             body?: string;
+            mountTimeMs?: number;
           }
         | null
         | undefined;
@@ -246,6 +427,7 @@ export function PreviewPane({
 
       const replyOrigin = event.origin !== 'null' ? event.origin : '*';
       const replyBase = { projectId, bridgeNonce: activeNonce };
+      const activeToken = previewTokenRef.current;
 
       if (data.type === 'carmen-preview-asset' && typeof data.reqId === 'string' && typeof data.assetPath === 'string') {
         const reqId = data.reqId;
@@ -262,10 +444,10 @@ export function PreviewPane({
           return;
         }
         const headers: Record<string, string> = {};
-        if (previewToken) headers['X-Carmen-Preview-Token'] = previewToken;
+        if (activeToken) headers['X-Carmen-Preview-Token'] = activeToken;
         void fetch(`${previewBasePath}${assetPath}`, {
           headers,
-          credentials: previewToken ? 'omit' : 'include',
+          credentials: fetchCredentials,
         })
           .then(async (resp) => {
             const ct = resp.headers.get('content-type') || '';
@@ -335,11 +517,11 @@ export function PreviewPane({
         const targetUrl = `${previewBasePath}${apiPath}`;
         const hasBody = typeof data.body === 'string' && method !== 'GET' && method !== 'HEAD';
         const headers: Record<string, string> = {};
-        if (previewToken) headers['X-Carmen-Preview-Token'] = previewToken;
+        if (activeToken) headers['X-Carmen-Preview-Token'] = activeToken;
         if (hasBody) headers['Content-Type'] = 'application/json';
         void fetch(targetUrl, {
           method,
-          credentials: previewToken ? 'omit' : 'include',
+          credentials: fetchCredentials,
           headers,
           body: hasBody ? data.body : undefined,
         })
@@ -372,38 +554,62 @@ export function PreviewPane({
       }
 
       if (data.type === 'carmen-preview-ready') {
-        setIframeLoading(false);
-        setPreviewReady(true);
+        setStage('ready');
+        logPreviewDiagnostic({
+          projectId,
+          previewRequestId: previewRequestIdRef.current,
+          stage: 'ready',
+          event: 'bridge_ready',
+          durationMs: Date.now() - loadStartMsRef.current,
+          lifecycleState: lifecycleStateRef.current,
+        });
         if (!readyNotifiedRef.current) {
           readyNotifiedRef.current = true;
-          onPreviewStatusChange?.('ready');
+          onPreviewStatusChangeRef.current?.('ready');
         }
         return;
       }
 
       if (data.type !== 'carmen-preview-error') return;
 
-      setIframeLoading(false);
-      if (data.code === 'INVALID_TOKEN' && onTokenExpired && !tokenRecoveryAttemptedRef.current) {
-        tokenRecoveryAttemptedRef.current = true;
-        void onTokenExpired();
-        return;
-      }
-
       if (typeof data.message === 'string' && data.message.trim()) {
         const clean = scrubClientPreviewMessage(data.message.trim()).slice(0, 400);
+        const statusNum = typeof data.status === 'number' ? data.status : null;
+        setStage('error');
         setIframeError(clean);
-        setErrorStatusCode(typeof data.status === 'number' ? data.status : null);
+        setErrorStatusCode(statusNum);
+        logPreviewDiagnostic({
+          projectId,
+          previewRequestId: previewRequestIdRef.current,
+          stage: 'error',
+          event: 'bridge_error',
+          status: statusNum ?? undefined,
+          durationMs: Date.now() - loadStartMsRef.current,
+          lifecycleState: lifecycleStateRef.current,
+          reason: data.code || clean,
+        });
         void api.reportPreviewError(projectId, clean).catch(() => {});
-        onPreviewStatusChange?.('error', clean);
+        onPreviewStatusChangeRef.current?.('error', clean);
       }
     }
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [projectId, normalizedOrigin, previewBasePath, previewToken, onTokenExpired, onPreviewStatusChange]);
+  }, [projectId, normalizedOrigin, previewBasePath]);
 
+  const effectiveInstalling = installingDependencies || stage === 'installing';
+  const effectivePackageManager = localInstallMeta?.packageManager ?? installPackageManager;
+  const effectiveMissingPackages =
+    localInstallMeta?.missingPackages && localInstallMeta.missingPackages.length > 0
+      ? localInstallMeta.missingPackages
+      : missingPackages;
+  const isLoadingOverlayVisible =
+    !isEmptyApp &&
+    !effectiveInstalling &&
+    (stage === 'loading_html' || (stage === 'mounting_iframe' && !iframeLoaded));
   const activeError = iframeError || runtimeError;
-  const showFullErrorStage = Boolean(activeError && !previewReady && !installingDependencies);
+  const showFullErrorStage = Boolean(
+    activeError && !effectiveInstalling && !isEmptyApp && stage !== 'ready' && !isLoadingOverlayVisible
+  );
 
   const frameClass =
     viewport === 'mobile'
@@ -413,7 +619,7 @@ export function PreviewPane({
         : 'w-full h-full bg-[var(--bg)]';
 
   return (
-    <div className="h-full flex flex-col bg-[var(--bg)]">
+    <div data-preview-state={effectiveInstalling ? 'installing' : isEmptyApp ? 'empty' : stage} className="h-full flex flex-col bg-[var(--bg)]">
       {/* Preview Toolbar */}
       <div className="h-10 sm:h-9 px-2.5 sm:px-3 border-b border-[var(--border)] bg-[var(--surface)] flex items-center justify-between gap-2 shrink-0">
         <div className="flex items-center gap-1.5 min-w-0">
@@ -476,11 +682,12 @@ export function PreviewPane({
             target="_blank"
             rel="noopener noreferrer"
             onClick={() => {
-              if (previewToken) {
+              const activeToken = previewTokenRef.current;
+              if (activeToken) {
                 void fetch(`${previewBasePath}session`, {
                   method: 'POST',
                   credentials: 'include',
-                  headers: { 'X-Carmen-Preview-Token': previewToken },
+                  headers: { 'X-Carmen-Preview-Token': activeToken },
                 }).catch(() => {});
               }
             }}
@@ -493,8 +700,8 @@ export function PreviewPane({
         </div>
       </div>
 
-      {/* Auto-fix Error Banner (WS-9) */}
-      {activeError && !installingDependencies && (
+      {/* Auto-fix Error Banner (WS-9) — shown only when live preview is visible alongside an error */}
+      {activeError && !effectiveInstalling && !isEmptyApp && !showFullErrorStage && (
         <div
           role="alert"
           className="px-3 py-2 border-b border-[var(--error)] bg-[var(--surface)] flex flex-wrap items-center justify-between gap-2 text-[12px]"
@@ -541,7 +748,7 @@ export function PreviewPane({
                 </>
               )}
             </div>
-          ) : installingDependencies ? (
+          ) : effectiveInstalling ? (
             <div
               data-testid="preview-installing-state"
               className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-[var(--bg)] text-[var(--text)]"
@@ -551,9 +758,9 @@ export function PreviewPane({
               <p className="text-[12px] text-[var(--text-muted)] mt-1 max-w-md">{t.previewInstallingDepsSub}</p>
               <div className="mt-3 flex flex-wrap items-center justify-center gap-1.5 max-w-md">
                 <span className="px-2 py-0.5 rounded-[4px] border border-[var(--border-strong)] bg-[var(--surface)] font-mono text-[11px] text-[var(--text)]">
-                  {installPackageManager} install
+                  {effectivePackageManager} install
                 </span>
-                {missingPackages.slice(0, 6).map((pkg) => (
+                {effectiveMissingPackages.slice(0, 6).map((pkg) => (
                   <span
                     key={pkg}
                     className="px-2 py-0.5 rounded-[4px] border border-[var(--border)] bg-[var(--surface-2)] font-mono text-[11px] text-[var(--text-muted)]"
@@ -561,22 +768,25 @@ export function PreviewPane({
                     {pkg}
                   </span>
                 ))}
-                {missingPackages.length > 6 && (
+                {effectiveMissingPackages.length > 6 && (
                   <span className="px-1.5 py-0.5 text-[11px] font-mono text-[var(--text-muted)]">
-                    +{missingPackages.length - 6}
+                    +{effectiveMissingPackages.length - 6}
                   </span>
                 )}
               </div>
             </div>
           ) : (
             <div className="relative flex-1 flex flex-col min-h-0">
-              {iframeLoading && (
-                <div className="absolute inset-0 z-10 bg-[var(--bg)] flex flex-col items-center justify-center gap-2 text-[12px] text-[var(--text-muted)] animate-pulse">
+              {isLoadingOverlayVisible && (
+                <div
+                  data-testid="preview-loading-overlay"
+                  className="absolute inset-0 z-10 bg-[var(--bg)] flex flex-col items-center justify-center gap-2 text-[12px] text-[var(--text-muted)] animate-pulse"
+                >
                   <Loader2 className="w-5 h-5 animate-spin text-[var(--accent-text)]" strokeWidth={1.5} />
                   <span>{lifecycleState === 'sleeping' || lifecycleState === 'waking' ? t.previewWaking : t.previewLoading}</span>
                 </div>
               )}
-              {showFullErrorStage && !iframeLoading && (
+              {showFullErrorStage && (
                 <div
                   data-testid="preview-error-stage"
                   className="absolute inset-0 z-20 bg-[var(--bg)] flex items-center justify-center p-6"
@@ -623,8 +833,15 @@ export function PreviewPane({
                   key={`${reloadKey}-${renderNonce}`}
                   srcDoc={srcDocHtml}
                   onLoad={() => {
-                    setIframeLoading(false);
                     setIframeLoaded(true);
+                    logPreviewDiagnostic({
+                      projectId,
+                      previewRequestId: previewRequestIdRef.current,
+                      stage: 'mounting_iframe',
+                      event: 'iframe_onload',
+                      durationMs: Date.now() - loadStartMsRef.current,
+                      lifecycleState: lifecycleStateRef.current,
+                    });
                   }}
                   title={t.preview}
                   sandbox="allow-scripts allow-forms allow-downloads"

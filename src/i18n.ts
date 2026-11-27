@@ -532,6 +532,8 @@ export const COPY = {
     previewWaking: 'Membangunkan sandbox preview...',
     previewSleepingBadge: 'Tidur otomatis saat idle',
     previewLoadTimeout: 'Pratinjau tidak merespons setelah 12 detik. Muat ulang atau periksa error di kode proyek.',
+    previewHtmlTimeout: 'Timeout menunggu respons HTML pratinjau dari server (15 detik). Muat ulang atau periksa log terminal.',
+    previewBridgeTimeout: 'Iframe pratinjau termuat tetapi handshake runtime tidak diterima. Muat ulang atau periksa error skrip di proyek.',
     previewErrorTitle: 'Pratinjau gagal dimuat',
     previewRetryButton: 'Muat ulang',
     // TerminalPane
@@ -1082,6 +1084,8 @@ export const COPY = {
     previewWaking: 'Waking idle preview sandbox...',
     previewSleepingBadge: 'Auto-sleeps when idle',
     previewLoadTimeout: 'Preview timed out after 12 seconds. Reload or inspect project code for errors.',
+    previewHtmlTimeout: 'Timed out waiting for preview HTML response from server (15s). Reload or inspect terminal logs.',
+    previewBridgeTimeout: 'Preview iframe loaded but runtime bridge handshake did not arrive. Reload or inspect project script errors.',
     previewErrorTitle: 'Preview failed to load',
     previewRetryButton: 'Reload',
     // TerminalPane

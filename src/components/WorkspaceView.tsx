@@ -213,8 +213,8 @@ export function WorkspaceView({
     }
   }, [projectId, t.workspaceLoadFail, onTrackBuild]);
 
-  const refreshPreviewTokenIfNeeded = useCallback(async (force = false) => {
-    if (!force && Date.now() - previewTokenIssuedAtRef.current <= 55 * 60_000) return;
+  const refreshPreviewTokenIfNeeded = useCallback(async (force = false): Promise<string | null> => {
+    if (!force && Date.now() - previewTokenIssuedAtRef.current <= 55 * 60_000) return null;
     try {
       const tok = await api.getPreviewToken(projectId);
       previewTokenIssuedAtRef.current = Date.now();
@@ -227,13 +227,18 @@ export function WorkspaceView({
             }
           : prev
       );
+      return tok.token;
     } catch {
-      // Non-fatal; existing reload proceeds or session handler handles 401
+      // Non-fatal; caller handles error state or session handler handles 401
+      return null;
     }
   }, [projectId]);
 
   const handleRefreshPreview = useCallback(
-    async (forceToken = false) => {
+    async (forceToken = false, resetCache = false) => {
+      if (resetCache) {
+        await api.resetPreview(projectId).catch(() => {});
+      }
       await refreshPreviewTokenIfNeeded(forceToken);
       api
         .getPreviewHealth(projectId)
@@ -244,17 +249,39 @@ export function WorkspaceView({
     [projectId, refreshPreviewTokenIfNeeded]
   );
 
-  const handleTokenExpired = useCallback(async () => {
-    await refreshPreviewTokenIfNeeded(true);
-    setReloadKey((k) => k + 1);
+  // Returns the freshly minted token inline without bumping reloadKey so PreviewPane can perform
+  // a bounded single retry without entering an infinite reload loop.
+  const handleTokenExpired = useCallback(async (): Promise<string | null> => {
+    return await refreshPreviewTokenIfNeeded(true);
   }, [refreshPreviewTokenIfNeeded]);
 
   const handlePreviewStatusChange = useCallback(
-    (status: 'ready' | 'error', errorMessage?: string) => {
-      if (status === 'error' && errorMessage) {
+    (status: 'ready' | 'error' | 'installing', errorMessage?: string) => {
+      if (status === 'installing') {
         setPreviewHealth((prev) =>
           prev
-            ? { ...prev, healthy: false, status: 'error', lastError: errorMessage }
+            ? { ...prev, healthy: false, status: 'installing', installingDependencies: true, installStatus: 'installing' }
+            : {
+                healthy: false,
+                status: 'installing',
+                hasIndexHtml: true,
+                isStarterTemplate: false,
+                schemaSynced: true,
+                tableCount: 0,
+                lastError: null,
+                checkedAt: new Date().toISOString(),
+                installingDependencies: true,
+                installStatus: 'installing',
+              }
+        );
+        api
+          .getPreviewHealth(projectId)
+          .then((res) => setPreviewHealth(res.health))
+          .catch(() => {});
+      } else if (status === 'error' && errorMessage) {
+        setPreviewHealth((prev) =>
+          prev
+            ? { ...prev, healthy: false, status: 'error', installingDependencies: false, lastError: errorMessage }
             : {
                 healthy: false,
                 status: 'error',
@@ -307,12 +334,17 @@ export function WorkspaceView({
   );
   const wasInstallingDepsRef = useRef(false);
 
-  // Poll preview health every 1.5s while automatic dependency installation is running, then reload preview
+  // Poll preview health every 1.5s while automatic dependency installation is running, then reload preview on success
   useEffect(() => {
     if (!isInstallingDeps) {
       if (wasInstallingDepsRef.current) {
         wasInstallingDepsRef.current = false;
-        void handleRefreshPreview();
+        if (previewHealth?.installStatus !== 'error') {
+          const reloadTimer = window.setTimeout(() => {
+            void handleRefreshPreview();
+          }, 0);
+          return () => window.clearTimeout(reloadTimer);
+        }
       }
       return;
     }
@@ -324,7 +356,7 @@ export function WorkspaceView({
         .catch(() => {});
     }, 1500);
     return () => window.clearInterval(timer);
-  }, [isInstallingDeps, projectId, handleRefreshPreview]);
+  }, [isInstallingDeps, previewHealth?.installStatus, projectId, handleRefreshPreview]);
 
   // Close topbar dropdown menus on outside click or Escape
   useEffect(() => {
@@ -883,7 +915,7 @@ export function WorkspaceView({
     );
   }
 
-  const indexFile = data.files.find((f) => f.path === 'index.html');
+  const indexFile = data.files.find((f) => f.path === 'index.html' || f.path === 'client/index.html');
   const isEmptyApp = previewHealth
     ? previewHealth.isStarterTemplate || !previewHealth.hasIndexHtml
     : !indexFile || indexFile.content.includes('<!-- carmen:blank-starter -->');
@@ -967,7 +999,7 @@ export function WorkspaceView({
       installPackageManager={previewHealth?.installPackageManager}
       missingPackages={previewHealth?.missingPackages}
       lifecycleState={previewHealth?.lifecycleState}
-      onRefresh={() => void handleRefreshPreview()}
+      onRefresh={() => void handleRefreshPreview(false, effectiveStatus === 'error')}
       onTokenExpired={handleTokenExpired}
       onPreviewStatusChange={handlePreviewStatusChange}
       onFixWithAi={(err) => {

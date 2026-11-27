@@ -1642,124 +1642,147 @@ export async function ensureProjectDependenciesInstalled(
   if (inflight) return inflight;
 
   const promise = (async (): Promise<DependencyInstallResult> => {
-    try {
-      const workspaceDir = await projectRuntime.syncWorkspaceToDiskAsync(projectId);
-      const inspection = inspectMissingDependencies(workspaceDir, {
-        checkBunAvailable: options?.checkBunAvailable,
-      });
-
-      if (!inspection.hasPackageJson || inspection.missingPackages.length === 0) {
-        dependencyInstallStates.set(projectId, {
-          status: 'ready',
-          packageManager: inspection.packageManager,
-          missingPackages: [],
-          updatedAt: Date.now(),
-        });
-        failedInstallPackageHashes.delete(projectId);
-        return {
-          ok: true,
-          installed: false,
-          skipped: true,
-          packageManager: inspection.packageManager,
-          missingPackages: [],
-        };
-      }
-
-      const prevFail = failedInstallPackageHashes.get(projectId);
-      if (!options?.forceRetry && prevFail && prevFail.hash === inspection.packageJsonHash) {
-        return {
-          ok: false,
-          installed: false,
-          skipped: true,
-          packageManager: inspection.packageManager,
-          missingPackages: inspection.missingPackages,
-          error: prevFail.error,
-        };
-      }
-
-      const hasPackageLock = fs.existsSync(path.join(workspaceDir, 'package-lock.json'));
-      const hasNodeModules = fs.existsSync(path.join(workspaceDir, 'node_modules'));
-      const installCmd =
-        inspection.packageManager === 'bun'
-          ? 'bun install'
-          : hasPackageLock && !hasNodeModules
-            ? 'npm ci --no-audit --no-fund --ignore-scripts'
-            : 'npm install --no-audit --no-fund --ignore-scripts';
-      dependencyInstallStates.set(projectId, {
-        status: 'installing',
-        packageManager: inspection.packageManager,
-        missingPackages: inspection.missingPackages,
-        updatedAt: Date.now(),
-      });
-      projectRuntime.appendLog(
-        projectId,
-        'install',
-        'info',
-        `Memasang dependensi otomatis (${installCmd}) untuk: ${inspection.missingPackages.join(', ')}`
-      );
-
-      const runInstall =
-        options?.runner ??
-        ((id: string, cmd: string) => projectRuntime.runCommandAsync(id, cmd, { timeoutMs: INSTALL_CMD_TIMEOUT_MS }));
-
       try {
-        const res = await runInstall(projectId, installCmd);
-        if (res.ok) {
-          failedInstallPackageHashes.delete(projectId);
-          const postInspection = inspectMissingDependencies(workspaceDir, {
-            checkBunAvailable: options?.checkBunAvailable,
-          });
+        const workspaceDir = await projectRuntime.syncWorkspaceToDiskAsync(projectId);
+        const inspection = inspectMissingDependencies(workspaceDir, {
+          checkBunAvailable: options?.checkBunAvailable,
+        });
+
+        if (!inspection.hasPackageJson || inspection.missingPackages.length === 0) {
           dependencyInstallStates.set(projectId, {
             status: 'ready',
             packageManager: inspection.packageManager,
-            missingPackages: postInspection.missingPackages,
+            missingPackages: [],
             updatedAt: Date.now(),
           });
-          invalidatePreviewCache(projectId);
+          failedInstallPackageHashes.delete(projectId);
           return {
             ok: true,
-            installed: true,
+            installed: false,
+            skipped: true,
             packageManager: inspection.packageManager,
-            missingPackages: postInspection.missingPackages,
+            missingPackages: [],
           };
         }
-        const errMsg = res.stderr || res.output || `${installCmd} gagal (exit ${res.exitCode})`;
-        failedInstallPackageHashes.set(projectId, { hash: inspection.packageJsonHash, error: errMsg });
+
+        const prevFail = failedInstallPackageHashes.get(projectId);
+        if (!options?.forceRetry && prevFail && prevFail.hash === inspection.packageJsonHash) {
+          dependencyInstallStates.set(projectId, {
+            status: 'error',
+            packageManager: inspection.packageManager,
+            missingPackages: inspection.missingPackages,
+            error: prevFail.error,
+            updatedAt: Date.now(),
+          });
+          return {
+            ok: false,
+            installed: false,
+            skipped: true,
+            packageManager: inspection.packageManager,
+            missingPackages: inspection.missingPackages,
+            error: prevFail.error,
+          };
+        }
+
+        const hasPackageLock = fs.existsSync(path.join(workspaceDir, 'package-lock.json'));
+        const hasNodeModules = fs.existsSync(path.join(workspaceDir, 'node_modules'));
+        const installCmd =
+          inspection.packageManager === 'bun'
+            ? 'bun install'
+            : hasPackageLock && !hasNodeModules
+              ? 'npm ci --no-audit --no-fund --ignore-scripts'
+              : 'npm install --no-audit --no-fund --ignore-scripts';
         dependencyInstallStates.set(projectId, {
-          status: 'error',
+          status: 'installing',
           packageManager: inspection.packageManager,
           missingPackages: inspection.missingPackages,
+          updatedAt: Date.now(),
+        });
+        projectRuntime.appendLog(
+          projectId,
+          'install',
+          'info',
+          `Memasang dependensi otomatis (${installCmd}) untuk: ${inspection.missingPackages.join(', ')}`
+        );
+
+        const runInstall =
+          options?.runner ??
+          ((id: string, cmd: string) => projectRuntime.runCommandAsync(id, cmd, { timeoutMs: INSTALL_CMD_TIMEOUT_MS }));
+
+        try {
+          const res = await runInstall(projectId, installCmd);
+          if (res.ok) {
+            failedInstallPackageHashes.delete(projectId);
+            const postInspection = inspectMissingDependencies(workspaceDir, {
+              checkBunAvailable: options?.checkBunAvailable,
+            });
+            dependencyInstallStates.set(projectId, {
+              status: 'ready',
+              packageManager: inspection.packageManager,
+              missingPackages: postInspection.missingPackages,
+              updatedAt: Date.now(),
+            });
+            invalidatePreviewCache(projectId);
+            return {
+              ok: true,
+              installed: true,
+              packageManager: inspection.packageManager,
+              missingPackages: postInspection.missingPackages,
+            };
+          }
+          const errMsg = scrubSecrets(res.stderr || res.output || `${installCmd} gagal (exit ${res.exitCode})`);
+          failedInstallPackageHashes.set(projectId, { hash: inspection.packageJsonHash, error: errMsg });
+          dependencyInstallStates.set(projectId, {
+            status: 'error',
+            packageManager: inspection.packageManager,
+            missingPackages: inspection.missingPackages,
+            error: errMsg,
+            updatedAt: Date.now(),
+          });
+          return {
+            ok: false,
+            installed: false,
+            packageManager: inspection.packageManager,
+            missingPackages: inspection.missingPackages,
+            error: errMsg,
+          };
+        } catch (err) {
+          const errMsg = scrubSecrets(err instanceof Error ? err.message : String(err));
+          failedInstallPackageHashes.set(projectId, { hash: inspection.packageJsonHash, error: errMsg });
+          dependencyInstallStates.set(projectId, {
+            status: 'error',
+            packageManager: inspection.packageManager,
+            missingPackages: inspection.missingPackages,
+            error: errMsg,
+            updatedAt: Date.now(),
+          });
+          return {
+            ok: false,
+            installed: false,
+            packageManager: inspection.packageManager,
+            missingPackages: inspection.missingPackages,
+            error: errMsg,
+          };
+        }
+      } catch (outerErr) {
+        const errMsg = scrubSecrets(outerErr instanceof Error ? outerErr.message : String(outerErr));
+        dependencyInstallStates.set(projectId, {
+          status: 'error',
+          packageManager: 'npm',
+          missingPackages: [],
           error: errMsg,
           updatedAt: Date.now(),
         });
         return {
           ok: false,
           installed: false,
-          packageManager: inspection.packageManager,
-          missingPackages: inspection.missingPackages,
+          packageManager: 'npm',
+          missingPackages: [],
           error: errMsg,
         };
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        failedInstallPackageHashes.set(projectId, { hash: inspection.packageJsonHash, error: errMsg });
-        dependencyInstallStates.set(projectId, {
-          status: 'error',
-          packageManager: inspection.packageManager,
-          missingPackages: inspection.missingPackages,
-          error: errMsg,
-          updatedAt: Date.now(),
-        });
-        return {
-          ok: false,
-          installed: false,
-          packageManager: inspection.packageManager,
-          missingPackages: inspection.missingPackages,
-          error: errMsg,
-        };
+      } finally {
+        inflightDependencyInstalls.delete(projectId);
       }
-    } finally {
-      inflightDependencyInstalls.delete(projectId);
-    }
   })();
 
   inflightDependencyInstalls.set(projectId, promise);

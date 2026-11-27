@@ -2636,4 +2636,251 @@ test('Audit Hardening: /api/health exposes rateLimiter & DB TLS metadata, JSON n
   assert.equal(repeatCancel.status, 409);
 });
 
+test('Internal Preview Engine Repair: proxy origin/CSP/base alignment, code-split dist chunks, non-blocking 202 install + reset ownership, and fullstack API proxy recovery', async () => {
+  resetRateLimitsForTest();
+
+  const userA = await apiJson('/api/auth/register', {
+    method: 'POST',
+    body: { email: 'preview-repair-a@example.com', password: 'password123', name: 'Preview Repair A' },
+  });
+  assert.equal(userA.status, 201);
+  const tokenA = String(userA.json.sessionToken);
+
+  const userB = await apiJson('/api/auth/register', {
+    method: 'POST',
+    body: { email: 'preview-repair-b@example.com', password: 'password123', name: 'Preview Repair B' },
+  });
+  assert.equal(userB.status, 201);
+  const tokenB = String(userB.json.sessionToken);
+
+  const projRes = await apiJson('/api/projects', {
+    method: 'POST',
+    token: tokenA,
+    body: { name: 'Preview Engine Repair Suite', templateId: 'web-todo-sqlite' },
+  });
+  assert.equal(projRes.status, 201);
+  const projectId = String((projRes.json.project as { id: string }).id);
+
+  const tokRes = await apiJson(`/api/projects/${projectId}/preview-token`, { token: tokenA });
+  assert.equal(tokRes.status, 200);
+  const pToken = String(tokRes.json.token);
+
+  // 1) Reverse-proxy origin alignment: paired ais-pre-* / ais-dev-* APP_URL + Sec-Fetch-Site: same-origin,
+  // while rejecting untrusted cross-site X-Carmen-Preview-Parent-Origin.
+  const prevAppUrl = process.env.APP_URL;
+  process.env.APP_URL = 'https://ais-dev-demo1234.asia-northeast1.run.app';
+  try {
+    const pairedOrigin = 'https://ais-pre-demo1234.asia-northeast1.run.app';
+    const pairedRes = await fetch(`${baseUrl}/preview/${projectId}/`, {
+      headers: {
+        'X-Carmen-Preview-Token': pToken,
+        'X-Carmen-Preview-Parent-Origin': pairedOrigin,
+        'X-Carmen-Preview-Request-Id': 'req-test-paired-01',
+      },
+    });
+    assert.equal(pairedRes.status, 200);
+    assert.equal(pairedRes.headers.get('x-carmen-preview-request-id'), 'req-test-paired-01');
+    const pairedCsp = pairedRes.headers.get('content-security-policy') || '';
+    const pairedHtml = await pairedRes.text();
+    assert.ok(pairedHtml.includes(`PARENT_ORIGIN=${JSON.stringify(pairedOrigin)}`));
+    assert.ok(pairedHtml.includes(`<base href="${pairedOrigin}/preview/${projectId}/"`));
+    assert.ok(pairedCsp.includes(`script-src ${pairedOrigin}/preview/${projectId}/`));
+    assert.ok(pairedHtml.includes('MutationObserver'), 'Bridge should use MutationObserver + DOMContentLoaded mount detection');
+    assert.equal(pairedHtml.includes(pToken), false, 'Preview HTML must never leak preview token');
+
+    const proxySameOrigin = 'https://custom-carmen-proxy.example.dev';
+    const secFetchRes = await fetch(`${baseUrl}/preview/${projectId}/`, {
+      headers: {
+        'X-Carmen-Preview-Token': pToken,
+        'X-Carmen-Preview-Parent-Origin': proxySameOrigin,
+        'Sec-Fetch-Site': 'same-origin',
+      },
+    });
+    assert.equal(secFetchRes.status, 200);
+    const secFetchHtml = await secFetchRes.text();
+    const secFetchCsp = secFetchRes.headers.get('content-security-policy') || '';
+    assert.ok(secFetchHtml.includes(`PARENT_ORIGIN=${JSON.stringify(proxySameOrigin)}`));
+    assert.ok(secFetchHtml.includes(`<base href="${proxySameOrigin}/preview/${projectId}/"`));
+    assert.ok(secFetchCsp.includes(`script-src ${proxySameOrigin}/preview/${projectId}/`));
+
+    // Security check: untrusted cross-site parent origin MUST be ignored
+    const evilOrigin = 'https://evil-attacker.example.net';
+    const evilRes = await fetch(`${baseUrl}/preview/${projectId}/`, {
+      headers: {
+        'X-Carmen-Preview-Token': pToken,
+        'X-Carmen-Preview-Parent-Origin': evilOrigin,
+        'Sec-Fetch-Site': 'cross-site',
+      },
+    });
+    assert.equal(evilRes.status, 200);
+    const evilHtml = await evilRes.text();
+    const evilCsp = evilRes.headers.get('content-security-policy') || '';
+    assert.equal(evilHtml.includes(evilOrigin), false, 'Untrusted cross-site origin must never appear in HTML/bridge');
+    assert.equal(evilCsp.includes(evilOrigin), false, 'Untrusted cross-site origin must never appear in CSP');
+  } finally {
+    if (prevAppUrl === undefined) delete process.env.APP_URL;
+    else process.env.APP_URL = prevAppUrl;
+  }
+
+  // 2) Code-split dist/ multi-chunk ESM bundling + <link rel="modulepreload"> stripping
+  const { getProjectWorkspaceDir, invalidatePreviewCache } = await import('./runtime/preview');
+  const wsDir = getProjectWorkspaceDir(projectId);
+  fs.mkdirSync(path.join(wsDir, 'dist', 'assets'), { recursive: true });
+  fs.writeFileSync(
+    path.join(wsDir, 'dist', 'assets', 'chunk-shared.js'),
+    'export const SHARED_BADGE = "CHUNK_RENDERED_OK";\n',
+    'utf8'
+  );
+  fs.writeFileSync(
+    path.join(wsDir, 'dist', 'assets', 'index-main.js'),
+    'import { SHARED_BADGE } from "./chunk-shared.js";\ndocument.getElementById("root").textContent = SHARED_BADGE;\n',
+    'utf8'
+  );
+  fs.writeFileSync(
+    path.join(wsDir, 'dist', 'index.html'),
+    '<!doctype html><html><head><link rel="modulepreload" crossorigin href="/assets/chunk-shared.js"></head><body><div id="root"></div><script type="module" crossorigin src="/assets/index-main.js"></script></body></html>',
+    'utf8'
+  );
+  invalidatePreviewCache(projectId);
+
+  const distChunkRes = await fetch(`${baseUrl}/preview/${projectId}/`, {
+    headers: { 'X-Carmen-Preview-Token': pToken },
+  });
+  assert.equal(distChunkRes.status, 200);
+  const distChunkHtml = await distChunkRes.text();
+  assert.equal(distChunkHtml.includes('modulepreload'), false, 'Local modulepreload link tags must be stripped for srcDoc');
+  assert.ok(distChunkHtml.includes('CHUNK_RENDERED_OK'), 'Relative dist chunk import must be bundled self-contained into HTML');
+  assert.doesNotMatch(distChunkHtml, /import\s*\{[^}]*\}\s*from\s*["']\.\/chunk-shared\.js["']/);
+
+  // Clean up dist/ so subsequent checks run against source files
+  fs.rmSync(path.join(wsDir, 'dist'), { recursive: true, force: true });
+  invalidatePreviewCache(projectId);
+
+  // 3) Fullstack backend API proxy through /preview/:id/api/... and recovery after backend stop
+  const apiBeforeRes = await fetch(`${baseUrl}/preview/${projectId}/api/todos`, {
+    headers: { 'X-Carmen-Preview-Token': pToken },
+  });
+  assert.equal(apiBeforeRes.status, 200);
+  const todosBefore = (await apiBeforeRes.json()) as { rows?: unknown[] };
+  assert.ok(Array.isArray(todosBefore.rows), 'Fullstack preview API should return rows array');
+
+  // Stop backend runtime and verify next preview API request restarts & recovers seamlessly
+  const { backendRuntimeManager } = await import('./runtime/backendRuntime');
+  backendRuntimeManager.stopBackend(projectId);
+  const apiAfterRestartRes = await fetch(`${baseUrl}/preview/${projectId}/api/todos`, {
+    headers: { 'X-Carmen-Preview-Token': pToken },
+  });
+  assert.equal(apiAfterRestartRes.status, 200);
+  const todosAfter = (await apiAfterRestartRes.json()) as { rows?: unknown[] };
+  assert.ok(Array.isArray(todosAfter.rows));
+
+  // 4) Non-blocking HTTP 202 when dependencies are missing/installing, error surfacing on failed install,
+  // and POST /api/projects/:id/preview-reset ownership + cache/install reset.
+  const depProjRes = await apiJson('/api/projects', {
+    method: 'POST',
+    token: tokenA,
+    body: { name: 'NonBlocking Dep Install App' },
+  });
+  assert.equal(depProjRes.status, 201);
+  const depProjId = String((depProjRes.json.project as { id: string }).id);
+  const depTokRes = await apiJson(`/api/projects/${depProjId}/preview-token`, { token: tokenA });
+  const depPToken = String(depTokRes.json.token);
+
+  await apiJson(`/api/projects/${depProjId}/files`, {
+    method: 'PUT',
+    token: tokenA,
+    body: {
+      path: 'package.json',
+      content: JSON.stringify({
+        name: 'missing-dep-test',
+        dependencies: { 'nonexistent-carmen-pkg-xyz-999': '1.0.0' },
+      }),
+    },
+  });
+  await apiJson(`/api/projects/${depProjId}/files`, {
+    method: 'PUT',
+    token: tokenA,
+    body: {
+      path: 'index.html',
+      content: '<!doctype html><html><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>',
+    },
+  });
+  await apiJson(`/api/projects/${depProjId}/files`, {
+    method: 'PUT',
+    token: tokenA,
+    body: {
+      path: 'src/main.tsx',
+      content: 'import x from "nonexistent-carmen-pkg-xyz-999"; document.getElementById("root").textContent = String(x);',
+    },
+  });
+
+  // Trigger simulated slow install in-flight so GET /preview/:id/ returns fast HTTP 202 instead of hanging
+  const { ensureProjectDependenciesInstalled, invalidateDependencyInstallState } = await import('./runtime/sandbox');
+  invalidateDependencyInstallState(depProjId);
+  let releaseInstall!: () => void;
+  const installBarrier = new Promise<void>((resolve) => {
+    releaseInstall = resolve;
+  });
+  const pendingInstall = ensureProjectDependenciesInstalled(depProjId, {
+    runner: async () => {
+      await installBarrier;
+      return {
+        ok: false,
+        output: 'npm ERR! 404 Not Found - nonexistent-carmen-pkg-xyz-999',
+        stdout: '',
+        stderr: 'npm ERR! 404 Not Found - nonexistent-carmen-pkg-xyz-999',
+        exitCode: 1,
+        durationMs: 25,
+      };
+    },
+    checkBunAvailable: () => false,
+  });
+
+  // Give runner a tick to enter 'installing' state
+  await new Promise((r) => setTimeout(r, 20));
+  const installingRes = await fetch(`${baseUrl}/preview/${depProjId}/`, {
+    headers: { 'X-Carmen-Preview-Token': depPToken },
+  });
+  assert.equal(installingRes.status, 202, `Expected fast 202 while installing, got ${installingRes.status}`);
+  assert.equal(installingRes.headers.get('x-carmen-preview-installing'), '1');
+  const installingJson = (await installingRes.json()) as { installing?: boolean; missingPackages?: string[] };
+  assert.equal(installingJson.installing, true);
+  assert.ok(installingJson.missingPackages?.includes('nonexistent-carmen-pkg-xyz-999'));
+
+  // Release simulated failure -> GET /preview/:id/ returns 500 DEP_INSTALL_FAILED and preview-health reports error
+  releaseInstall();
+  await pendingInstall;
+
+  const failedInstallRes = await fetch(`${baseUrl}/preview/${depProjId}/`, {
+    headers: { 'X-Carmen-Preview-Token': depPToken },
+  });
+  assert.equal(failedInstallRes.status, 500);
+  const failedInstallHtml = await failedInstallRes.text();
+  assert.match(failedInstallHtml, /DEP_INSTALL_FAILED/);
+
+  const failedHealthRes = await apiJson(`/api/projects/${depProjId}/preview-health`, { token: tokenA });
+  assert.equal(failedHealthRes.status, 200);
+  const failedHealth = failedHealthRes.json.health as { status?: string; installStatus?: string; lastError?: string };
+  assert.equal(failedHealth.status, 'error');
+  assert.equal(failedHealth.installStatus, 'error');
+  assert.match(String(failedHealth.lastError || ''), /404 Not Found|nonexistent-carmen-pkg-xyz-999/);
+
+  // POST /api/projects/:id/preview-reset enforces ownership (401 unauth, 404 cross-user, 200 owner)
+  const unauthReset = await apiJson(`/api/projects/${depProjId}/preview-reset`, { method: 'POST' });
+  assert.equal(unauthReset.status, 401);
+
+  const crossUserReset = await apiJson(`/api/projects/${depProjId}/preview-reset`, {
+    method: 'POST',
+    token: tokenB,
+  });
+  assert.equal(crossUserReset.status, 404);
+
+  const ownerReset = await apiJson(`/api/projects/${depProjId}/preview-reset`, {
+    method: 'POST',
+    token: tokenA,
+  });
+  assert.equal(ownerReset.status, 200);
+  assert.equal(ownerReset.json.ok, true);
+});
+
 
