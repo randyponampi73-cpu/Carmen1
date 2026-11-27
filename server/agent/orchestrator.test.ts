@@ -1539,6 +1539,174 @@ test('Agent Engineering Phase 4: task_state transitions, schema validation, read
   assert.match(msg.content, /NOT VERIFIED/i);
 });
 
+test('Master Audit F-02/F-03/F-04/F-05: verification gate rejects mixed pass+fail, structured fallback tracks lastMutationEventIdx, parallelSafe excludes verification/memory tools, and extraHeaders secrets are scrubbed', async () => {
+  const { isParallelReadOnlyTool } = await import('./toolRegistry');
+
+  // 1. F-04: Only pure read-only inspection tools may run concurrently in Promise.all
+  for (const pureRead of ['read_file', 'list_files', 'search_files', 'inspect_dependencies', 'workspace_diff']) {
+    assert.equal(isParallelReadOnlyTool(pureRead), true, `${pureRead} should be parallelSafe`);
+  }
+  for (const serialized of [
+    'build_project',
+    'run_tests',
+    'validate_project',
+    'update_project_memory',
+    'read_logs',
+    'write_file',
+    'edit_file',
+    'run_command',
+  ]) {
+    assert.equal(isParallelReadOnlyTool(serialized), false, `${serialized} must NOT be parallelSafe`);
+  }
+
+  // 2. F-02: Mixed post-mutation pass (validate_project) + fail (run_tests) MUST emit verified_fail (never verified_pass)
+  {
+    const { projectId } = seedTestProject('Mixed Verification Gate Test');
+    let step = 0;
+    const mixedGateAdapter: ProviderAdapter = {
+      id: 'gemini',
+      capabilities: () => ({ toolCalling: 'yes', vision: 'no', maxContext: 64_000, maxOutput: 4096 }),
+      async testConnection() {
+        return { ok: true, message: 'ok' };
+      },
+      async listModels() {
+        return [];
+      },
+      async *chatStream(): AsyncIterable<StreamEvent> {
+        step += 1;
+        if (step === 1) {
+          yield { type: 'tool_call', id: 'm1', name: 'write_file', arguments: { path: 'index.html', content: '<h1>OK</h1>' } };
+          yield { type: 'tool_call', id: 'm2', name: 'validate_project', arguments: {} };
+          yield { type: 'tool_call', id: 'm3', name: 'run_tests', arguments: {} };
+          yield { type: 'done' };
+          return;
+        }
+        yield { type: 'text_delta', text: 'Perubahan diterapkan.' };
+        yield { type: 'done' };
+      },
+    };
+
+    let gate: { status?: string; passedChecks?: string[]; failedChecks?: string[] } = {};
+    await runAgentTurn({
+      projectId,
+      prompt: 'Update index.html lalu verifikasi',
+      mode: 'build',
+      adapterConfig: mockAdapterConfig,
+      modelId: 'gemini-2.5-flash',
+      adapterOverride: mixedGateAdapter,
+      emit(event, payload) {
+        if (event === 'verification_gate' && payload && typeof payload === 'object') {
+          gate = payload as { status?: string; passedChecks?: string[]; failedChecks?: string[] };
+        }
+      },
+    });
+
+    assert.equal(gate.status, 'verified_fail', 'Mixed pass + fail post-mutation checks must produce verified_fail');
+    assert.ok((gate.passedChecks?.length ?? 0) >= 1);
+    assert.ok((gate.failedChecks?.length ?? 0) >= 1);
+  }
+
+  // 3. F-03: Structured fallback updates lastMutationEventIdx so pre-mutation validate_project cannot spoof verified_pass, and emits task_state
+  {
+    const { projectId } = seedTestProject('Structured Fallback Gate Parity Test');
+    await executeTool(projectId, 'write_file', { path: 'index.html', content: '<h1>Initial</h1>' }, []);
+    let step = 0;
+    const structuredFallbackAdapter: ProviderAdapter = {
+      id: 'custom',
+      capabilities: () => ({ toolCalling: 'no', vision: 'no', maxContext: 32_000, maxOutput: 4096 }),
+      async testConnection() {
+        return { ok: true, message: 'ok' };
+      },
+      async listModels() {
+        return [];
+      },
+      async *chatStream(): AsyncIterable<StreamEvent> {
+        step += 1;
+        if (step === 1) {
+          yield {
+            type: 'text_delta',
+            text:
+              '<carmen_action tool="validate_project" />\n' +
+              '<carmen_action tool="write_file" path="index.html"><h1>Mutated After Validate</h1></carmen_action>',
+          };
+          yield { type: 'done' };
+          return;
+        }
+        yield { type: 'text_delta', text: 'Selesai diperbarui.' };
+        yield { type: 'done' };
+      },
+    };
+
+    const states: string[] = [];
+    let gate: { status?: string } = {};
+    await runAgentTurn({
+      projectId,
+      prompt: 'Validasi dulu lalu ubah index.html',
+      mode: 'build',
+      adapterConfig: {
+        ...mockAdapterConfig,
+        providerKeyId: 'k_sf_parity',
+        provider: 'custom',
+        label: 'Custom No-Tools',
+        supportsTools: 'no',
+      },
+      modelId: 'custom-text-model',
+      adapterOverride: structuredFallbackAdapter,
+      emit(event, payload) {
+        if (event === 'task_state' && payload && typeof payload === 'object') {
+          states.push(String((payload as { state?: string }).state));
+        }
+        if (event === 'verification_gate' && payload && typeof payload === 'object') {
+          gate = payload as { status?: string };
+        }
+      },
+    });
+
+    assert.equal(gate.status, 'not_verified', 'Pre-mutation validate_project in structured fallback must not satisfy post-mutation gate');
+    assert.ok(states.includes('verifying'));
+    assert.ok(states.includes('executing'));
+  }
+
+  // 4. F-05: Custom extraHeaders secret values are scrubbed from assistant output
+  {
+    const { projectId } = seedTestProject('Extra Headers Scrubbing Test');
+    const headerSecret = 'carmen_hdr_secret_token_987654321';
+    const leakyAdapter: ProviderAdapter = {
+      id: 'custom',
+      capabilities: () => ({ toolCalling: 'yes', vision: 'no', maxContext: 32_000, maxOutput: 4096 }),
+      async testConnection() {
+        return { ok: true, message: 'ok' };
+      },
+      async listModels() {
+        return [];
+      },
+      async *chatStream(): AsyncIterable<StreamEvent> {
+        yield { type: 'text_delta', text: `Debug header leaked: ${headerSecret}` };
+        yield { type: 'done' };
+      },
+    };
+
+    const msg = await runAgentTurn({
+      projectId,
+      prompt: 'Halo',
+      mode: 'discuss',
+      adapterConfig: {
+        ...mockAdapterConfig,
+        providerKeyId: 'k_hdr_scrub',
+        provider: 'custom',
+        label: 'Custom Header',
+        extraHeaders: { 'X-Internal-Auth': headerSecret },
+      },
+      modelId: 'custom-model',
+      adapterOverride: leakyAdapter,
+      emit() {},
+    });
+
+    assert.equal(msg.content.includes(headerSecret), false, 'extraHeaders secret must be scrubbed from saved assistant output');
+    assert.match(msg.content, /\[REDACTED_KEY\]/);
+  }
+});
+
 
 
 

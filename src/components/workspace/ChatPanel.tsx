@@ -17,6 +17,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { COPY, formatActionVerb } from '../../i18n';
 import type {
   AgentPlanSummary,
+  AgentTaskState,
   ChatMessage,
   FallbackEvent,
   Locale,
@@ -24,6 +25,7 @@ import type {
   SkillMetadataItem,
   SkillTurnTraceItem,
   ToolActionEvent,
+  VerificationGateSummary,
 } from '../../types';
 import { ModelSelect } from '../CustomSelect';
 import { TierBadge } from '../ProviderBadge';
@@ -61,6 +63,9 @@ interface ChatPanelProps {
   streamingSkillTrace?: SkillTurnTraceItem[];
   lastTurnSkillTrace?: SkillTurnTraceItem[];
   builtinOnlyTurnNotice?: boolean;
+  streamingTaskState?: AgentTaskState;
+  streamingStageTarget?: string | null;
+  lastVerificationGate?: VerificationGateSummary | null;
 }
 
 function renderInlineMarkdown(text: string): React.ReactNode[] {
@@ -243,6 +248,9 @@ export function ChatPanel({
   streamingSkillTrace = [],
   lastTurnSkillTrace = [],
   builtinOnlyTurnNotice = false,
+  streamingTaskState = 'idle',
+  streamingStageTarget = null,
+  lastVerificationGate = null,
 }: ChatPanelProps) {
   const t = COPY[locale];
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -482,13 +490,81 @@ export function ChatPanel({
           </div>
         )}
 
+        {/* Honest post-turn Verification Gate status from server tool evidence */}
+        {!streaming && lastVerificationGate && lastVerificationGate.status !== 'not_required' && (
+          <div
+            data-testid="verification-gate-banner"
+            className={`rounded-[6px] border px-2.5 py-2 text-[12px] space-y-1 bg-[var(--surface-2)] ${
+              lastVerificationGate.status === 'verified_pass'
+                ? 'border-[var(--success)] text-[var(--success-text)]'
+                : lastVerificationGate.status === 'verified_fail'
+                  ? 'border-[var(--error)] text-[var(--error-text)]'
+                  : 'border-[var(--warning)] text-[var(--warning-text)]'
+            }`}
+          >
+            <div className="flex items-center gap-1.5 font-medium">
+              {lastVerificationGate.status === 'verified_pass' ? (
+                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" strokeWidth={1.6} />
+              ) : (
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" strokeWidth={1.6} />
+              )}
+              <span>
+                {lastVerificationGate.status === 'verified_pass'
+                  ? t.verificationGatePass
+                  : lastVerificationGate.status === 'verified_fail'
+                    ? t.verificationGateFail
+                    : t.verificationGateNotVerified}
+              </span>
+            </div>
+            {(lastVerificationGate.passedChecks.length > 0 || lastVerificationGate.failedChecks.length > 0) && (
+              <div className="font-mono text-[11px] text-[var(--text-muted)] truncate">
+                {[...lastVerificationGate.failedChecks, ...lastVerificationGate.passedChecks].join(' · ')}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Active streaming state */}
         {streaming && (
           <div className="space-y-2 border-t border-[var(--border)] pt-3">
-            <div className="flex items-center gap-2 text-[12px] text-[var(--text-muted)]">
-              <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--accent-text)]" strokeWidth={1.5} />
-              <span>{fallbackNotice ? fallbackNotice.toModel : activeModel?.name || 'Model'}</span>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-[12px] text-[var(--text-muted)]">
+              <div className="flex items-center gap-2 min-w-0">
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--accent-text)] shrink-0" strokeWidth={1.5} />
+                <span className="font-medium text-[var(--text)] truncate">
+                  {fallbackNotice ? fallbackNotice.toModel : activeModel?.name || 'Model'}
+                </span>
+                {streamingTaskState !== 'idle' && (
+                  <span className="font-mono text-[11px] text-[var(--accent-text)] shrink-0">
+                    {streamingTaskState === 'planning'
+                      ? t.agentStagePlanning
+                      : streamingTaskState === 'executing'
+                        ? t.agentStageExecuting
+                        : streamingTaskState === 'verifying'
+                          ? t.agentStageVerifying
+                          : streamingTaskState === 'repairing'
+                            ? t.agentStageRepairing
+                            : streamingTaskState === 'completed'
+                              ? t.agentStageCompleted
+                              : streamingTaskState === 'failed'
+                                ? t.agentStageFailed
+                                : t.agentStageCancelled}
+                  </span>
+                )}
+              </div>
+              {streamingActions.length > 0 && (
+                <span className="font-mono text-[11px] text-[var(--text-muted)] tabular-nums shrink-0">
+                  {streamingActions.filter((a) => a.tool === 'read_file' || a.tool === 'list_files' || a.tool === 'search_files').length}{' '}
+                  {t.agentFilesReadShort} ·{' '}
+                  {streamingActions.filter((a) => (a.tool === 'write_file' || a.tool === 'edit_file') && a.status === 'success').length}{' '}
+                  {t.agentFilesEditedShort}
+                </span>
+              )}
             </div>
+            {streamingStageTarget && (
+              <div className="font-mono text-[11px] text-[var(--text-muted)] truncate">
+                {streamingStageTarget}
+              </div>
+            )}
             {fallbackNotice && (
               <div className="rounded-[6px] border border-[var(--warning)] bg-[var(--surface-2)] px-2.5 py-1.5 text-[12px] text-[var(--warning-text)] flex items-start gap-2">
                 <RefreshCw className="w-3.5 h-3.5 shrink-0 mt-0.5" strokeWidth={1.6} />

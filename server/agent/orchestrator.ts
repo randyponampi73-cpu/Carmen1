@@ -5,6 +5,7 @@ import { parseJsonColumn } from '../db/dialect';
 import {
   estimateModelCostUsd,
   getProviderAdapter,
+  getSecretsToScrub,
   type AdapterMessage,
   type AdapterToolDefinition,
   type ProviderAdapterConfig,
@@ -30,7 +31,7 @@ import {
   type ProviderHealthMonitor,
   type RouteCandidate,
 } from './router';
-import { CANONICAL_AGENT_TOOLS, getRegisteredTool, validateToolArguments } from './toolRegistry';
+import { CANONICAL_AGENT_TOOLS, isParallelReadOnlyTool, validateToolArguments } from './toolRegistry';
 import {
   prepareSkillsForAgentTurn,
   recordSkillExecutionResult,
@@ -1534,7 +1535,10 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMess
 
   let activeRoute: RouteCandidate = orderedChain[0] ?? primaryCandidate;
   const attemptedRoutes = new Set<string>([`${activeRoute.adapterConfig.providerKeyId}::${activeRoute.modelId}`]);
-  const activeSecrets = new Set<string>([adapterConfig.apiKey, ...enrichedFallbackCandidates.map((c) => c.adapterConfig.apiKey)]);
+  const activeSecrets = new Set<string>([
+    ...getSecretsToScrub(adapterConfig),
+    ...enrichedFallbackCandidates.flatMap((c) => getSecretsToScrub(c.adapterConfig)),
+  ]);
   const forcedStructuredRoutes = new Set<string>();
   const compactedRoutes = new Set<string>();
 
@@ -1880,6 +1884,36 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMess
             const targetLabel = String(
               act.args.path || act.args.cmd || act.args.query || act.args.dir || act.tool
             );
+            if (
+              act.tool === 'write_file' ||
+              act.tool === 'edit_file' ||
+              act.tool === 'delete_file' ||
+              act.tool === 'create_directory'
+            ) {
+              const isRepair = failedVerificationCycles > 0;
+              setTaskState(isRepair ? 'repairing' : 'executing', targetLabel);
+              emit('status', {
+                stage: isRepair ? 'repairing' : 'executing',
+                target: targetLabel,
+              });
+            } else if (
+              act.tool === 'validate_project' ||
+              act.tool === 'read_logs' ||
+              act.tool === 'run_command'
+            ) {
+              setTaskState('verifying', targetLabel);
+              emit('status', { stage: 'verifying', target: targetLabel });
+            }
+
+            executionPlan = advancePlanForTool(executionPlan, act.tool, 'running');
+            emit('plan', {
+              intent: executionPlan.intent,
+              complexity: executionPlan.complexity,
+              objective: executionPlan.objective,
+              requiresHeavyPlanning: executionPlan.requiresHeavyPlanning,
+              steps: executionPlan.steps,
+            });
+
             const actionEvent: ToolActionEvent = {
               id: `act_${crypto.randomUUID().slice(0, 6)}`,
               tool: act.tool,
@@ -1889,7 +1923,14 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMess
             toolEvents.push(actionEvent);
             emit('tool_event', actionEvent);
 
-            let res: { ok: boolean; target: string; result: string; mutated: boolean; isVerificationCmd?: boolean };
+            let res: {
+              ok: boolean;
+              target: string;
+              result: string;
+              mutated: boolean;
+              isVerificationCmd?: boolean;
+              errorClass?: AgentErrorClass;
+            };
             try {
               res = await executeTool(projectId, act.tool, act.args, secretList, abortController.signal);
             } catch (toolErr) {
@@ -1902,7 +1943,10 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMess
             }
             actionEvent.status = res.ok ? 'success' : 'error';
             actionEvent.detail = res.result;
-            if (res.mutated) filesMutated = true;
+            if (res.mutated) {
+              filesMutated = true;
+              lastMutationEventIdx = toolEvents.indexOf(actionEvent);
+            }
             if (res.ok && (act.tool === 'write_file' || act.tool === 'edit_file')) {
               hasSuccessfulWriteOrEdit = true;
             }
@@ -1919,9 +1963,15 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMess
             actionResultLines.push(`[Hasil ${act.tool} (${targetLabel}) — ${res.ok ? 'OK' : 'GAGAL'}]:\n${res.result}`);
 
             if (!res.ok) {
+              const errClass = res.errorClass || classifyAgentToolError(res.result);
               const sig = `${act.tool}:${JSON.stringify(act.args)}`;
               const nextFailCount = (failedCallCounts.get(sig) || 0) + 1;
               failedCallCounts.set(sig, nextFailCount);
+              if (errClass === 'permission' && nextFailCount >= 2) {
+                loopBrokenReason = `Eksekusi tool "${act.tool}" dihentikan karena penolakan izin/keamanan berulang (${res.result.slice(0, 120)}).`;
+                emit('status', { warning: loopBrokenReason });
+                break;
+              }
               if (nextFailCount >= MAX_IDENTICAL_FAILING_CALLS) {
                 loopBrokenReason = `Loop dihentikan otomatis karena pemanggilan tool "${act.tool}" gagal berulang (${MAX_IDENTICAL_FAILING_CALLS}x) dengan argumen identik.`;
                 emit('status', { warning: loopBrokenReason });
@@ -1929,6 +1979,7 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMess
               }
               if (res.isVerificationCmd) {
                 failedVerificationCycles += 1;
+                setTaskState('repairing', act.tool);
                 if (failedVerificationCycles > MAX_AUTO_FIX_CYCLES) {
                   loopBrokenReason = `Batas maksimal perbaikan otomatis (${MAX_AUTO_FIX_CYCLES} siklus build/test) tercapai. Periksa log error di tab Terminal.`;
                   emit('status', { warning: loopBrokenReason });
@@ -2171,11 +2222,8 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMess
         return true;
       };
 
-      // Execute consecutive read-only (non-mutating) tool calls in parallel while keeping mutating tools serialized
-      const isReadOnlyBatchCandidate = (tc: (typeof stepToolCalls)[number]) => {
-        const spec = getRegisteredTool(tc.name);
-        return Boolean(spec && !spec.mutating && tc.name !== 'read_logs');
-      };
+      // Execute consecutive pure read-only tool calls in parallel while keeping verification, memory & mutating tools serialized
+      const isReadOnlyBatchCandidate = (tc: (typeof stepToolCalls)[number]) => isParallelReadOnlyTool(tc.name);
 
       let tcIdx = 0;
       while (tcIdx < stepToolCalls.length && !abortController.signal.aborted) {
@@ -2223,18 +2271,28 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMess
     await projectRuntime.ensureReadyAsync(projectId);
   }
 
-  // Tool-Evidence Verification Gate: verify whether real verification tools passed/failed AFTER last mutation
+  // Tool-Evidence Verification Gate: track latest post-mutation outcome per check so any failing check blocks verified_pass
   const VERIFICATION_TOOL_NAMES = new Set(['validate_project', 'build_project', 'run_tests', 'run_command']);
   const postMutationVerifications = toolEvents
     .slice(Math.max(0, lastMutationEventIdx + 1))
     .filter((ev) => VERIFICATION_TOOL_NAMES.has(ev.tool));
-  const passedChecks = postMutationVerifications.filter((ev) => ev.status === 'success').map((ev) => `${ev.tool}(${ev.target})`);
-  const failedChecks = postMutationVerifications.filter((ev) => ev.status === 'error').map((ev) => `${ev.tool}(${ev.target})`);
+  const latestCheckStatus = new Map<string, 'success' | 'error'>();
+  for (const ev of postMutationVerifications) {
+    if (ev.status === 'success' || ev.status === 'error') {
+      latestCheckStatus.set(`${ev.tool}(${ev.target})`, ev.status);
+    }
+  }
+  const passedChecks = Array.from(latestCheckStatus.entries())
+    .filter(([, status]) => status === 'success')
+    .map(([key]) => key);
+  const failedChecks = Array.from(latestCheckStatus.entries())
+    .filter(([, status]) => status === 'error')
+    .map(([key]) => key);
 
   const verificationGateStatus: 'verified_pass' | 'verified_fail' | 'not_verified' | 'not_required' =
     mode !== 'build' || !filesMutated
       ? 'not_required'
-      : failedChecks.length > 0 && passedChecks.length === 0
+      : failedChecks.length > 0
         ? 'verified_fail'
         : passedChecks.length > 0
           ? 'verified_pass'

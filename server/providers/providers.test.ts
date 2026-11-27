@@ -1050,3 +1050,80 @@ test('Phase 5: Gemini stream idle timeout watchdog aborts stalled streams and ex
   assert.equal(testRes.message.includes(secretHdrValue), false);
 });
 
+test('Master Audit F-01: AnthropicAdapter groups consecutive tool_result turns into one user message and enforces role alternation', async () => {
+  const { buildAnthropicMessages } = await import('./anthropic');
+
+  const mapped = buildAnthropicMessages([
+    { role: 'user', content: 'Periksa dua file.' },
+    {
+      role: 'assistant',
+      content: 'Membaca kedua file.',
+      toolCalls: [
+        { id: 'toolu_1', name: 'read_file', arguments: { path: 'a.ts' } },
+        { id: 'toolu_2', name: 'read_file', arguments: { path: 'b.ts' } },
+      ],
+    },
+    { role: 'tool', toolCallId: 'toolu_1', toolName: 'read_file', content: 'alpha' },
+    { role: 'tool', toolCallId: 'toolu_2', toolName: 'read_file', content: 'beta' },
+    { role: 'user', content: 'Lanjutkan analisis.' },
+  ]);
+
+  assert.equal(mapped.length, 3, 'Consecutive tool results + trailing user turn must collapse into a single alternating user turn');
+  assert.equal(mapped[0].role, 'user');
+  assert.equal(mapped[1].role, 'assistant');
+  assert.equal(mapped[2].role, 'user');
+  assert.ok(Array.isArray(mapped[2].content));
+  const userBlocks = mapped[2].content as Array<Record<string, unknown>>;
+  assert.equal(userBlocks.length, 3);
+  assert.equal(userBlocks[0].type, 'tool_result');
+  assert.equal(userBlocks[0].tool_use_id, 'toolu_1');
+  assert.equal(userBlocks[1].type, 'tool_result');
+  assert.equal(userBlocks[1].tool_use_id, 'toolu_2');
+  assert.equal(userBlocks[2].type, 'text');
+
+  // Verify the live HTTP body sent by AnthropicAdapter.chatStream preserves this exact grouping
+  let capturedBody: { messages?: Array<{ role: string; content: unknown }> } | null = null;
+  const adapter = new AnthropicAdapter(async (_url, init) => {
+    capturedBody = JSON.parse(String(init.body || '{}')) as { messages?: Array<{ role: string; content: unknown }> };
+    return makeSseResponse([
+      `data: ${JSON.stringify({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'OK' } })}\n\n`,
+      `data: ${JSON.stringify({ type: 'message_stop' })}\n\n`,
+    ]);
+  });
+
+  const events = await collectEvents(
+    adapter.chatStream({
+      config: {
+        providerKeyId: 'ka_group',
+        provider: 'anthropic',
+        label: 'Anthropic',
+        apiKey: 'sk-ant-group-test',
+        tierDeclared: 'paid',
+      },
+      modelId: 'claude-sonnet-4-5',
+      systemPrompt: 'Sys',
+      messages: [
+        { role: 'user', content: 'Baca 2 file' },
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [
+            { id: 'tu_a', name: 'read_file', arguments: { path: 'a.ts' } },
+            { id: 'tu_b', name: 'read_file', arguments: { path: 'b.ts' } },
+          ],
+        },
+        { role: 'tool', toolCallId: 'tu_a', toolName: 'read_file', content: 'one' },
+        { role: 'tool', toolCallId: 'tu_b', toolName: 'read_file', content: 'two' },
+      ],
+    })
+  );
+  assert.equal(events.some((e) => e.type === 'text_delta' && e.text === 'OK'), true);
+  assert.ok(capturedBody && Array.isArray((capturedBody as { messages: Array<{ role: string; content: unknown }> }).messages));
+  const sentMsgs = (capturedBody as { messages: Array<{ role: string; content: unknown }> }).messages;
+  assert.equal(sentMsgs.length, 3);
+  for (let idx = 1; idx < sentMsgs.length; idx += 1) {
+    assert.notEqual(sentMsgs[idx].role, sentMsgs[idx - 1].role, 'Anthropic messages must strictly alternate roles');
+  }
+  assert.ok(Array.isArray(sentMsgs[2].content));
+  assert.equal((sentMsgs[2].content as Array<unknown>).length, 2);
+});

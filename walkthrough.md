@@ -1,7 +1,7 @@
 # Security Summary
 
-**Reviewed Files**: 118
-**Issues Resolved**: 37
+**Reviewed Files**: 156 (158 total repository files; 2 binary PDFs excluded from text inspection)
+**Issues Resolved**: 39
 
 ### Issues Resolved
 | Area | File | Line | What Was Happening | Impact | Status | How It Was Fixed |
@@ -35,6 +35,8 @@
 | Bounded APK Build Queue & Cancellation | `server/builds/apkBuilder.ts`, `server/builds/apkWorker.ts`, `scripts/apk-worker-healthcheck.mjs`, `server.ts`, `src/components/workspace/WorkspaceModals.tsx` | 842 / 52 / 96 | Local APK builds fired unbounded `setTimeout` jobs without honoring global concurrency limits, had no cancel endpoint, and the standalone worker could not run in shared DB-poll mode when Redis was absent. | Medium | Fixed | Replaced unbounded `setTimeout` with a bounded single-instance queue honoring `maxConcurrentApkBuildsGlobal`, added owner-checked `POST /api/builds/:id/cancel` with ephemeral keystore wiping, and added `db-poll` mode + healthcheck support to `apkWorker.ts`. |
 | Dangling Symlink Workspace Escape | `server/security.ts`, `server/security.test.ts` | 964 | `validateTenantWorkspacePath` caught `ENOENT` from `fs.realpathSync` on a dangling symlink pointing outside the tenant workspace and exited the walk loop early, returning `{ valid: true }` so subsequent writes could create files outside the tenant directory. | High | Fixed | Separated `fs.lstatSync` from `fs.realpathSync` so any dangling or cyclic symlink fails closed immediately, and validated resolved symlink targets against both tenant workspace containment and `isSensitiveHostResourcePath`. |
 | APK DB-Poll Claim Race, Cancel Overwrite & Stale Recovery | `server/builds/apkBuilder.ts`, `server/builds/apkWorker.ts`, `server/builds/builds.test.ts` | 1156 / 1346 / 1427 | DB-poll workers read the top queued row without atomic SQL claiming, completion updates could overwrite a concurrent `cancelled` build status, and long-lived DB-poll workers lacked a periodic stale-`running` sweeper. | Medium | Fixed | Switched DB-poll claiming to atomic `UPDATE builds SET status = 'running' WHERE id = ? AND status = 'running'` / `'queued'` conditional transitions, cleaned up artifacts on concurrent cancellation, and added a 60-second periodic `recoverStaleRunningApkBuildsAsync` sweeper inside `apkWorker.ts`. |
+| Custom Provider Header Secret Scrubbing | `server/providers/types.ts`, `server/agent/orchestrator.ts`, `server/providers/*.ts` | 83 / 1535 | The agent orchestrator's active secret scrub list only included provider `apiKey` values, leaving custom `extraHeaders` credentials unscrubbed in tool/agent output, while `getSecretsToScrub` was duplicated across four provider adapters. | Medium | Fixed | Exported a single canonical `getSecretsToScrub(config)` helper from `server/providers/types.ts`, reused it across all four provider adapters, and populated `activeSecrets` in `orchestrator.ts` with all primary and fallback `apiKey` plus `extraHeaders` values. |
+| Agent Verification Gate & Parallel Tool Isolation | `server/agent/orchestrator.ts`, `server/agent/toolRegistry.ts`, `server/skills/executor.ts` | 1880 / 2167 / 2228 | Mixed pass+fail post-mutation checks falsely reported `verified_pass`, structured-fallback turns did not advance `lastMutationEventIdx` or stop on repeated permission denials, and heavy verification/memory tools (`build_project`, `run_tests`, `validate_project`, `update_project_memory`) could run concurrently inside `Promise.all`. | High | Fixed | Computed post-mutation verification status using the latest result per check so any failing check produces `verified_fail`, brought structured-fallback turns to full parity (mutation tracking, task-state emission, permission early-break), and added explicit `parallelSafe` classification so only pure read-only inspection tools run in parallel. |
 
 ### Safeguards Verified
 | Area | File | How It's Protected |
@@ -305,3 +307,26 @@ Updated `claimAndProcessNextQueuedApkBuildAsync` to claim queued builds atomical
 
 #### Conclusion
 **Fix Verified** - DB-poll APK workers safely avoid double-claiming, respect mid-build cancellation, and automatically recover stuck builds.
+
+### Custom Provider Header Scrubbing, Verification Gate Honesty & Parallel Sandbox Safety
+#### Summary
+| Field | Value |
+|---|---|
+| Issue Type | Secret Redaction Coverage, False Verification Status & Concurrent Tool Contention |
+| Impact | High |
+| Affected Files | `server/providers/types.ts:83`, `server/agent/orchestrator.ts:1535,1880,2167,2228`, `server/agent/toolRegistry.ts:211`, `server/skills/executor.ts:692` |
+| Test Scenario | Custom provider `extraHeaders` secret leaked in model text, mixed post-mutation `validate_project` (pass) + `run_tests` (fail), pre-mutation `validate_project` in structured fallback, and `isParallelReadOnlyTool` classification (`server/agent/orchestrator.test.ts`) |
+
+#### How It Was Fixed
+Unified `getSecretsToScrub` in `server/providers/types.ts` and fed all primary/fallback `extraHeaders` values into `orchestrator.ts`'s `activeSecrets`; updated post-mutation verification gating to evaluate the latest outcome per check so any failure emits `verified_fail`; tracked `lastMutationEventIdx`, `task_state`, and repeated permission denials in structured-fallback turns; and restricted `Promise.all` batching strictly to pure read-only inspection tools (`parallelSafe: true`).
+
+#### Step-by-Step Trace
+| Step | What Happens in the Code | Outcome |
+|---|---|---|
+| 1 | Model output includes custom `X-Internal-Auth` header secret | `activeSecrets` scrubs value to `[REDACTED_KEY]` before persistence |
+| 2 | Post-mutation turn runs `validate_project` (pass) and `run_tests` (fail) | `verification_gate` emits `verified_fail` with both passed and failed checks recorded |
+| 3 | Structured-fallback turn validates before editing `index.html` | `lastMutationEventIdx` advances on `write_file`; gate emits `not_verified` instead of false `verified_pass` |
+| 4 | `isParallelReadOnlyTool` evaluated on `build_project`, `run_tests`, `validate_project`, `update_project_memory` | Returns `false`, ensuring serialized sandbox/DB execution |
+
+#### Conclusion
+**Fix Verified** - Regression tests in `server/agent/orchestrator.test.ts` and `server/providers/providers.test.ts` confirm secret redaction, honest verification gating, and serialized execution of stateful/verification tools.

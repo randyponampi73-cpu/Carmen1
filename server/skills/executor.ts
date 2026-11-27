@@ -689,7 +689,7 @@ export async function executeComposedSkillWorkflow(params: {
     const canParallelize = (st: SkillWorkflowStep) => {
       if (st.scriptPath || !st.parallelSafe) return false;
       const spec = getRegisteredTool(st.tool);
-      return Boolean(spec && !spec.mutating);
+      return Boolean(spec && !spec.mutating && spec.parallelSafe);
     };
 
     if (canParallelize(steps[i])) {

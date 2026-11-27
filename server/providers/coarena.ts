@@ -7,6 +7,7 @@ import {
 } from '../security';
 import { isNonChatModel, resolveModelTier } from './catalog';
 import {
+  getSecretsToScrub,
   normalizeProviderError,
   parseRetryAfterMs,
   type ChatStreamRequest,
@@ -39,10 +40,6 @@ export type CoarenaFetchFn = (
   init: RequestInit,
   options: { timeoutMs: number; streamIdleTimeoutMs?: number; maxRedirects: number; enforceCustomUrlPolicy: boolean }
 ) => Promise<Response>;
-
-function getSecretsToScrub(config: ProviderAdapterConfig): string[] {
-  return [config.apiKey, ...Object.values(config.extraHeaders || {})].filter(Boolean);
-}
 
 interface CoarenaModelRecord {
   id: string;

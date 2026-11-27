@@ -2,6 +2,7 @@ import type { ProviderModel } from '../../src/types';
 import { readResponseTextWithLimit, safeOutboundFetch, scrubSecrets } from '../security';
 import { findCatalogEntry, isNonChatModel, resolveModelTier } from './catalog';
 import {
+  getSecretsToScrub,
   normalizeProviderError,
   parseRetryAfterMs,
   type ChatStreamRequest,
@@ -25,8 +26,80 @@ export type AnthropicFetchFn = (
   options: { timeoutMs: number; streamIdleTimeoutMs?: number; maxRedirects: number }
 ) => Promise<Response>;
 
-function getSecretsToScrub(config: ProviderAdapterConfig): string[] {
-  return [config.apiKey, ...Object.values(config.extraHeaders || {})].filter(Boolean);
+function toAnthropicContentBlocks(content: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(content)) {
+    return content as Array<Record<string, unknown>>;
+  }
+  const text = String(content ?? '');
+  return text ? [{ type: 'text', text }] : [];
+}
+
+/**
+ * Maps CARMEN conversation messages to Anthropic Messages API format:
+ * - Groups consecutive `role: 'tool'` messages into a SINGLE `role: 'user'` turn
+ *   containing multiple `tool_result` blocks (required by Anthropic `/v1/messages`).
+ * - Merges adjacent `role: 'user'` turns so roles strictly alternate.
+ */
+export function buildAnthropicMessages(
+  messages: ChatStreamRequest['messages']
+): Array<{ role: 'user' | 'assistant'; content: string | Array<Record<string, unknown>> }> {
+  const out: Array<{ role: 'user' | 'assistant'; content: string | Array<Record<string, unknown>> }> = [];
+  const filtered = messages.filter((m) => m.role !== 'system');
+
+  const pushMessage = (role: 'user' | 'assistant', content: string | Array<Record<string, unknown>>) => {
+    const prev = out[out.length - 1];
+    if (prev && prev.role === role) {
+      prev.content = [...toAnthropicContentBlocks(prev.content), ...toAnthropicContentBlocks(content)];
+      return;
+    }
+    out.push({ role, content });
+  };
+
+  for (let i = 0; i < filtered.length; i += 1) {
+    const m = filtered[i];
+
+    if (m.role === 'tool') {
+      const blocks: Array<Record<string, unknown>> = [];
+      let j = i;
+      while (j < filtered.length && filtered[j].role === 'tool') {
+        const tm = filtered[j];
+        blocks.push({
+          type: 'tool_result',
+          tool_use_id: tm.toolCallId || `tool_${j}`,
+          content: tm.content,
+        });
+        j += 1;
+      }
+      i = j - 1;
+      pushMessage('user', blocks);
+      continue;
+    }
+
+    if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+      const blocks: Array<Record<string, unknown>> = [];
+      if (m.content) blocks.push({ type: 'text', text: m.content });
+      for (const tc of m.toolCalls) {
+        blocks.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.arguments });
+      }
+      pushMessage('assistant', blocks);
+      continue;
+    }
+
+    const role: 'user' | 'assistant' = m.role === 'assistant' ? 'assistant' : 'user';
+    if (m.imageBase64 && m.imageMimeType) {
+      pushMessage(role, [
+        {
+          type: 'image',
+          source: { type: 'base64', media_type: m.imageMimeType, data: m.imageBase64 },
+        },
+        { type: 'text', text: m.content },
+      ]);
+      continue;
+    }
+    pushMessage(role, m.content);
+  }
+
+  return out;
 }
 
 function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
@@ -149,43 +222,7 @@ export class AnthropicAdapter implements ProviderAdapter {
 
   async *chatStream(request: ChatStreamRequest): AsyncIterable<StreamEvent> {
     const { config, modelId, systemPrompt, messages, tools, signal } = request;
-    const mappedMessages = messages
-      .filter((m) => m.role !== 'system')
-      .map((m) => {
-        if (m.role === 'tool') {
-          return {
-            role: 'user',
-            content: [
-              {
-                type: 'tool_result',
-                tool_use_id: m.toolCallId || 'tool_0',
-                content: m.content,
-              },
-            ],
-          };
-        }
-        if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
-          const blocks: Array<Record<string, unknown>> = [];
-          if (m.content) blocks.push({ type: 'text', text: m.content });
-          for (const tc of m.toolCalls) {
-            blocks.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.arguments });
-          }
-          return { role: 'assistant', content: blocks };
-        }
-        if (m.imageBase64 && m.imageMimeType) {
-          return {
-            role: m.role,
-            content: [
-              {
-                type: 'image',
-                source: { type: 'base64', media_type: m.imageMimeType, data: m.imageBase64 },
-              },
-              { type: 'text', text: m.content },
-            ],
-          };
-        }
-        return { role: m.role, content: m.content };
-      });
+    const mappedMessages = buildAnthropicMessages(messages);
 
     const caps = this.capabilities(modelId);
     const maxTokens =

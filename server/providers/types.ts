@@ -80,6 +80,12 @@ export interface ProviderAdapter {
   capabilities(modelId: string, config?: ProviderAdapterConfig): ModelCapabilities;
 }
 
+export function getSecretsToScrub(config: ProviderAdapterConfig): string[] {
+  return [config.apiKey, ...Object.values(config.extraHeaders || {})]
+    .map((v) => String(v || '').trim())
+    .filter(Boolean);
+}
+
 export function parseRetryAfterMs(headers: Headers | Record<string, string | undefined> | null | undefined): number | null {
   if (!headers) return null;
   const get = (name: string): string | null => {

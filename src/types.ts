@@ -517,4 +517,18 @@ export interface SkillTurnTraceItem {
   missingPermissions?: SkillPermission[];
 }
 
+export type AgentTaskState =
+  | 'idle'
+  | 'planning'
+  | 'executing'
+  | 'verifying'
+  | 'repairing'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
 
+export interface VerificationGateSummary {
+  status: 'verified_pass' | 'verified_fail' | 'not_verified' | 'not_required';
+  passedChecks: string[];
+  failedChecks: string[];
+}

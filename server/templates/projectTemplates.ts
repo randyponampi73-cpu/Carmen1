@@ -41,12 +41,12 @@ const TODO_PREVIEW_HTML = `<!doctype html>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); padding: 24px; line-height: 1.5; }
     .wrap { max-width: 680px; margin: 0 auto; }
-    header { display: flex; justify-content: space-between; align-items: baseline; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 16px; }
+    header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 12px; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 16px; }
     h1 { font-size: 20px; font-weight: 600; }
     .meta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-    form { display: flex; gap: 8px; margin-bottom: 16px; }
+    form { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
     input[type="text"], select { background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 8px 12px; font-size: 14px; }
-    input[type="text"] { flex: 1; }
+    input[type="text"] { flex: 1 1 160px; min-width: 0; }
     button { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer; }
     button.ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 4px 10px; font-size: 12px; }
     button.ghost.active { border-color: var(--accent); color: var(--text); }
@@ -295,8 +295,8 @@ const HABIT_PREVIEW_HTML = `<!doctype html>
     body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); padding: 16px; }
     h1 { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
     .sub { font-size: 12px; color: var(--muted); margin-bottom: 14px; font-variant-numeric: tabular-nums; }
-    form { display: flex; gap: 6px; margin-bottom: 14px; }
-    input { flex: 1; background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+    form { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+    input { flex: 1 1 150px; min-width: 0; background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 8px 10px; font-size: 13px; }
     button { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 8px 12px; font-size: 12px; font-weight: 500; cursor: pointer; }
     .list { display: flex; flex-direction: column; gap: 8px; }
     .card { display: flex; align-items: center; justify-content: space-between; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }

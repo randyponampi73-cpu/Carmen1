@@ -13,6 +13,7 @@ export interface RegisteredToolSpec {
   category: 'filesystem' | 'analysis' | 'execution' | 'verification' | 'memory' | 'recovery';
   requiredPermission: SkillToolPermission;
   mutating: boolean;
+  parallelSafe: boolean;
   definition: AdapterToolDefinition;
 }
 
@@ -202,25 +203,30 @@ export const CANONICAL_AGENT_TOOLS: AdapterToolDefinition[] = [
 
 const TOOL_METADATA: Record<
   string,
-  { category: RegisteredToolSpec['category']; requiredPermission: SkillToolPermission; mutating: boolean }
+  {
+    category: RegisteredToolSpec['category'];
+    requiredPermission: SkillToolPermission;
+    mutating: boolean;
+    parallelSafe: boolean;
+  }
 > = {
-  read_file: { category: 'filesystem', requiredPermission: 'READ', mutating: false },
-  list_files: { category: 'filesystem', requiredPermission: 'READ', mutating: false },
-  search_files: { category: 'analysis', requiredPermission: 'READ', mutating: false },
-  write_file: { category: 'filesystem', requiredPermission: 'WRITE', mutating: true },
-  edit_file: { category: 'filesystem', requiredPermission: 'WRITE', mutating: true },
-  delete_file: { category: 'filesystem', requiredPermission: 'WRITE', mutating: true },
-  create_directory: { category: 'filesystem', requiredPermission: 'WRITE', mutating: true },
-  update_project_memory: { category: 'memory', requiredPermission: 'WRITE', mutating: false },
-  run_command: { category: 'execution', requiredPermission: 'EXECUTE', mutating: true },
-  install_dependencies: { category: 'execution', requiredPermission: 'EXECUTE', mutating: true },
-  run_tests: { category: 'verification', requiredPermission: 'EXECUTE', mutating: false },
-  build_project: { category: 'verification', requiredPermission: 'EXECUTE', mutating: false },
-  validate_project: { category: 'verification', requiredPermission: 'READ', mutating: false },
-  inspect_dependencies: { category: 'analysis', requiredPermission: 'READ', mutating: false },
-  workspace_diff: { category: 'analysis', requiredPermission: 'READ', mutating: false },
-  rollback_checkpoint: { category: 'recovery', requiredPermission: 'WRITE', mutating: true },
-  read_logs: { category: 'analysis', requiredPermission: 'READ', mutating: false },
+  read_file: { category: 'filesystem', requiredPermission: 'READ', mutating: false, parallelSafe: true },
+  list_files: { category: 'filesystem', requiredPermission: 'READ', mutating: false, parallelSafe: true },
+  search_files: { category: 'analysis', requiredPermission: 'READ', mutating: false, parallelSafe: true },
+  write_file: { category: 'filesystem', requiredPermission: 'WRITE', mutating: true, parallelSafe: false },
+  edit_file: { category: 'filesystem', requiredPermission: 'WRITE', mutating: true, parallelSafe: false },
+  delete_file: { category: 'filesystem', requiredPermission: 'WRITE', mutating: true, parallelSafe: false },
+  create_directory: { category: 'filesystem', requiredPermission: 'WRITE', mutating: true, parallelSafe: false },
+  update_project_memory: { category: 'memory', requiredPermission: 'WRITE', mutating: false, parallelSafe: false },
+  run_command: { category: 'execution', requiredPermission: 'EXECUTE', mutating: true, parallelSafe: false },
+  install_dependencies: { category: 'execution', requiredPermission: 'EXECUTE', mutating: true, parallelSafe: false },
+  run_tests: { category: 'verification', requiredPermission: 'EXECUTE', mutating: false, parallelSafe: false },
+  build_project: { category: 'verification', requiredPermission: 'EXECUTE', mutating: false, parallelSafe: false },
+  validate_project: { category: 'verification', requiredPermission: 'READ', mutating: false, parallelSafe: false },
+  inspect_dependencies: { category: 'analysis', requiredPermission: 'READ', mutating: false, parallelSafe: true },
+  workspace_diff: { category: 'analysis', requiredPermission: 'READ', mutating: false, parallelSafe: true },
+  rollback_checkpoint: { category: 'recovery', requiredPermission: 'WRITE', mutating: true, parallelSafe: false },
+  read_logs: { category: 'analysis', requiredPermission: 'READ', mutating: false, parallelSafe: false },
 };
 
 const REGISTERED_MAP = new Map<string, RegisteredToolSpec>(
@@ -229,6 +235,7 @@ const REGISTERED_MAP = new Map<string, RegisteredToolSpec>(
       category: 'analysis' as const,
       requiredPermission: 'READ' as const,
       mutating: false,
+      parallelSafe: false,
     };
     return [
       definition.name,
@@ -237,6 +244,7 @@ const REGISTERED_MAP = new Map<string, RegisteredToolSpec>(
         category: meta.category,
         requiredPermission: meta.requiredPermission,
         mutating: meta.mutating,
+        parallelSafe: meta.parallelSafe,
         definition,
       },
     ];
@@ -253,6 +261,11 @@ export function getRegisteredTool(name: string): RegisteredToolSpec | undefined 
 
 export function isKnownAgentTool(name: string): boolean {
   return REGISTERED_MAP.has(name.trim());
+}
+
+export function isParallelReadOnlyTool(name: string): boolean {
+  const spec = REGISTERED_MAP.get(name.trim());
+  return Boolean(spec && !spec.mutating && spec.parallelSafe);
 }
 
 export function resolveToolNamesForSkill(requestedTools: string[]): {

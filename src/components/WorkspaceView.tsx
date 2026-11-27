@@ -26,6 +26,7 @@ import { COPY, formatDateTime } from '../i18n';
 import { api, getAuthHeaders, loadLocalOnlyKeys, notifyUnauthorized, type WorkspacePayload } from '../lib/api';
 import type {
   AgentPlanSummary,
+  AgentTaskState,
   ApkBuildRecord,
   FallbackEvent,
   Locale,
@@ -37,6 +38,7 @@ import type {
   SkillTurnTraceItem,
   ThemeMode,
   ToolActionEvent,
+  VerificationGateSummary,
 } from '../types';
 import { ConfirmDialog } from './ConfirmDialog';
 import { ActivityPane } from './workspace/ActivityPane';
@@ -142,6 +144,9 @@ export function WorkspaceView({
   const [streamingSkillTrace, setStreamingSkillTrace] = useState<SkillTurnTraceItem[]>([]);
   const [lastTurnSkillTrace, setLastTurnSkillTrace] = useState<SkillTurnTraceItem[]>([]);
   const [builtinOnlyTurnNotice, setBuiltinOnlyTurnNotice] = useState(false);
+  const [streamingTaskState, setStreamingTaskState] = useState<AgentTaskState>('idle');
+  const [streamingStageTarget, setStreamingStageTarget] = useState<string | null>(null);
+  const [lastVerificationGate, setLastVerificationGate] = useState<VerificationGateSummary | null>(null);
 
   const autoRanRef = useRef(false);
   const chatAbortRef = useRef<AbortController | null>(null);
@@ -445,6 +450,9 @@ export function WorkspaceView({
       setStreamingSkillTrace([]);
       setLastTurnSkillTrace([]);
       setBuiltinOnlyTurnNotice(false);
+      setStreamingTaskState('planning');
+      setStreamingStageTarget(null);
+      setLastVerificationGate(null);
 
       // Optimistically append user message
       setData((prev) =>
@@ -671,8 +679,27 @@ export function WorkspaceView({
                       ? prev.map((x) => (x.skillName === execItem.skillName ? { ...x, ...execItem } : x))
                       : [...prev, execItem];
                   });
-                } else if (currentEvent === 'status' && payload.warning) {
-                  setStreamWarning(payload.warning);
+                } else if (currentEvent === 'task_state' && payload.state) {
+                  setStreamingTaskState(payload.state as AgentTaskState);
+                  if (typeof payload.detail === 'string' && payload.detail.trim()) {
+                    setStreamingStageTarget(payload.detail.trim());
+                  }
+                } else if (currentEvent === 'verification_gate' && payload.status) {
+                  setLastVerificationGate({
+                    status: payload.status as VerificationGateSummary['status'],
+                    passedChecks: Array.isArray(payload.passedChecks) ? payload.passedChecks.map(String) : [],
+                    failedChecks: Array.isArray(payload.failedChecks) ? payload.failedChecks.map(String) : [],
+                  });
+                } else if (currentEvent === 'status') {
+                  if (payload.warning) {
+                    setStreamWarning(payload.warning);
+                  }
+                  if (typeof payload.stage === 'string' && payload.stage) {
+                    setStreamingTaskState(payload.stage as AgentTaskState);
+                  }
+                  if (typeof payload.target === 'string' && payload.target.trim()) {
+                    setStreamingStageTarget(payload.target.trim());
+                  }
                 } else if (currentEvent === 'error' && payload.message) {
                   setStreamError(payload.message);
                 } else if (currentEvent === 'done') {
@@ -719,6 +746,8 @@ export function WorkspaceView({
         setStreamingActions([]);
         setStreamingPlan(null);
         setFallbackNotice(null);
+        setStreamingTaskState('idle');
+        setStreamingStageTarget(null);
       }
     },
     [models, selectedModelKey, projectId, mode, skillModeOption, locale, t.sessionMissing, clearDebounceTimers, handleRefreshPreview, loadWorkspace]
@@ -917,6 +946,9 @@ export function WorkspaceView({
       streamingSkillTrace={streamingSkillTrace}
       lastTurnSkillTrace={lastTurnSkillTrace}
       builtinOnlyTurnNotice={builtinOnlyTurnNotice}
+      streamingTaskState={streamingTaskState}
+      streamingStageTarget={streamingStageTarget}
+      lastVerificationGate={lastVerificationGate}
     />
   );
 

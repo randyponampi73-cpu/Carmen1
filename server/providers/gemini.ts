@@ -3,6 +3,7 @@ import type { ProviderModel } from '../../src/types';
 import { readResponseTextWithLimit, safeOutboundFetch, scrubSecrets } from '../security';
 import { findCatalogEntry, isNonChatModel, loadModelCatalog, resolveModelTier } from './catalog';
 import {
+  getSecretsToScrub,
   normalizeProviderError,
   parseRetryAfterMs,
   type ChatStreamRequest,
@@ -19,10 +20,6 @@ const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 90_000;
 function getGeminiStreamIdleTimeoutMs(): number {
   const raw = Number(process.env.CARMEN_STREAM_IDLE_TIMEOUT_MS || DEFAULT_STREAM_IDLE_TIMEOUT_MS);
   return Number.isFinite(raw) && raw >= 50 && raw <= 600_000 ? Math.floor(raw) : DEFAULT_STREAM_IDLE_TIMEOUT_MS;
-}
-
-function getSecretsToScrub(config: ProviderAdapterConfig): string[] {
-  return [config.apiKey, ...Object.values(config.extraHeaders || {})].filter(Boolean);
 }
 
 export type GeminiFetchFn = (

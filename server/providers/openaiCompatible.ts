@@ -7,6 +7,7 @@ import {
 } from '../security';
 import { findCatalogEntry, isNonChatModel, resolveModelTier } from './catalog';
 import {
+  getSecretsToScrub,
   normalizeProviderError,
   parseRetryAfterMs,
   type ChatStreamRequest,
@@ -73,10 +74,6 @@ export type OutboundFetchFn = (
   init: RequestInit,
   options: { timeoutMs: number; streamIdleTimeoutMs?: number; maxRedirects: number; enforceCustomUrlPolicy: boolean }
 ) => Promise<Response>;
-
-function getSecretsToScrub(config: ProviderAdapterConfig): string[] {
-  return [config.apiKey, ...Object.values(config.extraHeaders || {})].filter(Boolean);
-}
 
 function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
