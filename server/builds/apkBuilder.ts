@@ -19,6 +19,7 @@ import { ARTIFACT_DIR, asyncDb, db } from '../db';
 import { parseJsonColumn, toIsoTimestamp } from '../db/dialect';
 import { isExcludedFromExport } from '../export/zipExporter';
 import { spawnIsolatedProcess } from '../runtime/isolation';
+import { computeRuntimeResourceBudget } from '../runtime/resourceBudget';
 import {
   decryptSecret,
   encryptSecret,
@@ -249,6 +250,9 @@ function getOrCreateApkQueue(): Queue<ApkBuildJobPayload> {
     redisProducerConn = new IORedis(redisCheck.url, {
       maxRetriesPerRequest: null,
       enableReadyCheck: false,
+    });
+    redisProducerConn.on('error', (err) => {
+      console.warn('[apk-queue] Redis producer error:', scrubSecrets(err instanceof Error ? err.message : String(err)));
     });
   }
   if (!apkQueueInstance) {
@@ -840,9 +844,7 @@ export async function enqueueApkBuild(
       };
     }
   } else {
-    setTimeout(() => {
-      void processApkBuild(buildId, projectId, config, validatedSigning);
-    }, 100);
+    enqueueLocalBuildItem(buildId, projectId, config, validatedSigning);
   }
 
   const created = (await getBuildRecordAsync(buildId))!;
@@ -863,8 +865,9 @@ async function runIsolatedNativeGradleBuild(
   gradleDir: string,
   buildType: 'debug' | 'release',
   signing?: { keystorePath: string; creds: ApkSigningCredentials },
-  format: 'apk' | 'aab' = 'apk'
-): Promise<{ ok: boolean; apkPath?: string; output: string; driver: string }> {
+  format: 'apk' | 'aab' = 'apk',
+  buildId?: string
+): Promise<{ ok: boolean; apkPath?: string; output: string; driver: string; cancelled?: boolean }> {
   const task =
     format === 'aab'
       ? buildType === 'release'
@@ -899,6 +902,7 @@ async function runIsolatedNativeGradleBuild(
   return await new Promise((resolve) => {
     let out = '';
     let timedOut = false;
+    let cancelled = false;
 
     let handle: ReturnType<typeof spawnIsolatedProcess>;
     try {
@@ -940,6 +944,13 @@ async function runIsolatedNativeGradleBuild(
       return;
     }
 
+    if (buildId) {
+      activeBuildAbortHandlers.set(buildId, () => {
+        cancelled = true;
+        handle.terminate('Gradle build dibatalkan oleh pengguna');
+      });
+    }
+
     const timer = setTimeout(() => {
       timedOut = true;
       handle.terminate('Gradle build timeout');
@@ -955,6 +966,9 @@ async function runIsolatedNativeGradleBuild(
 
     const done = (code: number) => {
       clearTimeout(timer);
+      if (buildId) {
+        activeBuildAbortHandlers.delete(buildId);
+      }
       handle.cleanup();
       try {
         fs.rmSync(gradleTmp, { recursive: true, force: true });
@@ -962,6 +976,10 @@ async function runIsolatedNativeGradleBuild(
         // Ignore
       }
       const cleanOut = scrubSecrets(out, secretValues);
+      if (cancelled) {
+        resolve({ ok: false, output: `${cleanOut}\n[Build dibatalkan oleh pengguna]`.trim(), driver: handle.driver, cancelled: true });
+        return;
+      }
       if (timedOut) {
         resolve({ ok: false, output: `${cleanOut}\n[Timeout Gradle 300 detik]`.trim(), driver: handle.driver });
         return;
@@ -1014,6 +1032,154 @@ function securelyWipeFile(filePath: string): void {
 }
 
 const activeBuildExecutions = new Set<string>();
+const activeBuildAbortHandlers = new Map<string, () => void>();
+const cancelledBuilds = new Set<string>();
+
+interface LocalBuildQueueItem {
+  buildId: string;
+  projectId: string;
+  config: ApkConfig;
+}
+
+const localBuildQueue: LocalBuildQueueItem[] = [];
+const ephemeralLocalSigning = new Map<string, { keystoreBuffer: Buffer; sanitizedCreds: ApkSigningCredentials }>();
+let localQueueActiveCount = 0;
+
+function wipeEphemeralSigning(buildId: string): void {
+  const existing = ephemeralLocalSigning.get(buildId);
+  if (existing) {
+    existing.keystoreBuffer.fill(0);
+    ephemeralLocalSigning.delete(buildId);
+  }
+}
+
+export function getLocalApkQueueStats(): { active: number; queued: number; maxConcurrent: number } {
+  return {
+    active: localQueueActiveCount,
+    queued: localBuildQueue.length,
+    maxConcurrent: Math.max(1, computeRuntimeResourceBudget().maxConcurrentApkBuildsGlobal),
+  };
+}
+
+function pumpLocalApkBuildQueue(): void {
+  const maxConcurrent = Math.max(1, computeRuntimeResourceBudget().maxConcurrentApkBuildsGlobal);
+  while (localQueueActiveCount < maxConcurrent && localBuildQueue.length > 0) {
+    const next = localBuildQueue.shift()!;
+    const signing = ephemeralLocalSigning.get(next.buildId);
+    ephemeralLocalSigning.delete(next.buildId);
+    localQueueActiveCount += 1;
+    void processApkBuild(next.buildId, next.projectId, next.config, signing).finally(() => {
+      if (signing) signing.keystoreBuffer.fill(0);
+      localQueueActiveCount = Math.max(0, localQueueActiveCount - 1);
+      pumpLocalApkBuildQueue();
+    });
+  }
+}
+
+function enqueueLocalBuildItem(
+  buildId: string,
+  projectId: string,
+  config: ApkConfig,
+  validatedSigning?: { keystoreBuffer: Buffer; sanitizedCreds: ApkSigningCredentials }
+): void {
+  if (validatedSigning) {
+    ephemeralLocalSigning.set(buildId, validatedSigning);
+  }
+  if (!localBuildQueue.some((item) => item.buildId === buildId)) {
+    localBuildQueue.push({ buildId, projectId, config });
+  }
+  const timer = setTimeout(() => {
+    pumpLocalApkBuildQueue();
+  }, 15);
+  timer.unref();
+}
+
+/**
+ * Cancels a queued or currently running APK/AAB build safely.
+ * Wipes any in-memory ephemeral release signing buffers immediately.
+ */
+export async function cancelApkBuildAsync(
+  buildId: string
+): Promise<{ ok: boolean; build?: ApkBuildRecord; error?: string; httpStatus?: number }> {
+  const existing = await getBuildRecordAsync(buildId);
+  if (!existing) {
+    return { ok: false, error: 'Build tidak ditemukan.', httpStatus: 404 };
+  }
+  if (existing.status === 'success' || existing.status === 'failed') {
+    return { ok: false, error: 'Build sudah selesai dan tidak dapat dibatalkan.', httpStatus: 409 };
+  }
+
+  // Remove from local in-process queue and wipe any buffered release keystore immediately
+  const queuedIdx = localBuildQueue.findIndex((item) => item.buildId === buildId);
+  if (queuedIdx >= 0) {
+    localBuildQueue.splice(queuedIdx, 1);
+  }
+  wipeEphemeralSigning(buildId);
+
+  // Try atomic queued -> failed transition first
+  const queuedClaim = await asyncDb.run(
+    `UPDATE builds SET status = 'failed' WHERE id = ? AND status = 'queued'`,
+    buildId
+  );
+  if (queuedClaim.changes > 0) {
+    await appendBuildLogAsync(buildId, 'warn', 'Build dibatalkan oleh pengguna sebelum diproses.', 'failed');
+    const updated = await getBuildRecordAsync(buildId);
+    return { ok: true, build: updated ?? undefined };
+  }
+
+  // Otherwise mark running build as cancelled and terminate any active subprocess
+  cancelledBuilds.add(buildId);
+  const abortFn = activeBuildAbortHandlers.get(buildId);
+  if (abortFn) {
+    try {
+      abortFn();
+    } catch {
+      // Best-effort subprocess termination
+    }
+  }
+
+  const runningClaim = await asyncDb.run(
+    `UPDATE builds SET status = 'failed' WHERE id = ? AND status = 'running'`,
+    buildId
+  );
+  if (runningClaim.changes > 0) {
+    await appendBuildLogAsync(buildId, 'warn', 'Build dibatalkan oleh pengguna saat sedang berjalan.', 'failed');
+  }
+  const updated = await getBuildRecordAsync(buildId);
+  return { ok: true, build: updated ?? undefined };
+}
+
+/**
+ * Claims and executes the oldest queued build from the shared database (for standalone DB-poll workers).
+ * Uses atomic UPDATE ... WHERE status = 'queued' inside processApkBuild to prevent duplicate execution.
+ */
+export async function claimAndProcessNextQueuedApkBuildAsync(): Promise<boolean> {
+  const candidates = await asyncDb.all<{
+    id: string;
+    project_id: string;
+    config_json: unknown;
+  }>(`SELECT id, project_id, config_json FROM builds WHERE status = 'queued' ORDER BY created_at ASC LIMIT 5`);
+
+  for (const row of candidates) {
+    if (activeBuildExecutions.has(row.id) || cancelledBuilds.has(row.id)) continue;
+    const cfg = safeParseApkConfigJson(row.config_json);
+    const parsedRaw = parseJsonColumn<Record<string, unknown>>(row.config_json, {});
+    const hadKeystore = cfg.buildType === 'release' && Boolean(parsedRaw?.hasKeystore);
+    if (hadKeystore && !ephemeralLocalSigning.has(row.id)) {
+      continue;
+    }
+    const signing = ephemeralLocalSigning.get(row.id);
+    ephemeralLocalSigning.delete(row.id);
+    try {
+      await processApkBuild(row.id, row.project_id, cfg, signing);
+    } finally {
+      if (signing) signing.keystoreBuffer.fill(0);
+    }
+    return true;
+  }
+
+  return false;
+}
 
 export async function processApkBuild(
   buildId: string,
@@ -1130,7 +1296,10 @@ export async function processApkBuild(
         };
       }
 
-      const gradleRes = await runIsolatedNativeGradleBuild(projectId, gradleDir, config.buildType, signingArgs, format);
+      const gradleRes = await runIsolatedNativeGradleBuild(projectId, gradleDir, config.buildType, signingArgs, format, buildId);
+      if (gradleRes.cancelled || cancelledBuilds.has(buildId)) {
+        return;
+      }
       if (!gradleRes.ok || !gradleRes.apkPath) {
         await appendBuildLogAsync(
           buildId,
@@ -1220,7 +1389,13 @@ export async function processApkBuild(
       zip.file(`assets/public/${norm}`, scrubSecrets(f.content));
     }
 
+    if (cancelledBuilds.has(buildId)) {
+      return;
+    }
     const zipBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+    if (cancelledBuilds.has(buildId)) {
+      return;
+    }
     const safeName = config.packageId.replace(/[^a-zA-Z0-9._-]/g, '_');
     const artifactPath = path.join(ARTIFACT_DIR, `${buildId}-${safeName}-${config.buildType}-source.zip`);
     fs.writeFileSync(artifactPath, zipBuffer, { mode: 0o600 });
@@ -1239,8 +1414,17 @@ export async function processApkBuild(
         : `Langkah 3/3: Mengemas paket sumber Capacitor (.zip). Build .apk native membutuhkan ${toolchain.missing.join(', ') || 'Android Gradle project'}.`
     );
 
+    if (cancelledBuilds.has(buildId)) {
+      try {
+        fs.rmSync(artifactPath, { force: true });
+      } catch {
+        // Ignore
+      }
+      return;
+    }
+
     await asyncDb.run(
-      `UPDATE builds SET status = 'success', artifact_path = ?, download_token = ?, artifact_size_bytes = ? WHERE id = ?`,
+      `UPDATE builds SET status = 'success', artifact_path = ?, download_token = ?, artifact_size_bytes = ? WHERE id = ? AND status = 'running'`,
       artifactPath,
       downloadToken,
       artifactStat.size,
@@ -1254,14 +1438,18 @@ export async function processApkBuild(
       'success'
     );
   } catch (err) {
-    await appendBuildLogAsync(
-      buildId,
-      'error',
-      `Build gagal: ${err instanceof Error ? err.message : String(err)}`,
-      'failed'
-    );
+    if (!cancelledBuilds.has(buildId)) {
+      await appendBuildLogAsync(
+        buildId,
+        'error',
+        `Build gagal: ${err instanceof Error ? err.message : String(err)}`,
+        'failed'
+      );
+    }
   } finally {
     activeBuildExecutions.delete(buildId);
+    activeBuildAbortHandlers.delete(buildId);
+    cancelledBuilds.delete(buildId);
     if (tempGradlePropsPath) {
       securelyWipeFile(tempGradlePropsPath);
     }
@@ -1328,9 +1516,7 @@ export async function recoverPendingApkBuildsAsync(
         failedMissingKeystore += 1;
       } else if (localAutoResume) {
         resumedLocalQueued += 1;
-        setTimeout(() => {
-          void processApkBuild(row.id, row.project_id, cfg);
-        }, 50);
+        enqueueLocalBuildItem(row.id, row.project_id, cfg);
       }
     }
   }

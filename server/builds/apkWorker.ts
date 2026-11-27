@@ -8,14 +8,18 @@ import { ACTIVE_DB_DRIVER, closeDatabaseAsync, initDatabase, initDatabaseAsync }
 import { scrubSecrets } from '../security';
 import {
   APK_BUILD_QUEUE_NAME,
+  claimAndProcessNextQueuedApkBuildAsync,
   processApkBuild,
   validateRedisConfiguration,
   type ApkBuildJobPayload,
 } from './apkBuilder';
 
+export type ApkWorkerMode = 'redis' | 'db-poll';
+
 export interface ApkWorkerHandle {
-  worker: Worker<ApkBuildJobPayload>;
-  connection: IORedis;
+  mode: ApkWorkerMode;
+  worker?: Worker<ApkBuildJobPayload>;
+  connection?: IORedis;
   close: () => Promise<void>;
 }
 
@@ -23,13 +27,39 @@ export function getApkWorkerHealthFilePath(): string {
   return process.env.CARMEN_APK_WORKER_HEALTH_FILE || path.join(os.tmpdir(), 'carmen-apk-worker-health.json');
 }
 
-function writeHeartbeat(healthFile: string, running: boolean, extra?: { redisReady?: boolean; error?: string }): void {
+export function resolveApkWorkerMode(
+  env: NodeJS.ProcessEnv = process.env,
+  explicitMode?: 'redis' | 'db-poll' | 'auto'
+): ApkWorkerMode {
+  const raw = (explicitMode || env.CARMEN_APK_WORKER_MODE || 'auto').trim().toLowerCase();
+  if (raw === 'db-poll') {
+    if (env.CARMEN_REQUIRE_REDIS_QUEUE === '1') {
+      return 'redis';
+    }
+    return 'db-poll';
+  }
+  if (raw === 'redis') {
+    return 'redis';
+  }
+  const redisCheck = validateRedisConfiguration(env);
+  if (redisCheck.configured) return 'redis';
+  if (env.CARMEN_REQUIRE_REDIS_QUEUE === '1') return 'redis';
+  return 'db-poll';
+}
+
+function writeHeartbeat(
+  healthFile: string,
+  running: boolean,
+  extra?: { mode?: ApkWorkerMode; redisReady?: boolean | null; dbReady?: boolean; error?: string }
+): void {
   try {
     const tmpFile = `${healthFile}.${process.pid}.tmp`;
     const payload = JSON.stringify({
       pid: process.pid,
+      mode: extra?.mode ?? 'redis',
       running,
-      redisReady: extra?.redisReady ?? true,
+      redisReady: extra?.redisReady === undefined ? true : extra.redisReady,
+      dbReady: extra?.dbReady ?? true,
       queue: APK_BUILD_QUEUE_NAME,
       updatedAt: new Date().toISOString(),
       ...(extra?.error ? { error: extra.error } : {}),
@@ -49,13 +79,92 @@ function removeHeartbeat(healthFile: string): void {
   }
 }
 
-function createWorkerInstance(options: { redisUrl?: string; concurrency?: number }): ApkWorkerHandle {
-  const redisCheck = validateRedisConfiguration(
-    options.redisUrl !== undefined ? { ...process.env, REDIS_URL: options.redisUrl } : process.env,
-    { requireRedis: true }
-  );
+function createDbPollWorkerInstance(options: { concurrency?: number; pollIntervalMs?: number }): ApkWorkerHandle {
+  const concurrencyRaw = options.concurrency ?? Number(process.env.APK_WORKER_CONCURRENCY || 2);
+  const concurrency =
+    Number.isFinite(concurrencyRaw) && concurrencyRaw >= 1 && concurrencyRaw <= 16
+      ? Math.floor(concurrencyRaw)
+      : 2;
+  const pollMsRaw = options.pollIntervalMs ?? Number(process.env.CARMEN_APK_WORKER_POLL_MS || 2000);
+  const pollIntervalMs = Number.isFinite(pollMsRaw) && pollMsRaw >= 250 && pollMsRaw <= 60_000 ? Math.floor(pollMsRaw) : 2000;
+
+  const healthFile = getApkWorkerHealthFilePath();
+  let closed = false;
+  let activeCount = 0;
+  let dbReady = true;
+
+  const syncHeartbeat = (error?: string) => {
+    if (closed) return;
+    writeHeartbeat(healthFile, dbReady && !closed, {
+      mode: 'db-poll',
+      redisReady: null,
+      dbReady,
+      ...(error ? { error } : {}),
+    });
+  };
+
+  const pollOnce = () => {
+    if (closed) return;
+    while (!closed && activeCount < concurrency) {
+      activeCount += 1;
+      void claimAndProcessNextQueuedApkBuildAsync()
+        .then((claimed) => {
+          dbReady = true;
+          syncHeartbeat();
+          if (claimed && !closed) {
+            setImmediate(pollOnce);
+          }
+        })
+        .catch((err) => {
+          dbReady = false;
+          const safeMsg = scrubSecrets(err instanceof Error ? err.message : String(err));
+          console.error(`[apk-worker:db-poll] Gagal memproses antrean DB: ${safeMsg}`);
+          syncHeartbeat(safeMsg);
+        })
+        .finally(() => {
+          activeCount = Math.max(0, activeCount - 1);
+        });
+      // Claim one per poll tick unless a job was actually found
+      break;
+    }
+  };
+
+  syncHeartbeat();
+  const pollTimer = setInterval(pollOnce, pollIntervalMs);
+  pollTimer.unref();
+  const heartbeatTimer = setInterval(() => syncHeartbeat(), 15_000);
+  heartbeatTimer.unref();
+  setImmediate(pollOnce);
+
+  const close = async () => {
+    closed = true;
+    clearInterval(pollTimer);
+    clearInterval(heartbeatTimer);
+    removeHeartbeat(healthFile);
+  };
+
+  return { mode: 'db-poll', close };
+}
+
+function createWorkerInstance(options: {
+  redisUrl?: string;
+  concurrency?: number;
+  mode?: 'redis' | 'db-poll' | 'auto';
+  pollIntervalMs?: number;
+}): ApkWorkerHandle {
+  const effectiveEnv = options.redisUrl !== undefined ? { ...process.env, REDIS_URL: options.redisUrl } : process.env;
+  const resolvedMode = resolveApkWorkerMode(effectiveEnv, options.mode);
+
+  if (resolvedMode === 'db-poll') {
+    return createDbPollWorkerInstance({
+      concurrency: options.concurrency,
+      pollIntervalMs: options.pollIntervalMs,
+    });
+  }
+
+  const redisCheck = validateRedisConfiguration(effectiveEnv, { requireRedis: true });
   if (!redisCheck.configured || !redisCheck.url) {
-    throw new Error(redisCheck.error || 'REDIS_URL wajib diatur untuk menjalankan standalone APK build worker.');
+    throw new Error(redisCheck.error || 'REDIS_URL wajib diatur untuk menjalankan standalone APK build worker mode Redis.');
   }
   const redisUrl = redisCheck.url;
 
@@ -88,7 +197,7 @@ function createWorkerInstance(options: { redisUrl?: string; concurrency?: number
 
   const syncHeartbeat = () => {
     if (closed) return;
-    writeHeartbeat(healthFile, redisReady && worker.isRunning(), { redisReady });
+    writeHeartbeat(healthFile, redisReady && worker.isRunning(), { mode: 'redis', redisReady, dbReady: true });
   };
 
   connection.on('ready', () => {
@@ -104,7 +213,12 @@ function createWorkerInstance(options: { redisUrl?: string; concurrency?: number
   connection.on('error', (err) => {
     redisReady = false;
     if (!closed) {
-      writeHeartbeat(healthFile, false, { redisReady: false, error: scrubSecrets(err.message) });
+      writeHeartbeat(healthFile, false, {
+        mode: 'redis',
+        redisReady: false,
+        dbReady: true,
+        error: scrubSecrets(err.message),
+      });
     }
   });
 
@@ -138,14 +252,16 @@ function createWorkerInstance(options: { redisUrl?: string; concurrency?: number
     }
   };
 
-  return { worker, connection, close };
+  return { mode: 'redis', worker, connection, close };
 }
 
 /**
- * Starts the standalone BullMQ Android APK/AAB build worker connected via REDIS_URL.
+ * Starts the standalone Android APK/AAB build worker (BullMQ Redis mode or shared DB-poll mode).
  * Does not auto-run when imported in unit tests; invoked explicitly via `npm run worker:apk`.
  */
-export function startApkWorker(options: { redisUrl?: string; concurrency?: number } = {}): ApkWorkerHandle {
+export function startApkWorker(
+  options: { redisUrl?: string; concurrency?: number; mode?: 'redis' | 'db-poll' | 'auto'; pollIntervalMs?: number } = {}
+): ApkWorkerHandle {
   if (ACTIVE_DB_DRIVER === 'postgres') {
     throw new Error('startApkWorker() sinkron tidak didukung saat CARMEN_DB_DRIVER=postgres; gunakan startApkWorkerAsync().');
   }
@@ -154,7 +270,7 @@ export function startApkWorker(options: { redisUrl?: string; concurrency?: numbe
 }
 
 export async function startApkWorkerAsync(
-  options: { redisUrl?: string; concurrency?: number } = {}
+  options: { redisUrl?: string; concurrency?: number; mode?: 'redis' | 'db-poll' | 'auto'; pollIntervalMs?: number } = {}
 ): Promise<ApkWorkerHandle> {
   await initDatabaseAsync();
   return createWorkerInstance(options);
@@ -166,7 +282,9 @@ const isDirectExecution =
 if (isDirectExecution) {
   void startApkWorkerAsync()
     .then((handle) => {
-      console.log(`[apk-worker] Mendengarkan antrean "${APK_BUILD_QUEUE_NAME}" (db=${ACTIVE_DB_DRIVER})...`);
+      console.log(
+        `[apk-worker] Mendengarkan antrean "${APK_BUILD_QUEUE_NAME}" (mode=${handle.mode}, db=${ACTIVE_DB_DRIVER})...`
+      );
 
       const shutdown = () => {
         console.log('[apk-worker] Mematikan worker secara aman...');

@@ -274,7 +274,19 @@ export async function initDatabaseAsync(): Promise<void> {
   }
   if (!dbInitPromise) {
     dbInitPromise = (async () => {
-      await bootstrapPostgresDatabase(asyncDb);
+      const { PostgresAsyncDbClient } = await import('./db/client');
+      const { parsePostgresConfig } = await import('./db/postgres');
+      const pgCfg = parsePostgresConfig(process.env);
+      if (pgCfg?.directConnectionString) {
+        const directClient = new PostgresAsyncDbClient(pgCfg, { useDirectUrl: true });
+        try {
+          await bootstrapPostgresDatabase(directClient);
+        } finally {
+          await directClient.close().catch(() => {});
+        }
+      } else {
+        await bootstrapPostgresDatabase(asyncDb);
+      }
       await cleanupExpiredSessionsAsync();
       await seedDemoWorkspaceAsync();
     })();

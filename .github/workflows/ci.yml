@@ -19,9 +19,14 @@ on:
       - 'index.html'
       - 'metadata.json'
       - 'Dockerfile'
+      - 'Dockerfile.android'
+      - '.dockerignore'
+      - '.env.example'
+      - 'public/**'
       - 'docker-compose.yml'
       - 'Caddyfile'
       - '.github/workflows/ci.yml'
+      - '.github/workflows/android-build.yml'
   pull_request:
     branches:
       - main
@@ -39,9 +44,14 @@ on:
       - 'index.html'
       - 'metadata.json'
       - 'Dockerfile'
+      - 'Dockerfile.android'
+      - '.dockerignore'
+      - '.env.example'
+      - 'public/**'
       - 'docker-compose.yml'
       - 'Caddyfile'
       - '.github/workflows/ci.yml'
+      - '.github/workflows/android-build.yml'
 
 permissions:
   contents: read

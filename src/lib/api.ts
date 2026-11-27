@@ -431,6 +431,8 @@ export const api = {
     }),
   getBuild: (buildId: string) => request<{ build: ApkBuildRecord }>(`/api/builds/${buildId}`),
   getBuildStatus: (buildId: string) => request<BuildJobStatusResponse>(`/api/builds/${buildId}/status`),
+  cancelApkBuild: (buildId: string) =>
+    request<{ build: ApkBuildRecord }>(`/api/builds/${buildId}/cancel`, { method: 'POST' }),
   downloadBuildArtifact: async (buildId: string, token: string) => {
     const res = await fetch(`/api/builds/${buildId}/download?token=${encodeURIComponent(token)}`, {
       credentials: 'include',

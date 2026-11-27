@@ -219,5 +219,110 @@ describe('APK/AAB Build Queue Recovery, Redis Validation & Artifact Lifecycle (F
     assert.match(ciWorkflow, /ANDROID_KEYSTORE_BASE64/);
     assert.match(ciWorkflow, /apksigner.*verify/);
     assert.match(ciWorkflow, /jarsigner -verify/);
+    // Signing passwords must never be passed on CLI (-Pandroid.injected.signing.store.password)
+    assert.doesNotMatch(ciWorkflow, /-Pandroid\.injected\.signing\./);
+    assert.match(ciWorkflow, /chmod 600 gradle\.properties/);
+  });
+
+  it('supports cancelling queued builds and rejecting cancellation of completed builds', async () => {
+    const userId = `usr_${crypto.randomUUID().slice(0, 8)}`;
+    const projectId = `prj_${crypto.randomUUID().slice(0, 8)}`;
+    dbMod.db
+      .prepare('INSERT INTO users (id, email, name, password_hash) VALUES (?, ?, ?, ?)')
+      .run(userId, `${userId}@example.com`, 'Cancel Test User', 'hash');
+    dbMod.db
+      .prepare(
+        'INSERT INTO projects (id, user_id, name, type, stack, rules, apk_config_json) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      )
+      .run(projectId, userId, 'Cancel App', 'android', 'Capacitor', '', '{}');
+
+    const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
+    const queuedId = `bld_can_${crypto.randomUUID().slice(0, 6)}`;
+    const doneId = `bld_fin_${crypto.randomUUID().slice(0, 6)}`;
+
+    dbMod.db
+      .prepare(
+        `INSERT INTO builds (id, project_id, type, status, config_json, logs_json, expires_at) VALUES (?, ?, 'apk', 'queued', '{}', '[]', ?)`
+      )
+      .run(queuedId, projectId, expiresAt);
+    dbMod.db
+      .prepare(
+        `INSERT INTO builds (id, project_id, type, status, config_json, logs_json, expires_at) VALUES (?, ?, 'apk', 'success', '{}', '[]', ?)`
+      )
+      .run(doneId, projectId, expiresAt);
+
+    const cancelOk = await apkMod.cancelApkBuildAsync(queuedId);
+    assert.equal(cancelOk.ok, true);
+    assert.equal(cancelOk.build?.status, 'failed');
+    assert.ok(cancelOk.build?.logs.some((l) => l.message.includes('dibatalkan')));
+
+    const cancelFinished = await apkMod.cancelApkBuildAsync(doneId);
+    assert.equal(cancelFinished.ok, false);
+    assert.equal(cancelFinished.httpStatus, 409);
+
+    const cancelMissing = await apkMod.cancelApkBuildAsync('bld_nonexistent');
+    assert.equal(cancelMissing.ok, false);
+    assert.equal(cancelMissing.httpStatus, 404);
+  });
+
+  it('resolves db-poll vs redis APK worker modes and claims queued builds from DB', async () => {
+    const { resolveApkWorkerMode, startApkWorkerAsync } = await import('./apkWorker');
+    assert.equal(resolveApkWorkerMode({}), 'db-poll');
+    assert.equal(resolveApkWorkerMode({ CARMEN_APK_WORKER_MODE: 'db-poll' }), 'db-poll');
+    assert.equal(resolveApkWorkerMode({ REDIS_URL: 'redis://127.0.0.1:6379/0' }), 'redis');
+    assert.equal(resolveApkWorkerMode({ CARMEN_REQUIRE_REDIS_QUEUE: '1' }), 'redis');
+    assert.equal(resolveApkWorkerMode({ CARMEN_APK_WORKER_MODE: 'redis' }), 'redis');
+
+    const userId = `usr_${crypto.randomUUID().slice(0, 8)}`;
+    const projectId = `prj_${crypto.randomUUID().slice(0, 8)}`;
+    dbMod.db
+      .prepare('INSERT INTO users (id, email, name, password_hash) VALUES (?, ?, ?, ?)')
+      .run(userId, `${userId}@example.com`, 'DB Poll User', 'hash');
+    dbMod.db
+      .prepare(
+        'INSERT INTO projects (id, user_id, name, type, stack, rules, apk_config_json) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      )
+      .run(projectId, userId, 'DB Poll App', 'android', 'Capacitor', '', '{}');
+    dbMod.db
+      .prepare('INSERT INTO project_files (id, project_id, path, content, hash) VALUES (?, ?, ?, ?, ?)')
+      .run(crypto.randomUUID(), projectId, 'index.html', '<!doctype html><html><body>DB Poll</body></html>', 'h1');
+
+    const pollBuildId = `bld_pol_${crypto.randomUUID().slice(0, 6)}`;
+    const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
+    const cfg = {
+      appName: 'DB Poll App',
+      packageId: 'id.carmen.dbpoll',
+      versionName: '1.0.0',
+      versionCode: 1,
+      iconColor: '#C8324B',
+      buildType: 'debug' as const,
+    };
+    dbMod.db
+      .prepare(
+        `INSERT INTO builds (id, project_id, type, status, config_json, logs_json, expires_at) VALUES (?, ?, 'apk', 'queued', ?, '[]', ?)`
+      )
+      .run(pollBuildId, projectId, JSON.stringify(cfg), expiresAt);
+
+    const healthPath = path.join(tempDir, 'worker-db-poll-health.json');
+    process.env.CARMEN_APK_WORKER_HEALTH_FILE = healthPath;
+    const worker = await startApkWorkerAsync({ mode: 'db-poll', concurrency: 1, pollIntervalMs: 250 });
+    try {
+      assert.equal(worker.mode, 'db-poll');
+      // Wait up to 3s for db-poll worker to claim & complete the build
+      let finalRec = await apkMod.getBuildRecordAsync(pollBuildId);
+      for (let i = 0; i < 30 && finalRec?.status !== 'success' && finalRec?.status !== 'failed'; i += 1) {
+        await new Promise((r) => setTimeout(r, 100));
+        finalRec = await apkMod.getBuildRecordAsync(pollBuildId);
+      }
+      assert.equal(finalRec?.status, 'success');
+      assert.ok(fs.existsSync(healthPath));
+      const hb = JSON.parse(fs.readFileSync(healthPath, 'utf8')) as { mode: string; running: boolean; dbReady: boolean };
+      assert.equal(hb.mode, 'db-poll');
+      assert.equal(hb.running, true);
+      assert.equal(hb.dbReady, true);
+    } finally {
+      await worker.close();
+      delete process.env.CARMEN_APK_WORKER_HEALTH_FILE;
+    }
   });
 });

@@ -287,14 +287,24 @@ export function SkillsView({ locale }: SkillsViewProps) {
   async function handleImportZipFile(file: File) {
     setError(null);
     setNotice(null);
+    const maxZipBytes = 5 * 1024 * 1024;
+    if (file.size > maxZipBytes) {
+      setError(
+        locale === 'id'
+          ? 'Ukuran file ZIP skill melebihi batas maksimal 5 MB.'
+          : 'Skill ZIP file exceeds the 5 MB maximum size limit.'
+      );
+      return;
+    }
     try {
       const buffer = await file.arrayBuffer();
-      let binary = '';
       const bytes = new Uint8Array(buffer);
-      for (let i = 0; i < bytes.byteLength; i += 1) {
-        binary += String.fromCharCode(bytes[i]);
+      const chunks: string[] = [];
+      const chunkSize = 0x8000;
+      for (let i = 0; i < bytes.byteLength; i += chunkSize) {
+        chunks.push(String.fromCharCode(...bytes.subarray(i, i + chunkSize)));
       }
-      const zipBase64 = btoa(binary);
+      const zipBase64 = btoa(chunks.join(''));
       const res = await api.importSkillZip(zipBase64);
       await loadSkillsData();
       setNotice(
@@ -575,7 +585,14 @@ export function SkillsView({ locale }: SkillsViewProps) {
                       </button>
                       <button
                         type="button"
-                        onClick={() => void api.downloadSkillZip(skill.id, skill.slug)}
+                        onClick={() => {
+                          setError(null);
+                          void api
+                            .downloadSkillZip(skill.id, skill.slug)
+                            .catch((err) =>
+                              setError(err instanceof Error ? err.message : 'Gagal mengekspor paket ZIP skill.')
+                            );
+                        }}
                         aria-label={`${t.skillsExportBtn} ${skill.slug}`}
                         title={t.skillsExportBtn}
                         className="h-7 px-2 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface)] hover:bg-[var(--surface-2)] text-[12px] text-[var(--text-muted)] hover:text-[var(--text)] flex items-center cursor-pointer"
@@ -751,8 +768,14 @@ export function SkillsView({ locale }: SkillsViewProps) {
               <button
                 type="button"
                 onClick={() => {
+                  setError(null);
                   setMarketplace(null);
-                  void api.getSkillMarketplace().then(setMarketplace);
+                  void api
+                    .getSkillMarketplace()
+                    .then(setMarketplace)
+                    .catch((err) =>
+                      setError(err instanceof Error ? err.message : 'Gagal memuat katalog marketplace skill.')
+                    );
                 }}
                 className="h-7 px-2.5 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] text-[var(--text)] flex items-center gap-1 cursor-pointer shrink-0"
               >

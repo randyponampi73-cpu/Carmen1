@@ -43,6 +43,19 @@ export function getUtcUsageDate(now: Date = new Date()): string {
 
 let quotaRedisConn: IORedis | null = null;
 let quotaRedisUrl = '';
+let quotaRedisCooldownUntil = 0;
+
+const QUOTA_INCR_LUA = `
+local c = redis.call('INCR', KEYS[1])
+if c == 1 then
+  redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1]))
+end
+if c > tonumber(ARGV[2]) then
+  redis.call('DECR', KEYS[1])
+  return -1
+end
+return c
+`;
 
 async function tryIncrementRedisDailyCounter(
   userId: string,
@@ -51,6 +64,7 @@ async function tryIncrementRedisDailyCounter(
 ): Promise<{ checked: boolean; exceeded?: string; count?: number }> {
   const redisCfg = validateRedisConfiguration();
   if (!redisCfg.configured || !redisCfg.url) return { checked: false };
+  if (Date.now() < quotaRedisCooldownUntil) return { checked: false };
 
   try {
     if (!quotaRedisConn || quotaRedisUrl !== redisCfg.url) {
@@ -58,23 +72,30 @@ async function tryIncrementRedisDailyCounter(
         quotaRedisConn.disconnect();
       }
       quotaRedisUrl = redisCfg.url;
-      quotaRedisConn = new IORedis(redisCfg.url, {
+      const conn = new IORedis(redisCfg.url, {
         maxRetriesPerRequest: 1,
         connectTimeout: 800,
         enableOfflineQueue: false,
         lazyConnect: true,
       });
+      conn.on('error', () => {
+        quotaRedisCooldownUntil = Date.now() + 15_000;
+      });
+      quotaRedisConn = conn;
     }
     if (quotaRedisConn.status === 'wait') {
       await quotaRedisConn.connect();
     }
     const key = `carmen:shared_quota:${usageDate}:${userId}:req`;
-    const nextCount = await quotaRedisConn.incr(key);
-    if (nextCount === 1) {
-      await quotaRedisConn.expire(key, 172_800);
-    }
-    if (nextCount > limits.maxRequestsPerDay) {
-      await quotaRedisConn.decr(key);
+    const rawCount = await quotaRedisConn.eval(
+      QUOTA_INCR_LUA,
+      1,
+      key,
+      String(172_800),
+      String(limits.maxRequestsPerDay)
+    );
+    const nextCount = Number(rawCount);
+    if (nextCount < 0) {
       return {
         checked: true,
         exceeded: `Kuota harian key platform tercapai (${limits.maxRequestsPerDay} permintaan/hari). Hubungkan API key Anda sendiri (BYOK) di Pengaturan untuk akses tanpa kuota platform.`,
@@ -82,6 +103,7 @@ async function tryIncrementRedisDailyCounter(
     }
     return { checked: true, count: nextCount };
   } catch {
+    quotaRedisCooldownUntil = Date.now() + 15_000;
     return { checked: false };
   }
 }
@@ -95,6 +117,7 @@ export async function closeSharedQuotaRedis(): Promise<void> {
   }
   quotaRedisConn = null;
   quotaRedisUrl = '';
+  quotaRedisCooldownUntil = 0;
 }
 
 /**
@@ -210,15 +233,17 @@ export async function recordSharedKeyCompletionUsage(
   userId: string,
   tokensDelta: number,
   costDeltaUsd: number,
-  now: Date = new Date()
+  now: Date = new Date(),
+  requestsDelta = 0
 ): Promise<void> {
+  const safeRequests = Math.max(0, Math.floor(Number.isFinite(requestsDelta) ? requestsDelta : 0));
   const safeTokens = Math.max(0, Math.floor(Number.isFinite(tokensDelta) ? tokensDelta : 0));
   const safeCost = Math.max(0, Number.isFinite(costDeltaUsd) ? costDeltaUsd : 0);
-  if (safeTokens === 0 && safeCost === 0) return;
+  if (safeRequests === 0 && safeTokens === 0 && safeCost === 0) return;
 
   const usageDate = getUtcUsageDate(now);
   await repositories.sharedKeyUsage.recordUsage(userId, usageDate, {
-    requests: 0,
+    requests: safeRequests,
     tokens: safeTokens,
     costUsd: safeCost,
   });

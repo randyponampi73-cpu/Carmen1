@@ -16,16 +16,24 @@ on:
       - 'android/**'
       - 'capacitor.config.json'
       - 'Dockerfile.android'
+      - '.dockerignore'
+      - 'package.json'
+      - 'package-lock.json'
       - 'server/builds/**'
       - 'scripts/prepare-android-ci.ts'
+      - 'scripts/apk-worker-healthcheck.mjs'
       - '.github/workflows/android-build.yml'
   pull_request:
     paths:
       - 'android/**'
       - 'capacitor.config.json'
       - 'Dockerfile.android'
+      - '.dockerignore'
+      - 'package.json'
+      - 'package-lock.json'
       - 'server/builds/**'
       - 'scripts/prepare-android-ci.ts'
+      - 'scripts/apk-worker-healthcheck.mjs'
       - '.github/workflows/android-build.yml'
 
 jobs:
@@ -222,16 +230,36 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          trap 'shred -u release.keystore 2>/dev/null || rm -f release.keystore' EXIT
+          ORIG_PROPS=""
+          if [ -f gradle.properties ]; then
+            ORIG_PROPS=$(mktemp)
+            cp gradle.properties "$ORIG_PROPS"
+          fi
+          cleanup() {
+            shred -u release.keystore 2>/dev/null || rm -f release.keystore
+            shred -u gradle.properties 2>/dev/null || rm -f gradle.properties
+            if [ -n "$ORIG_PROPS" ] && [ -f "$ORIG_PROPS" ]; then
+              mv "$ORIG_PROPS" gradle.properties
+            fi
+          }
+          trap cleanup EXIT
           echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > release.keystore
           chmod 600 release.keystore
+          umask 077
+          {
+            if [ -n "$ORIG_PROPS" ] && [ -f "$ORIG_PROPS" ]; then
+              cat "$ORIG_PROPS"
+              printf '\n'
+            fi
+            printf 'android.injected.signing.store.file=%s/release.keystore\n' "$(pwd)"
+            printf 'android.injected.signing.store.password=%s\n' "$ANDROID_STORE_PASSWORD"
+            printf 'android.injected.signing.key.alias=%s\n' "$ANDROID_KEY_ALIAS"
+            printf 'android.injected.signing.key.password=%s\n' "$ANDROID_KEY_PASSWORD"
+          } > gradle.properties
+          chmod 600 gradle.properties
           GRADLE_CMD="gradle"
           if [ -x ./gradlew ]; then GRADLE_CMD="./gradlew"; fi
-          "$GRADLE_CMD" assembleRelease bundleRelease --no-daemon --console=plain \
-            -Pandroid.injected.signing.store.file="$(pwd)/release.keystore" \
-            -Pandroid.injected.signing.store.password="$ANDROID_STORE_PASSWORD" \
-            -Pandroid.injected.signing.key.alias="$ANDROID_KEY_ALIAS" \
-            -Pandroid.injected.signing.key.password="$ANDROID_KEY_PASSWORD"
+          "$GRADLE_CMD" assembleRelease bundleRelease --no-daemon --console=plain
           test -s app/build/outputs/apk/release/app-release.apk
           test -s app/build/outputs/bundle/release/app-release.aab
           "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk

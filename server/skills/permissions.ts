@@ -70,18 +70,20 @@ export function checkSkillExecutionPermissions(params: {
 
   const approvedSet = new Set<SkillPermission>([...skill.approvedPermissions, ...approvedPermissions]);
 
+  // Script execution ALWAYS requires explicit EXECUTE approval, even if manifest.permissions omitted EXECUTE
+  if (hasScriptExecution && !approvedSet.has('EXECUTE')) {
+    return {
+      allowed: false,
+      forbidden: false,
+      needsApproval: true,
+      missingPermissions: ['EXECUTE'],
+      reason: `Eksekusi script dari skill "${skill.slug}" memerlukan persetujuan izin EXECUTE eksplisit.`,
+    };
+  }
+
   // Builtin & Verified skills may execute core project READ/DATABASE/WRITE/EXECUTE tools when enabled,
   // unless external/created or executing custom scripts without explicit approval.
   if (skill.trustLevel === 'BUILTIN' || skill.trustLevel === 'VERIFIED') {
-    if (hasScriptExecution && !approvedSet.has('EXECUTE')) {
-      return {
-        allowed: false,
-        forbidden: false,
-        needsApproval: true,
-        missingPermissions: ['EXECUTE'],
-        reason: `Eksekusi script dari skill "${skill.slug}" memerlukan persetujuan izin EXECUTE eksplisit.`,
-      };
-    }
     return {
       allowed: true,
       forbidden: false,

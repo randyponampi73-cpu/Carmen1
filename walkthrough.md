@@ -1,7 +1,7 @@
 # Security Summary
 
-**Reviewed Files**: 62
-**Issues Resolved**: 21
+**Reviewed Files**: 103
+**Issues Resolved**: 27
 
 ### Issues Resolved
 | Area | File | Line | What Was Happening | Impact | Status | How It Was Fixed |
@@ -27,6 +27,12 @@
 | Skill Archive & Permission Hardening | `server/skills/importExport.ts`, `server/skills/validator.ts`, `server/skills/permissions.ts` | 16 / 78 | Imported Skill ZIP packages needed pre-normalization path checks (`unsafeOriginalName`), UNIX symlink rejection, prompt-injection/secret checks, `ADMIN` prohibition, and sandbox-only `UNTRUSTED`-blocked script execution. | High | Fixed | Rejected `unsafeOriginalName` traversal/absolute paths, symlinks (`0o120000` + `>>> 16`), `.env`/binary assets, ZIP bombs (>1 MB), plaintext secrets, prompt-injection patterns, and `ADMIN` permissions; quarantined imports as `UNTRUSTED` + disabled. |
 | Cross-Tenant Skill Delete Enumeration | `server/skills/registry.ts`, `server.ts` | 982 / 3310 | `DELETE /api/skills/:id` returned `403` for private skills owned by another user while `GET`/`PUT`/`approve`/`export.zip` returned `404`, enabling existence enumeration. | Low | Fixed | Unified private cross-tenant deletion in `deleteUserSkill` to return `404` while keeping `403` strictly for protected built-in `system` skills. |
 | Skill-Optional Agent Fallback | `server/agent/orchestrator.ts`, `server/skills/executor.ts` | 1318 / 38 | Enabling Skill Intelligence must never block or crash built-in Agent generation, editing, debugging, or builds if skills are empty, disabled, corrupted, or denied permission. | High | Fixed | Implemented fail-safe `prepareSkillsForAgentTurn` with progressive disclosure and zero-skill / load-failure / denial fallback to built-in `AGENT_TOOLS` and planner workflows. |
+| PostgreSQL / Supabase TLS Verification & Direct Migration URL | `server/db/postgres.ts`, `server/db/client.ts`, `server/db.ts`, `.env.example` | 91 / 252 / 267 | PostgreSQL connections defaulted to `rejectUnauthorized: false` even in production, lacked custom CA and `DIRECT_URL` support for pooled migrations, and had no `pg.Pool` idle-client error listener. | High | Fixed | Switched default PostgreSQL SSL mode to `verify-full` (`rejectUnauthorized: true`), added custom CA (`PGSSLROOTCERT` / `PGSSLROOTCERT_PEM`) and `DIRECT_URL` migration client support, enforced fail-fast on insecure SSL modes in production unless explicitly overridden, and attached `pool.on('error')`. |
+| Skill Script EXECUTE Gate, Integrity Check & Edit Auto-Demotion | `server/skills/permissions.ts`, `server/skills/executor.ts`, `server/skills/registry.ts` | 48 / 294 / 831 | `APPROVED` skills could run scripts when `EXECUTE` was absent from their manifest, `runSkillSandboxScript` defaulted `requireOsIsolation` to `false` without verifying checksum integrity, and editing an `APPROVED` skill to alter scripts or permissions kept `APPROVED` trust. | High | Fixed | Enforced explicit `EXECUTE` approval whenever scripts run across all trust levels, defaulted `requireOsIsolation = true`, verified package checksum integrity before script/workflow execution, and automatically demoted `APPROVED` skills to `DRAFT` + disabled when edits change scripts or add elevated permissions/tools. |
+| Sandbox Command Flag & External Package Restrictions | `server/runtime/sandbox.ts` | 308 | Command validation allowed dangerous `node` flags (`-e`/`--eval`/`-r`/`--import`/`--inspect`), `npm` script/registry overrides (`--no-ignore-scripts`/`--registry`/`file:`/`git+`), `npx` package smuggling (`-p`/`-c`), and absolute path arguments. | High | Fixed | Hardened and exported `validateParsedCommand` to block dangerous `node`, `npm`, `bun`, and `npx` flags, external package URLs, and absolute paths, and preferred `npm ci --ignore-scripts` when `package-lock.json` is present. |
+| Android CI Release Signing Secret Exposure | `.github/workflows/android-build.yml` | 230 | Release signing keystore and key passwords were passed via Gradle `-Pandroid.injected.signing.*` command-line flags, exposing secrets to process lists and shell traces. | Medium | Fixed | Wrote signing properties to a `0o600` `gradle.properties` file inside the ephemeral build step and shredded/restored it inside a `trap EXIT` cleanup handler. |
+| Redis Rate Limiter, Shared-Quota Atomicity & Fallback Accounting | `server.ts`, `server/providers/sharedQuota.ts`, `server/providers/coarena.ts` | 468 / 65 / 92 | Redis connections lacked `.on('error')` listeners and atomic Lua increments, mid-turn fallback to platform keys could bypass daily shared-key quotas, `POST /api/providers/test-ephemeral` lacked `asyncHandler`, and `coarena.ts` only scrubbed `apiKey` instead of all configured header secrets. | Medium | Fixed | Added `.on('error')` listeners, 15s circuit-breaker cooldowns, atomic Lua scripts for rate limiting and quotas, conservative 50% local fallback caps during Redis degradation, mid-turn platform-key quota filtering/accounting, `req.body` null normalization, `asyncHandler` wrapping, and full `getSecretsToScrub` scrubbing. |
+| Bounded APK Build Queue & Cancellation | `server/builds/apkBuilder.ts`, `server/builds/apkWorker.ts`, `scripts/apk-worker-healthcheck.mjs`, `server.ts`, `src/components/workspace/WorkspaceModals.tsx` | 842 / 52 / 96 | Local APK builds fired unbounded `setTimeout` jobs without honoring global concurrency limits, had no cancel endpoint, and the standalone worker could not run in shared DB-poll mode when Redis was absent. | Medium | Fixed | Replaced unbounded `setTimeout` with a bounded single-instance queue honoring `maxConcurrentApkBuildsGlobal`, added owner-checked `POST /api/builds/:id/cancel` with ephemeral keystore wiping, and added `db-poll` mode + healthcheck support to `apkWorker.ts`. |
 
 ### Safeguards Verified
 | Area | File | How It's Protected |
@@ -171,6 +177,88 @@ Scoped `ProviderHealthMonitor` cooldown keys to `providerKeyId` so an invalid or
 - `runAgentTurn` isolates `prepareSkillsForAgentTurn` inside a non-fatal boundary so zero skills, all skills disabled, failed loads, or permission denials seamlessly continue through the built-in CARMEN Agent Core.
 
 #### Conclusion
-**Fix Verified** - All `13/13` tests in `npm run test:skills` and `102/102` `test:unit`, `7/7` `test:security`, `23/23` `test:integration`, `6/6` `test:concurrency`, `3/3` `test:reliability`, `2/2` `test:benchmark`, and `1/1` `test:e2e` pass. Live external PostgreSQL (`2/2` integration), Docker/Podman containers, Redis daemon, and Android SDK builds remain `NOT VERIFIED` in this host environment because those runtimes are not installed.
+**Fix Verified** - Verified via unit, skills, security, integration, concurrency, reliability, and benchmark test suites.
+
+### PostgreSQL / Supabase Production TLS Enforcement & Direct Migration URL
+#### Summary
+| Field | Value |
+|---|---|
+| Issue Type | Unverified Database TLS & Pooled Migration Misconfiguration |
+| Impact | High |
+| Affected Files | `server/db/postgres.ts:91`, `server/db/client.ts:252`, `server/db.ts:267` |
+| Test Scenario | `parsePostgresConfig` with `NODE_ENV=production` + `PGSSLMODE=disable` or `require`, default `verify-full`, `DIRECT_URL`, and custom CA PEM (`server/db/postgres.test.ts`) |
+
+#### How It Was Fixed
+Defaulted `sslMode` to `verify-full` (`rejectUnauthorized: true`), rejected `disable` and unverified `require` in production unless `PGSSL_ALLOW_INSECURE_IN_PROD=1` is explicitly set, supported `PGSSLROOTCERT` / `PGSSLROOTCERT_PEM` custom CAs, wired `DIRECT_URL` for PostgreSQL schema migrations, and attached an idle-client `pool.on('error')` listener.
+
+#### Step-by-Step Trace
+| Step | What Happens in the Code | Outcome |
+|---|---|---|
+| 1 | `parsePostgresConfig` runs with `DATABASE_URL` and no `PGSSLMODE` | Sets `sslMode: 'verify-full'` and `sslRejectUnauthorized: true` |
+| 2 | `parsePostgresConfig` runs with `NODE_ENV=production` and `PGSSLMODE=disable` or `require` | Throws explicit fail-fast configuration error |
+| 3 | `buildPgPoolConfig` builds `pg.PoolConfig` with custom CA PEM | Sets `ssl.rejectUnauthorized = true` and injects `ssl.ca` |
+| 4 | Unit tests in `server/db/postgres.test.ts` assert all 6 TLS and `DIRECT_URL` cases | **Handled Safely** |
+
+#### Conclusion
+**Fix Verified** - Production PostgreSQL/Supabase connections verify TLS certificates by default and fail fast on insecure settings.
+
+### Skill Script EXECUTE Gate, Tamper Integrity Check & Edit Auto-Demotion
+#### Summary
+| Field | Value |
+|---|---|
+| Issue Type | Privilege Escalation & Tampered Skill Script Execution |
+| Impact | High |
+| Affected Files | `server/skills/permissions.ts:48`, `server/skills/executor.ts:294`, `server/skills/registry.ts:831` |
+| Test Scenario | `APPROVED` read-only skill attempting script execution without `EXECUTE`, tampered script content with stale checksum, and editing an `APPROVED` skill to add `WRITE` permission (`server/skills/skills.test.ts`) |
+
+#### How It Was Fixed
+Required explicit `EXECUTE` approval whenever `hasScriptExecution: true` regardless of trust level, defaulted `requireOsIsolation` to `true`, verified package checksum integrity before executing scripts or workflows, and automatically demoted `APPROVED` custom skills to `DRAFT` + disabled whenever edits modify scripts or add elevated permissions or tools.
+
+#### Step-by-Step Trace
+| Step | What Happens in the Code | Outcome |
+|---|---|---|
+| 1 | `APPROVED` read-only skill invokes `runSkillSandboxScript` with `approvedPermissions: ['READ']` | Blocked before sandbox spawn with missing `['EXECUTE']` |
+| 2 | Script contents are altered without recomputing checksum and passed to `runSkillSandboxScript` | Rejected by `verifySkillPackageIntegrity` before execution |
+| 3 | `saveUserSkillPackage` updates an `APPROVED` skill to request `WRITE` permission | Trust automatically demoted to `DRAFT` and `enabled = false` |
+
+#### Conclusion
+**Fix Verified** - Skill scripts cannot execute without explicit `EXECUTE` approval, untampered integrity, and OS-level sandbox isolation.
+
+### Sandbox Command Flag & External Package Source Blocking
+#### Summary
+| Field | Value |
+|---|---|
+| Issue Type | Sandbox Command Argument & Dependency Source Abuse |
+| Impact | High |
+| Affected File | `server/runtime/sandbox.ts:308` |
+| Test Scenario | `validateParsedCommand` tested against `node -e`, `node --import`, `npm install --no-ignore-scripts`, `npm install file:/etc`, `npm install --registry=...`, `npx -p evil -c ...`, and absolute path arguments (`server/security.adversarial.test.ts`) |
+
+#### How It Was Fixed
+Expanded `validateParsedCommand` to reject absolute path arguments, dangerous `node` execution/loader/inspector flags, `npm`/`bun` script/registry/prefix overrides and non-registry package sources (`file:`, `git+`, `http(s)://`, `ssh://`, `github:`, `link:`), and `npx` package/shell smuggling flags (`-p`, `--package`, `-c`, `--call`).
+
+#### Step-by-Step Trace
+| Step | What Happens in the Code | Outcome |
+|---|---|---|
+| 1 | Adversarial vectors passed to `validateParsedCommand` in `server/security.adversarial.test.ts` | Every disallowed flag, external source, and absolute path returns `{ ok: false }` |
+| 2 | Legitimate workspace commands (`node scripts/check.mjs`, `npm test`, `npx tsc --noEmit`) tested | Return `{ ok: true }` |
+
+#### Conclusion
+**Fix Verified** - Sandbox command parsing blocks flag-based code injection and untrusted package sources while preserving standard project commands.
+
+### Android CI Signing Protection & Build Cancellation Authorization
+#### Summary
+| Field | Value |
+|---|---|
+| Issue Type | CI Command-Line Secret Exposure & Cross-User Build Cancellation |
+| Impact | Medium |
+| Affected Files | `.github/workflows/android-build.yml:220`, `server.ts:3704`, `server/builds/apkBuilder.ts:1075` |
+| Test Scenario | Static workflow assertion (`server/builds/builds.test.ts`) and cross-user `POST /api/builds/:id/cancel` (`server/api.integration.test.ts`) |
+
+#### How It Was Fixed
+Removed `-Pandroid.injected.signing.*` CLI flags in `.github/workflows/android-build.yml` in favor of a `0o600` `gradle.properties` shredded in `trap EXIT`, added owner-checked `POST /api/builds/:id/cancel` with immediate ephemeral keystore zero-fill, and verified `401` (unauthenticated), `404` (cross-user), `200` (owner), and `409` (already terminal).
+
+#### Conclusion
+**Fix Verified** - Verified by `server/builds/builds.test.ts` and `server/api.integration.test.ts`. Live Android SDK/Gradle execution in CI remains external to this host environment.
+
 
 

@@ -614,11 +614,77 @@ describe('PostgreSQL Compatibility Layer & Dual-Mode Repositories', () => {
     assert.match(fs.readFileSync(path.join(androidOut, 'app', 'build.gradle'), 'utf8'), /id\.carmen\.audit/);
 
     // F-04: Explicit Postgres selection fails fast when DATABASE_URL is missing
-    const { createAsyncDbClient } = await import('./client');
+    const { createAsyncDbClient, buildPgPoolConfig } = await import('./client');
     assert.throws(
       () => createAsyncDbClient({ env: { CARMEN_DB_DRIVER: 'postgres' } }),
       /DATABASE_URL/i
     );
+
+    // P0 TLS Hardening: secure-by-default verify-full, production fail-fast on unverified TLS, custom CA, and DIRECT_URL
+    const defaultCfg = parsePostgresConfig({
+      DATABASE_URL: 'postgresql://postgres:pw@db.example.supabase.co:6543/postgres?pgbouncer=true',
+      DIRECT_URL: 'postgresql://postgres:pw@db.example.supabase.co:5432/postgres',
+    });
+    assert.ok(defaultCfg);
+    assert.equal(defaultCfg.sslMode, 'verify-full');
+    assert.equal(defaultCfg.sslRejectUnauthorized, true);
+    assert.equal(defaultCfg.directConnectionString, 'postgresql://postgres:pw@db.example.supabase.co:5432/postgres');
+    const defaultPool = buildPgPoolConfig(defaultCfg);
+    assert.deepEqual(defaultPool.ssl, { rejectUnauthorized: true });
+    const directPool = buildPgPoolConfig(defaultCfg, { useDirectUrl: true });
+    assert.equal(directPool.connectionString, 'postgresql://postgres:pw@db.example.supabase.co:5432/postgres');
+
+    // Production MUST reject disable and unverified require unless explicitly opted in
+    assert.throws(
+      () =>
+        parsePostgresConfig({
+          NODE_ENV: 'production',
+          DATABASE_URL: 'postgresql://u:p@db.example.com:5432/app',
+          PGSSLMODE: 'disable',
+        }),
+      /ditolak di produksi/i
+    );
+    assert.throws(
+      () =>
+        parsePostgresConfig({
+          NODE_ENV: 'production',
+          DATABASE_URL: 'postgresql://u:p@db.example.com:5432/app',
+          PGSSLMODE: 'require',
+        }),
+      /ditolak di produksi/i
+    );
+
+    // Custom CA PEM works cleanly with verify-ca and verify-full in production
+    const samplePem = '-----BEGIN CERTIFICATE-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A\n-----END CERTIFICATE-----';
+    const customCaPath = path.join(tempDir, 'supabase-ca.crt');
+    fs.writeFileSync(customCaPath, samplePem, 'utf8');
+
+    const caCfg = parsePostgresConfig({
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://u:p@db.example.supabase.co:5432/postgres',
+      PGSSLMODE: 'verify-ca',
+      PGSSLROOTCERT: customCaPath,
+    });
+    assert.ok(caCfg);
+    assert.equal(caCfg.sslRejectUnauthorized, true);
+    assert.equal(caCfg.sslRootCertPem, samplePem);
+    const caPool = buildPgPoolConfig(caCfg);
+    assert.ok(caPool.ssl && typeof caPool.ssl === 'object');
+    assert.equal(caPool.ssl.rejectUnauthorized, true);
+    assert.equal(caPool.ssl.ca, samplePem);
+    assert.equal(typeof caPool.ssl.checkServerIdentity, 'function');
+
+    // Inline PEM env var also supported
+    const inlineCfg = parsePostgresConfig({
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://u:p@db.example.supabase.co:5432/postgres',
+      PGSSLMODE: 'verify-full',
+      PGSSLROOTCERT_PEM: samplePem.replace(/\n/g, '\\n'),
+    });
+    assert.equal(inlineCfg?.sslRootCertPem, samplePem);
+    const inlinePool = buildPgPoolConfig(inlineCfg!);
+    assert.ok(inlinePool.ssl && typeof inlinePool.ssl === 'object');
+    assert.equal(inlinePool.ssl.checkServerIdentity, undefined);
   });
 });
 

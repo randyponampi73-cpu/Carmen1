@@ -301,20 +301,82 @@ export async function buildSanitizedChildEnvAsync(
   return buildSanitizedChildEnvFromRows(rows, workspaceDir, tmpDir, npmCacheDir);
 }
 
-function validateParsedCommand(tokens: string[]): { allowed: boolean; bin?: string; args?: string[]; reason?: string } {
+const DISALLOWED_NODE_FLAGS = new Set([
+  '-e',
+  '--eval',
+  '-p',
+  '--print',
+  '-r',
+  '--require',
+  '--import',
+  '--loader',
+  '--experimental-loader',
+  '--inspect',
+  '--inspect-brk',
+  '--inspect-wait',
+  '--inspect-port',
+  '--expose-gc',
+  '--allow-addons',
+  '--env-file',
+  '--env-file-if-exists',
+]);
+
+const DISALLOWED_NPM_FLAGS = new Set([
+  '--foreground-scripts',
+  '--registry',
+  '--userconfig',
+  '--globalconfig',
+  '--script-shell',
+  '--prefix',
+  '-g',
+  '--global',
+]);
+
+const DISALLOWED_NPX_FLAGS = new Set([
+  '-p',
+  '--package',
+  '-c',
+  '--call',
+  '--shell',
+  '--shell-auto-fallback',
+  '--registry',
+  '--userconfig',
+]);
+
+function normalizeFlagName(arg: string): string {
+  const eq = arg.indexOf('=');
+  return (eq === -1 ? arg : arg.slice(0, eq)).toLowerCase();
+}
+
+function hasDisallowedPackageSource(arg: string): boolean {
+  const lower = arg.trim().toLowerCase();
+  return (
+    lower.startsWith('file:') ||
+    lower.startsWith('git+') ||
+    lower.startsWith('git://') ||
+    lower.startsWith('ssh://') ||
+    lower.startsWith('http://') ||
+    lower.startsWith('https://') ||
+    lower.startsWith('github:') ||
+    lower.startsWith('link:')
+  );
+}
+
+export function validateParsedCommand(tokens: string[]): { allowed: boolean; bin?: string; args?: string[]; reason?: string } {
   if (tokens.length === 0) return { allowed: false, reason: 'Perintah kosong.' };
   const [bin, ...args] = tokens;
 
-  // Block path traversal or host filesystem / sensitive secret access in any argument
+  // Block path traversal, absolute host paths, or sensitive secret access in any argument
   for (const arg of args) {
     if (
       arg.includes('..') ||
       isSensitiveHostResourcePath(arg) ||
       /(^|\/)(etc|proc|sys|root|var\/run)\b/i.test(arg) ||
       arg.includes('carmen.db') ||
-      arg.startsWith('/app/')
+      arg.startsWith('/app/') ||
+      arg.startsWith('/')
     ) {
-      return { allowed: false, reason: 'Argumen path di luar direktori proyek ditolak oleh kebijakan sandbox.' };
+      return { allowed: false, reason: 'Argumen path absolut atau di luar direktori proyek ditolak oleh kebijakan sandbox.' };
     }
   }
 
@@ -323,15 +385,52 @@ function validateParsedCommand(tokens: string[]): { allowed: boolean; bin?: stri
     if (!ALLOWED_NPM_SUBCOMMANDS.has(sub)) {
       return {
         allowed: false,
-        reason: `Subperintah npm "${sub}" tidak diizinkan. Gunakan install, run, test, ls, atau --version.`,
+        reason: `Subperintah npm "${sub}" tidak diizinkan. Gunakan install, ci, run, test, ls, atau --version.`,
       };
+    }
+    for (const arg of args.slice(1)) {
+      const lower = arg.toLowerCase();
+      const flagName = normalizeFlagName(arg);
+      if (
+        DISALLOWED_NPM_FLAGS.has(flagName) ||
+        lower === '--ignore-scripts=false' ||
+        lower === '--no-ignore-scripts'
+      ) {
+        return {
+          allowed: false,
+          reason: `Flag npm "${flagName}" ditolak oleh kebijakan keamanan sandbox.`,
+        };
+      }
+      if ((sub === 'install' || sub === 'i' || sub === 'ci') && hasDisallowedPackageSource(arg)) {
+        return {
+          allowed: false,
+          reason: `Sumber paket tidak tepercaya "${arg}" ditolak di sandbox. Gunakan nama paket registry standar.`,
+        };
+      }
     }
     return { allowed: true, bin, args };
   }
 
   if (bin === 'npx') {
-    const targetBin = (args[0] || '').replace(/^--yes$|-y$/, '');
-    const actualBin = targetBin || args[1] || '';
+    let actualBin = '';
+    for (const arg of args) {
+      const flagName = normalizeFlagName(arg);
+      if (DISALLOWED_NPX_FLAGS.has(flagName)) {
+        return {
+          allowed: false,
+          reason: `Flag npx "${flagName}" ditolak untuk mencegah package smuggling di sandbox.`,
+        };
+      }
+      if (hasDisallowedPackageSource(arg)) {
+        return {
+          allowed: false,
+          reason: `Sumber paket npx "${arg}" ditolak oleh kebijakan keamanan sandbox.`,
+        };
+      }
+      if (!actualBin && arg !== '--yes' && arg !== '-y' && !arg.startsWith('-')) {
+        actualBin = arg;
+      }
+    }
     if (!ALLOWED_NPX_BINS.has(actualBin)) {
       return {
         allowed: false,
@@ -349,12 +448,30 @@ function validateParsedCommand(tokens: string[]): { allowed: boolean; bin?: stri
         reason: `Subperintah bun "${sub}" tidak diizinkan. Hanya "bun install" yang diizinkan di sandbox.`,
       };
     }
+    for (const arg of args.slice(1)) {
+      const flagName = normalizeFlagName(arg);
+      if (DISALLOWED_NPM_FLAGS.has(flagName) || hasDisallowedPackageSource(arg)) {
+        return {
+          allowed: false,
+          reason: `Argumen bun "${arg}" ditolak oleh kebijakan keamanan sandbox.`,
+        };
+      }
+    }
     return { allowed: true, bin, args };
   }
 
   if (bin === 'node') {
     if (args.length === 0) {
       return { allowed: false, reason: 'Jalankan node dengan argumen (mis. node -v, node --check file.js, atau node script.js).' };
+    }
+    for (const arg of args) {
+      const flagName = normalizeFlagName(arg);
+      if (DISALLOWED_NODE_FLAGS.has(flagName) || flagName.startsWith('--inspect')) {
+        return {
+          allowed: false,
+          reason: `Flag node "${flagName}" ditolak oleh kebijakan keamanan sandbox (gunakan file script dalam workspace).`,
+        };
+      }
     }
     return { allowed: true, bin, args };
   }
@@ -1282,6 +1399,19 @@ class IsolatedSandboxRuntime implements ProjectRuntime {
     return sdb.prepare(`SELECT * FROM "${table}" ORDER BY ${orderExpr} LIMIT 200`).all() as Record<string, unknown>[];
   }
 
+  private toSafeSqliteValue(v: unknown): string | number | null {
+    if (v === undefined || v === null) return null;
+    if (typeof v === 'boolean') return v ? 1 : 0;
+    if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+    if (typeof v === 'string') return v;
+    if (typeof v === 'bigint') return Number(v);
+    try {
+      return JSON.stringify(v);
+    } catch {
+      return String(v);
+    }
+  }
+
   private executeTableInsert(projectId: string, table: string, body: Record<string, unknown>): { id: number | bigint } {
     const sdb = getSandboxDb(projectId);
     const pragma = sdb.prepare(`PRAGMA table_info("${table}")`).all() as Array<{ name: string }>;
@@ -1290,7 +1420,7 @@ class IsolatedSandboxRuntime implements ProjectRuntime {
     if (entries.length === 0) throw new Error('Tidak ada kolom valid untuk dimasukkan.');
     const cols = entries.map(([k]) => `"${k}"`).join(', ');
     const placeholders = entries.map(() => '?').join(', ');
-    const values = entries.map(([, v]) => (typeof v === 'boolean' ? (v ? 1 : 0) : (v as string | number | null)));
+    const values = entries.map(([, v]) => this.toSafeSqliteValue(v));
     const info = sdb.prepare(`INSERT INTO "${table}" (${cols}) VALUES (${placeholders})`).run(...values);
     return { id: info.lastInsertRowid };
   }
@@ -1323,30 +1453,45 @@ class IsolatedSandboxRuntime implements ProjectRuntime {
     return this.executeTableInsert(projectId, table, body);
   }
 
-  updateRow(projectId: string, table: string, id: string, body: Record<string, unknown>): void {
-    if (!isSafeIdentifier(table)) throw new Error('Nama tabel tidak valid.');
+  private executeTableUpdate(projectId: string, table: string, id: string, body: Record<string, unknown>): void {
     const sdb = getSandboxDb(projectId);
     const pragma = sdb.prepare(`PRAGMA table_info("${table}")`).all() as Array<{ name: string }>;
     const validCols = new Set(pragma.map((c) => c.name));
     const entries = Object.entries(body).filter(([k]) => validCols.has(k) && k !== 'id');
     if (entries.length === 0) return;
     const setSql = entries.map(([k]) => `"${k}" = ?`).join(', ');
-    const values = entries.map(([, v]) => (typeof v === 'boolean' ? (v ? 1 : 0) : (v as string | number | null)));
+    const values = entries.map(([, v]) => this.toSafeSqliteValue(v));
     sdb.prepare(`UPDATE "${table}" SET ${setSql} WHERE id = ?`).run(...values, id);
   }
 
+  updateRow(projectId: string, table: string, id: string, body: Record<string, unknown>): void {
+    if (!isSafeIdentifier(table)) throw new Error('Nama tabel tidak valid.');
+    const sync = this.syncSchema(projectId);
+    if (!sync.ok) throw new Error(sync.error || 'Skema database tidak valid.');
+    this.executeTableUpdate(projectId, table, id, body);
+  }
+
   async updateRowAsync(projectId: string, table: string, id: string, body: Record<string, unknown>): Promise<void> {
-    this.updateRow(projectId, table, id, body);
+    if (!isSafeIdentifier(table)) throw new Error('Nama tabel tidak valid.');
+    const sync = await this.syncSchemaAsync(projectId);
+    if (!sync.ok) throw new Error(sync.error || 'Skema database tidak valid.');
+    this.executeTableUpdate(projectId, table, id, body);
   }
 
   deleteRow(projectId: string, table: string, id: string): void {
     if (!isSafeIdentifier(table)) throw new Error('Nama tabel tidak valid.');
+    const sync = this.syncSchema(projectId);
+    if (!sync.ok) throw new Error(sync.error || 'Skema database tidak valid.');
     const sdb = getSandboxDb(projectId);
     sdb.prepare(`DELETE FROM "${table}" WHERE id = ?`).run(id);
   }
 
   async deleteRowAsync(projectId: string, table: string, id: string): Promise<void> {
-    this.deleteRow(projectId, table, id);
+    if (!isSafeIdentifier(table)) throw new Error('Nama tabel tidak valid.');
+    const sync = await this.syncSchemaAsync(projectId);
+    if (!sync.ok) throw new Error(sync.error || 'Skema database tidak valid.');
+    const sdb = getSandboxDb(projectId);
+    sdb.prepare(`DELETE FROM "${table}" WHERE id = ?`).run(id);
   }
 }
 
@@ -1532,7 +1677,14 @@ export async function ensureProjectDependenciesInstalled(
         };
       }
 
-      const installCmd = inspection.packageManager === 'bun' ? 'bun install' : 'npm install --no-audit --no-fund';
+      const hasPackageLock = fs.existsSync(path.join(workspaceDir, 'package-lock.json'));
+      const hasNodeModules = fs.existsSync(path.join(workspaceDir, 'node_modules'));
+      const installCmd =
+        inspection.packageManager === 'bun'
+          ? 'bun install'
+          : hasPackageLock && !hasNodeModules
+            ? 'npm ci --no-audit --no-fund --ignore-scripts'
+            : 'npm install --no-audit --no-fund --ignore-scripts';
       dependencyInstallStates.set(projectId, {
         status: 'installing',
         packageManager: inspection.packageManager,

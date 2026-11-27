@@ -35,6 +35,7 @@ import {
 } from './server/agent/orchestrator';
 import { providerHealthMonitor, type RouteCandidate } from './server/agent/router';
 import {
+  cancelApkBuildAsync,
   cleanupExpiredBuildArtifactsAsync,
   cleanupProjectBuildArtifactsAsync,
   closeApkQueueConnections,
@@ -206,6 +207,13 @@ app.use((req, res, next) => {
   }
   return defaultJsonParser(req, res, next);
 });
+// Guard against null or primitive JSON bodies (e.g. `null`, `"str"`, `123`) breaking route destructuring
+app.use((req, _res, next) => {
+  if (req.body === null || (req.body !== undefined && typeof req.body !== 'object')) {
+    req.body = {};
+  }
+  next();
+});
 app.use(cookieParser());
 
 // Baseline security headers
@@ -215,11 +223,34 @@ app.use((_req, res, next) => {
   next();
 });
 
-// Bounded per-category sliding/fixed-window rate limiters (with optional Redis atomic sync)
+// Bounded per-category sliding/fixed-window rate limiters (with optional Redis atomic Lua sync & circuit-breaker)
 const MAX_RATE_BUCKET_ENTRIES = 10_000;
 const rateBuckets = new Map<string, Map<string, { count: number; resetAt: number }>>();
 let rateLimitRedisConn: IORedis | null = null;
 let rateLimitRedisUrl = '';
+let rateLimitRedisCooldownUntil = 0;
+let rateLimitRedisDegraded = false;
+let rateLimitRedisLastError: string | null = null;
+
+const RATE_LIMIT_INCR_LUA = `
+local c = redis.call('INCR', KEYS[1])
+if c == 1 then
+  redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[1]))
+end
+return c
+`;
+
+function getRateLimiterHealthStatus() {
+  const redisCfg = validateRedisConfiguration();
+  const inCooldown = Date.now() < rateLimitRedisCooldownUntil;
+  const degraded = Boolean(redisCfg.configured && (rateLimitRedisDegraded || inCooldown));
+  return {
+    mode: redisCfg.configured ? (degraded ? 'memory-degraded' : 'redis') : 'memory',
+    redisConfigured: redisCfg.configured,
+    degraded,
+    lastError: degraded ? rateLimitRedisLastError : null,
+  };
+}
 
 function getRateBucket(category: string): Map<string, { count: number; resetAt: number }> {
   let bucket = rateBuckets.get(category);
@@ -234,6 +265,9 @@ export function resetRateLimitsForTest(): void {
   for (const bucket of rateBuckets.values()) {
     bucket.clear();
   }
+  rateLimitRedisCooldownUntil = 0;
+  rateLimitRedisDegraded = false;
+  rateLimitRedisLastError = null;
 }
 
 async function closeRateLimiterRedis(): Promise<void> {
@@ -245,6 +279,9 @@ async function closeRateLimiterRedis(): Promise<void> {
   }
   rateLimitRedisConn = null;
   rateLimitRedisUrl = '';
+  rateLimitRedisCooldownUntil = 0;
+  rateLimitRedisDegraded = false;
+  rateLimitRedisLastError = null;
 }
 
 function readRateLimitNumber(envKey: string, fallback: number, min: number, max: number): number {
@@ -256,33 +293,45 @@ async function tryIncrementRedisRateLimit(
   category: string,
   subjectKey: string,
   windowMs: number
-): Promise<{ checked: boolean; count?: number; resetAt?: number }> {
+): Promise<{ checked: boolean; degraded?: boolean; count?: number; resetAt?: number }> {
   const redisCfg = validateRedisConfiguration();
-  if (!redisCfg.configured || !redisCfg.url) return { checked: false };
+  if (!redisCfg.configured || !redisCfg.url) return { checked: false, degraded: false };
+  if (Date.now() < rateLimitRedisCooldownUntil) {
+    return { checked: false, degraded: true };
+  }
   try {
     if (!rateLimitRedisConn || rateLimitRedisUrl !== redisCfg.url) {
       if (rateLimitRedisConn) rateLimitRedisConn.disconnect();
       rateLimitRedisUrl = redisCfg.url;
-      rateLimitRedisConn = new IORedis(redisCfg.url, {
+      const conn = new IORedis(redisCfg.url, {
         maxRetriesPerRequest: 1,
         connectTimeout: 500,
         enableOfflineQueue: false,
         lazyConnect: true,
       });
+      conn.on('error', (err) => {
+        rateLimitRedisDegraded = true;
+        rateLimitRedisLastError = err.message;
+        rateLimitRedisCooldownUntil = Date.now() + 15_000;
+      });
+      rateLimitRedisConn = conn;
     }
     if (rateLimitRedisConn.status === 'wait') {
       await rateLimitRedisConn.connect();
     }
     const windowSlot = Math.floor(Date.now() / windowMs);
     const key = `carmen:rl:${category}:${windowSlot}:${subjectKey}`;
-    const count = await rateLimitRedisConn.incr(key);
-    if (count === 1) {
-      await rateLimitRedisConn.pexpire(key, windowMs + 1000);
-    }
+    const rawCount = await rateLimitRedisConn.eval(RATE_LIMIT_INCR_LUA, 1, key, String(windowMs + 1000));
+    const count = Number(rawCount);
     const resetAt = (windowSlot + 1) * windowMs;
-    return { checked: true, count, resetAt };
-  } catch {
-    return { checked: false };
+    rateLimitRedisDegraded = false;
+    rateLimitRedisLastError = null;
+    return { checked: true, degraded: false, count, resetAt };
+  } catch (err) {
+    rateLimitRedisDegraded = true;
+    rateLimitRedisLastError = err instanceof Error ? err.message : String(err);
+    rateLimitRedisCooldownUntil = Date.now() + 15_000;
+    return { checked: false, degraded: true };
   }
 }
 
@@ -315,17 +364,23 @@ function createCategoryRateLimiter(options: {
   const bucket = getRateBucket(options.category);
   return asyncHandler(async (req, res, next) => {
     const now = Date.now();
-    const max = options.getMax();
+    const baseMax = options.getMax();
     const authedUserId = (req as AuthedRequest).user?.id;
     const subjectKey = options.keyBy === 'userOrIp' && authedUserId ? `u:${authedUserId}` : `ip:${req.ip || 'local'}`;
 
     let count: number;
     let resetAt: number;
+    let effectiveMax = baseMax;
     const redisRes = await tryIncrementRedisRateLimit(options.category, subjectKey, options.windowMs);
     if (redisRes.checked && typeof redisRes.count === 'number' && typeof redisRes.resetAt === 'number') {
       count = redisRes.count;
       resetAt = redisRes.resetAt;
     } else {
+      // When Redis was configured for distributed enforcement but is currently unreachable,
+      // tighten local fallback cap conservatively (50%) to limit multi-instance burst bypass.
+      if (redisRes.degraded) {
+        effectiveMax = Math.max(1, Math.floor(baseMax * 0.5));
+      }
       const existing = bucket.get(subjectKey);
       if (!existing || now > existing.resetAt) {
         count = 1;
@@ -338,13 +393,13 @@ function createCategoryRateLimiter(options: {
       }
     }
 
-    const remaining = Math.max(0, max - count);
+    const remaining = Math.max(0, effectiveMax - count);
     const resetSeconds = Math.max(1, Math.ceil((resetAt - now) / 1000));
-    res.setHeader('X-RateLimit-Limit', String(max));
+    res.setHeader('X-RateLimit-Limit', String(effectiveMax));
     res.setHeader('X-RateLimit-Remaining', String(remaining));
     res.setHeader('X-RateLimit-Reset', String(Math.ceil(resetAt / 1000)));
 
-    if (count > max) {
+    if (count > effectiveMax) {
       res.setHeader('Retry-After', String(resetSeconds));
       return res.status(429).json({
         error: options.errorMessage,
@@ -1050,7 +1105,12 @@ app.delete('/api/auth/account', requireAuth, asyncHandler(async (req: AuthedRequ
   }
   await asyncDb.run('DELETE FROM users WHERE id = ?', u.id);
   const opts = getSessionCookieOptions(req);
-  res.clearCookie(SESSION_COOKIE, { path: '/', sameSite: opts.sameSite, secure: opts.secure });
+  res.clearCookie(SESSION_COOKIE, {
+    path: '/',
+    sameSite: opts.sameSite,
+    secure: opts.secure,
+    partitioned: opts.partitioned,
+  });
   return res.json({ ok: true });
 }));
 
@@ -1074,9 +1134,12 @@ app.get('/api/health', asyncHandler(async (_req, res) => {
       driver: driverStatus.activeDriver,
       integrityOk: integrity.ok,
       postgresConfigured: driverStatus.postgresConfigured,
+      directUrlConfigured: driverStatus.directUrlConfigured,
       postgresSchemaReady: driverStatus.schemaReady,
       postgresCompatibilityReady: driverStatus.compatibilityLayerReady,
       pgDriverInstalled: driverStatus.pgPackageInstalled,
+      sslMode: driverStatus.sslMode,
+      sslVerified: driverStatus.sslVerified,
       asyncLayerDialect: asyncDb.dialect,
       repositoryCount: Object.keys(repositories).length,
     },
@@ -1084,6 +1147,7 @@ app.get('/api/health', asyncHandler(async (_req, res) => {
       driver: sandboxCaps.driver,
       osLevelIsolation: sandboxCaps.osLevelIsolation,
     },
+    rateLimiter: getRateLimiterHealthStatus(),
     resources,
     activeAgentSessions,
     timestamp: new Date().toISOString(),
@@ -1366,7 +1430,7 @@ app.post('/api/providers/keys/:id/test', requireAuth, asyncHandler(async (req: A
   return res.json({ ok: result.ok, message: cleanMessage, errorCode: result.errorCode });
 }));
 
-app.post('/api/providers/test-ephemeral', requireAuth, async (req: AuthedRequest, res) => {
+app.post('/api/providers/test-ephemeral', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
   const { provider, label, apiKey, baseUrl, authHeader, chatPath, customModels, tierDeclared = 'unknown' } =
     req.body as {
       provider?: ProviderType;
@@ -1404,7 +1468,7 @@ app.post('/api/providers/test-ephemeral', requireAuth, async (req: AuthedRequest
     customModels,
   });
   return res.json({ ok: result.ok, message: scrubSecrets(result.message, [apiKey]), errorCode: result.errorCode });
-});
+}));
 
 app.get('/api/providers/shared-quota', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
   const quota = await getSharedKeyQuotaStatus(req.user!.id);
@@ -2785,6 +2849,20 @@ app.post('/api/projects/:id/chat', requireAuth, requireProjectOwner, chatRateLim
         quota: quotaCheck.summary,
       });
     }
+  } else if (!localProviderConfig && fallbackCandidates.some((c) => c.adapterConfig.providerKeyId.startsWith('key_platform_'))) {
+    // Strip platform fallback candidates if the user's daily shared-key quota is already exhausted
+    const quotaStatus = await getSharedKeyQuotaStatus(req.user!.id);
+    const exhausted =
+      quotaStatus.requestCount >= quotaStatus.limits.maxRequestsPerDay ||
+      quotaStatus.tokensUsed >= quotaStatus.limits.maxTokensPerDay ||
+      quotaStatus.estimatedCostUsd >= quotaStatus.limits.maxCostUsdPerDay;
+    if (exhausted) {
+      for (let idx = fallbackCandidates.length - 1; idx >= 0; idx -= 1) {
+        if (fallbackCandidates[idx].adapterConfig.providerKeyId.startsWith('key_platform_')) {
+          fallbackCandidates.splice(idx, 1);
+        }
+      }
+    }
   }
 
   const sessionId = `sess_${crypto.randomUUID().slice(0, 12)}`;
@@ -2838,9 +2916,17 @@ app.post('/api/projects/:id/chat', requireAuth, requireProjectOwner, chatRateLim
       disableAllSkills,
       emit,
     });
-    if (usesPlatformSharedKey || actualRoutedProviderKeyId.startsWith('key_platform_')) {
+    const routedToPlatformKey = actualRoutedProviderKeyId.startsWith('key_platform_');
+    if (usesPlatformSharedKey || routedToPlatformKey) {
       const usedTokens = (savedMsg.tokensIn || 0) + (savedMsg.tokensOut || 0);
-      await recordSharedKeyCompletionUsage(req.user!.id, usedTokens, savedMsg.estimatedCostUsd || 0).catch(() => {});
+      const unreservedFallbackReq = !usesPlatformSharedKey && routedToPlatformKey ? 1 : 0;
+      await recordSharedKeyCompletionUsage(
+        req.user!.id,
+        usedTokens,
+        savedMsg.estimatedCostUsd || 0,
+        new Date(),
+        unreservedFallbackReq
+      ).catch(() => {});
     }
   } catch (err) {
     const msg = scrubSecrets(err instanceof Error ? err.message : String(err), [adapterConfig.apiKey]);
@@ -3617,6 +3703,14 @@ app.get('/api/builds/:id/status', requireAuth, requireBuildOwner, asyncHandler(a
   return res.json(jobStatus);
 }));
 
+app.post('/api/builds/:id/cancel', requireAuth, requireBuildOwner, asyncHandler(async (req: AuthedRequest, res) => {
+  const result = await cancelApkBuildAsync(req.params.id);
+  if (!result.ok) {
+    return res.status(result.httpStatus ?? 400).json({ error: result.error || 'Gagal membatalkan build.' });
+  }
+  return res.json({ build: result.build });
+}));
+
 app.get('/api/builds/:id/logs', requireAuth, requireBuildOwner, asyncHandler(async (req: AuthedRequest, res) => {
   const build = await getBuildRecordAsync(req.params.id);
   if (!build) return res.status(404).json({ error: 'Build tidak ditemukan.' });
@@ -4139,11 +4233,23 @@ app.all('/api/*', (_req, res) => {
   res.status(404).json({ error: 'Endpoint API tidak ditemukan.' });
 });
 
-// Global error handler — never expose internal stack traces or secrets
+// Global error handler — preserve 4xx client/parser statuses and never expose internal stack traces or secrets
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
-  const message = scrubSecrets(err instanceof Error ? err.message : 'Terjadi kesalahan internal server.');
+  const errObj = err && typeof err === 'object' ? (err as { status?: unknown; statusCode?: unknown; type?: unknown }) : null;
+  const rawStatus = typeof errObj?.status === 'number'
+    ? errObj.status
+    : typeof errObj?.statusCode === 'number'
+      ? errObj.statusCode
+      : 500;
+  const status = Number.isInteger(rawStatus) && rawStatus >= 400 && rawStatus < 600 ? rawStatus : 500;
+  let message = scrubSecrets(err instanceof Error ? err.message : 'Terjadi kesalahan internal server.');
+  if (errObj?.type === 'entity.parse.failed') {
+    message = 'Body JSON tidak valid.';
+  } else if (errObj?.type === 'entity.too.large') {
+    message = 'Ukuran payload melebihi batas yang diizinkan.';
+  }
   if (!res.headersSent) {
-    res.status(500).json({ error: message });
+    res.status(status).json({ error: message });
   }
 });
 

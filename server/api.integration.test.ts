@@ -1483,7 +1483,7 @@ test('Automatic dependency installation selects npm/bun, deduplicates runs, and 
   ]);
 
   assert.equal(invokedCommands.length, 1);
-  assert.equal(invokedCommands[0], 'npm install --no-audit --no-fund');
+  assert.equal(invokedCommands[0], 'npm install --no-audit --no-fund --ignore-scripts');
   assert.equal(run1.ok, true);
   assert.equal(run2.ok, true);
   assert.equal(getDependencyInstallState(projectId).status, 'ready');
@@ -2563,4 +2563,77 @@ test('Phase 5: Per-category rate limiter emits X-RateLimit-* + Retry-After heade
   assert.equal(bombRes.status, 400);
   assert.match(String(bombRes.json.error || ''), /Rasio kompresi/i);
 });
+
+test('Audit Hardening: /api/health exposes rateLimiter & DB TLS metadata, JSON null bodies return 400 cleanly, and build cancel enforces ownership', async () => {
+  resetRateLimitsForTest();
+
+  // 1) /api/health exposes rateLimiter and database ssl/directUrl fields cleanly
+  const healthRes = await fetch(`${baseUrl}/api/health`);
+  assert.equal(healthRes.status, 200);
+  const healthJson = (await healthRes.json()) as {
+    database?: { driver?: string; sslMode?: string; sslVerified?: boolean; directUrlConfigured?: boolean };
+    rateLimiter?: { mode?: string; degraded?: boolean };
+  };
+  assert.equal(healthJson.database?.driver, 'sqlite');
+  assert.equal(typeof healthJson.rateLimiter?.mode, 'string');
+  assert.equal(healthJson.rateLimiter?.degraded, false);
+
+  // 2) JSON literal `null` body never crashes Express handlers with 500 TypeError
+  const nullLoginRes = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: 'null',
+  });
+  assert.equal(nullLoginRes.status, 400);
+
+  // 3) POST /api/builds/:id/cancel enforces authentication & project ownership (404 cross-user, 200/409 owner)
+  const userA = await apiJson('/api/auth/register', {
+    method: 'POST',
+    body: { email: 'cancel-a@example.com', password: 'password123', name: 'Cancel A' },
+  });
+  assert.equal(userA.status, 201);
+  const tokenA = String(userA.json.sessionToken);
+
+  const userB = await apiJson('/api/auth/register', {
+    method: 'POST',
+    body: { email: 'cancel-b@example.com', password: 'password123', name: 'Cancel B' },
+  });
+  assert.equal(userB.status, 201);
+  const tokenB = String(userB.json.sessionToken);
+
+  const projRes = await apiJson('/api/projects', {
+    method: 'POST',
+    token: tokenA,
+    body: { name: 'CancelAuthzApp', type: 'android' },
+  });
+  assert.equal(projRes.status, 201);
+  const projId = String((projRes.json.project as { id: string }).id);
+
+  // Insert a queued build directly so we can reliably test cancel ownership before worker completes it
+  const queuedBuildId = `bld_intcan_${Date.now()}`;
+  const dbMod = await import('./db');
+  dbMod.db
+    .prepare(
+      `INSERT INTO builds (id, project_id, type, status, config_json, logs_json, expires_at) VALUES (?, ?, 'apk', 'queued', '{}', '[]', ?)`
+    )
+    .run(queuedBuildId, projId, new Date(Date.now() + 3_600_000).toISOString());
+
+  // Unauthenticated -> 401
+  const unauthCancel = await apiJson(`/api/builds/${queuedBuildId}/cancel`, { method: 'POST' });
+  assert.equal(unauthCancel.status, 401);
+
+  // Cross-user User B -> 404 (prevents build ID enumeration)
+  const crossUserCancel = await apiJson(`/api/builds/${queuedBuildId}/cancel`, { method: 'POST', token: tokenB });
+  assert.equal(crossUserCancel.status, 404);
+
+  // Owner User A -> 200 cancelled
+  const ownerCancel = await apiJson(`/api/builds/${queuedBuildId}/cancel`, { method: 'POST', token: tokenA });
+  assert.equal(ownerCancel.status, 200);
+  assert.equal((ownerCancel.json.build as { status?: string })?.status, 'failed');
+
+  // Cancelling an already-failed build returns 409
+  const repeatCancel = await apiJson(`/api/builds/${queuedBuildId}/cancel`, { method: 'POST', token: tokenA });
+  assert.equal(repeatCancel.status, 409);
+});
+
 

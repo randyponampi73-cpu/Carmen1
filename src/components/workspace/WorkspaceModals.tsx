@@ -50,6 +50,7 @@ export function ApkBuildModal({
   const [keyPassword, setKeyPassword] = useState('');
   const [activeBuild, setActiveBuild] = useState<ApkBuildRecord | null>(existingBuilds[0] ?? null);
   const [submitting, setSubmitting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [downloadingArtifact, setDownloadingArtifact] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -181,6 +182,22 @@ export function ApkBuildModal({
       setError(err instanceof Error ? err.message : t.apkStartBuildFail);
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleCancelBuild() {
+    if (!activeBuild || (activeBuild.status !== 'queued' && activeBuild.status !== 'running')) return;
+    setError(null);
+    setCancelling(true);
+    try {
+      const res = await api.cancelApkBuild(activeBuild.id);
+      if (res.build) {
+        setActiveBuild(res.build);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t.apkStartBuildFail);
+    } finally {
+      setCancelling(false);
     }
   }
 
@@ -420,6 +437,17 @@ export function ApkBuildModal({
         )}
 
         <div className="flex items-center justify-end gap-2">
+          {(activeBuild?.status === 'queued' || activeBuild?.status === 'running') && (
+            <button
+              type="button"
+              disabled={cancelling}
+              onClick={() => void handleCancelBuild()}
+              className="h-8 px-3.5 rounded-[6px] border border-[var(--error)] bg-[var(--surface)] hover:bg-[var(--surface-2)] text-[var(--error-text)] text-[13px] font-medium flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+            >
+              {cancelling && <Loader2 className="w-3.5 h-3.5 animate-spin" strokeWidth={1.5} />}
+              <span>{t.cancel}</span>
+            </button>
+          )}
           <button
             type="submit"
             disabled={submitting || activeBuild?.status === 'queued' || activeBuild?.status === 'running'}

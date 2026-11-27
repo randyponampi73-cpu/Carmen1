@@ -146,17 +146,37 @@ export class SqliteAsyncDbClient implements AsyncDbClient {
   }
 }
 
-export function buildPgPoolConfig(cfg: PostgresPoolConfig): PoolConfig {
-  const ssl: PoolConfig['ssl'] =
-    cfg.sslMode === 'disable'
-      ? false
-      : cfg.sslMode === 'verify-full'
-        ? { rejectUnauthorized: true }
-        : { rejectUnauthorized: false };
+export function buildPgPoolConfig(
+  cfg: PostgresPoolConfig,
+  options?: { useDirectUrl?: boolean }
+): PoolConfig {
+  const connectionString =
+    options?.useDirectUrl && cfg.directConnectionString ? cfg.directConnectionString : cfg.connectionString;
+
+  let ssl: PoolConfig['ssl'];
+  if (cfg.sslMode === 'disable') {
+    ssl = false;
+  } else {
+    const sslObj: {
+      rejectUnauthorized: boolean;
+      ca?: string;
+      checkServerIdentity?: () => undefined;
+    } = {
+      rejectUnauthorized: cfg.sslRejectUnauthorized,
+    };
+    if (cfg.sslRootCertPem) {
+      sslObj.ca = cfg.sslRootCertPem;
+    }
+    if (cfg.sslMode === 'verify-ca') {
+      // PostgreSQL verify-ca validates CA chain (`rejectUnauthorized: true`) while allowing non-matching hostnames
+      sslObj.checkServerIdentity = () => undefined;
+    }
+    ssl = sslObj;
+  }
 
   return {
-    connectionString: cfg.connectionString,
-    max: cfg.maxConnections,
+    connectionString,
+    max: options?.useDirectUrl ? Math.min(cfg.maxConnections, 4) : cfg.maxConnections,
     idleTimeoutMillis: cfg.idleTimeoutMs,
     connectionTimeoutMillis: cfg.connectionTimeoutMs,
     ssl,
@@ -198,13 +218,19 @@ export class PostgresAsyncDbClient implements AsyncDbClient {
 
   constructor(
     config: PostgresPoolConfig,
-    options?: { poolFactory?: (poolCfg: PoolConfig) => PgPoolLike }
+    options?: { poolFactory?: (poolCfg: PoolConfig) => PgPoolLike; useDirectUrl?: boolean }
   ) {
     this.config = config;
-    const poolCfg = buildPgPoolConfig(config);
-    this.pool = options?.poolFactory
-      ? options.poolFactory(poolCfg)
-      : (new Pool(poolCfg) as unknown as PgPoolLike);
+    const poolCfg = buildPgPoolConfig(config, { useDirectUrl: options?.useDirectUrl });
+    if (options?.poolFactory) {
+      this.pool = options.poolFactory(poolCfg);
+    } else {
+      const realPool = new Pool(poolCfg);
+      realPool.on('error', (err) => {
+        console.error('[carmen:pg] Idle PostgreSQL pool client error:', err.message);
+      });
+      this.pool = realPool as unknown as PgPoolLike;
+    }
   }
 
   async get<T = Record<string, unknown>>(sql: string, ...params: unknown[]): Promise<T | undefined> {

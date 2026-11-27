@@ -3,10 +3,13 @@ import path from 'node:path';
 
 export interface PostgresPoolConfig {
   connectionString: string;
+  directConnectionString?: string;
   maxConnections: number;
   idleTimeoutMs: number;
   connectionTimeoutMs: number;
-  sslMode: 'disable' | 'require' | 'verify-full';
+  sslMode: 'disable' | 'require' | 'verify-ca' | 'verify-full';
+  sslRejectUnauthorized: boolean;
+  sslRootCertPem?: string;
   pgBouncer: boolean;
   poolMode: 'transaction' | 'session' | 'direct';
   statementCacheSize: number;
@@ -15,6 +18,7 @@ export interface PostgresPoolConfig {
 export interface DatabaseDriverStatus {
   activeDriver: 'sqlite' | 'postgres';
   postgresConfigured: boolean;
+  directUrlConfigured: boolean;
   schemaFilePath: string;
   schemaReady: boolean;
   compatibilityLayerReady: boolean;
@@ -22,6 +26,8 @@ export interface DatabaseDriverStatus {
   pgBouncerEnabled: boolean;
   poolMax: number;
   idleTimeoutMs: number;
+  sslMode?: PostgresPoolConfig['sslMode'];
+  sslVerified?: boolean;
   notes: string;
 }
 
@@ -117,10 +123,34 @@ export function validateTenantQuerySql(
   return { safe: true, tenantSchema };
 }
 
+function loadCustomPostgresRootCert(env: NodeJS.ProcessEnv): string | undefined {
+  const inlinePem = (env.PGSSLROOTCERT_PEM || '').trim();
+  if (inlinePem) {
+    const normalized = inlinePem.includes('\\n') ? inlinePem.replace(/\\n/g, '\n') : inlinePem;
+    if (!normalized.includes('BEGIN CERTIFICATE')) {
+      throw new Error('PGSSLROOTCERT_PEM tidak valid: harus berisi sertifikat PEM (BEGIN CERTIFICATE).');
+    }
+    return normalized;
+  }
+
+  const certPath = (env.PGSSLROOTCERT || '').trim();
+  if (!certPath) return undefined;
+  const resolved = path.resolve(certPath);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`File CA PostgreSQL (PGSSLROOTCERT) tidak ditemukan: ${resolved}`);
+  }
+  const pem = fs.readFileSync(resolved, 'utf8').trim();
+  if (!pem.includes('BEGIN CERTIFICATE')) {
+    throw new Error(`Isi file CA PostgreSQL (${resolved}) bukan sertifikat PEM yang valid.`);
+  }
+  return pem;
+}
+
 /**
- * Validates and parses external PostgreSQL / PgBouncer pool configuration from environment variables.
- * Supports DATABASE_URL, PG_POOL_MAX (with PGPOOL_MAX compatibility), PG_IDLE_TIMEOUT_MS, PGSSLMODE,
- * and PGBOUNCER_ENABLED / PGBOUNCER_POOL_MODE.
+ * Validates and parses external PostgreSQL / Supabase / PgBouncer pool configuration from environment variables.
+ * Supports DATABASE_URL, DIRECT_URL (non-pooled migrations), PG_POOL_MAX (with PGPOOL_MAX compatibility),
+ * PG_IDLE_TIMEOUT_MS, PGSSLMODE (`disable|require|verify-ca|verify-full`), PGSSLROOTCERT / PGSSLROOTCERT_PEM,
+ * PGSSL_ALLOW_INSECURE_IN_PROD, and PGBOUNCER_ENABLED / PGBOUNCER_POOL_MODE.
  */
 export function parsePostgresConfig(env: NodeJS.ProcessEnv = process.env): PostgresPoolConfig | null {
   const url = (env.DATABASE_URL || '').trim();
@@ -128,13 +158,16 @@ export function parsePostgresConfig(env: NodeJS.ProcessEnv = process.env): Postg
   if (!/^postgres(?:ql)?:\/\//i.test(url)) {
     throw new Error('DATABASE_URL harus menggunakan skema postgresql:// atau postgres://.');
   }
+
+  const directRaw = (env.DIRECT_URL || '').trim();
+  if (directRaw && !/^postgres(?:ql)?:\/\//i.test(directRaw)) {
+    throw new Error('DIRECT_URL harus menggunakan skema postgresql:// atau postgres://.');
+  }
+
   const maxRaw = Number(env.PG_POOL_MAX || env.PGPOOL_MAX || 20);
   const maxConnections = Number.isFinite(maxRaw) && maxRaw >= 1 && maxRaw <= 200 ? Math.floor(maxRaw) : 20;
   const idleRaw = Number(env.PG_IDLE_TIMEOUT_MS || 30_000);
   const idleTimeoutMs = Number.isFinite(idleRaw) && idleRaw >= 1000 && idleRaw <= 600_000 ? Math.floor(idleRaw) : 30_000;
-  const sslRaw = (env.PGSSLMODE || 'require').toLowerCase();
-  const sslMode: PostgresPoolConfig['sslMode'] =
-    sslRaw === 'disable' ? 'disable' : sslRaw === 'verify-full' ? 'verify-full' : 'require';
 
   const parsedUrl = (() => {
     try {
@@ -143,6 +176,35 @@ export function parsePostgresConfig(env: NodeJS.ProcessEnv = process.env): Postg
       return null;
     }
   })();
+
+  const isProd = (env.NODE_ENV || '').trim().toLowerCase() === 'production';
+  const allowInsecureInProd = (env.PGSSL_ALLOW_INSECURE_IN_PROD || '').trim() === '1';
+  const sslRaw = (env.PGSSLMODE || parsedUrl?.searchParams.get('sslmode') || '').trim().toLowerCase();
+
+  let sslMode: PostgresPoolConfig['sslMode'];
+  if (!sslRaw) {
+    // Secure-by-default: require full TLS certificate verification unless explicitly configured otherwise.
+    sslMode = 'verify-full';
+  } else if (sslRaw === 'disable' || sslRaw === 'require' || sslRaw === 'verify-ca' || sslRaw === 'verify-full') {
+    sslMode = sslRaw;
+  } else {
+    throw new Error(
+      `PGSSLMODE="${sslRaw}" tidak valid. Gunakan salah satu: disable, require, verify-ca, atau verify-full.`
+    );
+  }
+
+  const sslRootCertPem = loadCustomPostgresRootCert(env);
+
+  if (isProd && !allowInsecureInProd && (sslMode === 'disable' || (sslMode === 'require' && !sslRootCertPem))) {
+    throw new Error(
+      `PGSSLMODE="${sslMode}" tanpa verifikasi sertifikat ditolak di produksi (NODE_ENV=production). ` +
+        'Gunakan PGSSLMODE=verify-full (atau verify-ca dengan PGSSLROOTCERT/PGSSLROOTCERT_PEM), ' +
+        'atau atur PGSSL_ALLOW_INSECURE_IN_PROD=1 secara eksplisit untuk pengecualian terkelola.'
+    );
+  }
+
+  const sslRejectUnauthorized =
+    sslMode === 'verify-full' || sslMode === 'verify-ca' || (sslMode === 'require' && Boolean(sslRootCertPem));
 
   const pgBouncerEnv = (env.PGBOUNCER_ENABLED || '').trim().toLowerCase();
   const pgBouncer =
@@ -160,10 +222,13 @@ export function parsePostgresConfig(env: NodeJS.ProcessEnv = process.env): Postg
 
   return {
     connectionString: url,
+    directConnectionString: directRaw || undefined,
     maxConnections,
     idleTimeoutMs,
     connectionTimeoutMs: 10_000,
     sslMode,
+    sslRejectUnauthorized,
+    sslRootCertPem,
     pgBouncer,
     poolMode,
     statementCacheSize,
@@ -184,6 +249,7 @@ export function getDatabaseDriverStatus(env: NodeJS.ProcessEnv = process.env): D
   const schemaFilePath = path.resolve(process.cwd(), 'server/db/postgres-schema.sql');
   const schemaReady = fs.existsSync(schemaFilePath);
   const postgresConfigured = Boolean((env.DATABASE_URL || '').trim());
+  const directUrlConfigured = Boolean((env.DIRECT_URL || '').trim());
 
   let parsedPool: PostgresPoolConfig | null;
   let configError: string | null = null;
@@ -206,6 +272,7 @@ export function getDatabaseDriverStatus(env: NodeJS.ProcessEnv = process.env): D
     return {
       activeDriver: validPostgres ? 'postgres' : 'sqlite',
       postgresConfigured,
+      directUrlConfigured,
       schemaFilePath,
       schemaReady,
       compatibilityLayerReady,
@@ -213,8 +280,10 @@ export function getDatabaseDriverStatus(env: NodeJS.ProcessEnv = process.env): D
       pgBouncerEnabled,
       poolMax,
       idleTimeoutMs,
+      sslMode: parsedPool?.sslMode,
+      sslVerified: parsedPool?.sslRejectUnauthorized,
       notes: validPostgres
-        ? `Driver runtime PostgreSQL aktif (${pgBouncerEnabled ? 'PgBouncer transaction pooling' : 'direct pool'}, max=${poolMax}, idle=${idleTimeoutMs}ms). Skema dikelola oleh bootstrapPostgresDatabase & server/db/postgres-schema.sql.`
+        ? `Driver runtime PostgreSQL aktif (${pgBouncerEnabled ? 'PgBouncer transaction pooling' : 'direct pool'}, ssl=${parsedPool?.sslMode}, verified=${parsedPool?.sslRejectUnauthorized}, max=${poolMax}, idle=${idleTimeoutMs}ms${directUrlConfigured ? ', DIRECT_URL migrasi aktif' : ''}). Skema dikelola oleh bootstrapPostgresDatabase & server/db/postgres-schema.sql.`
         : `CARMEN_DB_DRIVER=postgres diatur tetapi ${configError || 'DATABASE_URL belum dikonfigurasi'}.`,
     };
   }
@@ -222,6 +291,7 @@ export function getDatabaseDriverStatus(env: NodeJS.ProcessEnv = process.env): D
   return {
     activeDriver: 'sqlite',
     postgresConfigured,
+    directUrlConfigured,
     schemaFilePath,
     schemaReady,
     compatibilityLayerReady,
@@ -229,6 +299,8 @@ export function getDatabaseDriverStatus(env: NodeJS.ProcessEnv = process.env): D
     pgBouncerEnabled,
     poolMax,
     idleTimeoutMs,
+    sslMode: parsedPool?.sslMode,
+    sslVerified: parsedPool?.sslRejectUnauthorized,
     notes: 'SQLite lokal (database terpisah per proyek + WAL + foreign keys + migrasi berversi) aktif sebagai mesin eksekusi runtime. Skema PostgreSQL multi-tenant tersedia di server/db/postgres-schema.sql.',
   };
 }

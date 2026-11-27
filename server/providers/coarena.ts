@@ -72,8 +72,8 @@ function isHtmlResponse(res: Response, bodyText: string): boolean {
   return /^\s*<(?:!doctype\s+html|html)\b/i.test(bodyText);
 }
 
-function extractErrorDetail(bodyText: string, apiKey: string): string {
-  const scrubbed = scrubSecrets(bodyText, [apiKey]).trim();
+function extractErrorDetail(bodyText: string, secrets: string[]): string {
+  const scrubbed = scrubSecrets(bodyText, secrets).trim();
   let detail = scrubbed;
   try {
     const parsed = JSON.parse(scrubbed) as {
@@ -337,12 +337,16 @@ export class CoarenaAdapter implements ProviderAdapter {
           }
         }
         const retryMs = parseRetryAfterMs(modelsRes.headers);
-        const norm = normalizeProviderError(modelsRes.status, extractErrorDetail(modelsText, config.apiKey), retryMs);
+        const norm = normalizeProviderError(
+          modelsRes.status,
+          extractErrorDetail(modelsText, getSecretsToScrub(config)),
+          retryMs
+        );
         return { ok: false, message: `HTTP ${modelsRes.status} — ${norm.message}`, errorCode: norm.code };
       }
 
       const retryAfterMs = parseRetryAfterMs(res.headers);
-      const detail = extractErrorDetail(text, config.apiKey);
+      const detail = extractErrorDetail(text, getSecretsToScrub(config));
       const norm = normalizeProviderError(res.status, detail, retryAfterMs);
       return {
         ok: false,
@@ -487,7 +491,7 @@ export class CoarenaAdapter implements ProviderAdapter {
       const status = res?.status ?? 503;
       const retryAfterMs = parseRetryAfterMs(res?.headers);
       const rawBody = res ? await readResponseTextWithLimit(res, 512 * 1024).catch(() => '') : '';
-      const detail = extractErrorDetail(rawBody, config.apiKey);
+      const detail = extractErrorDetail(rawBody, getSecretsToScrub(config));
       const norm = normalizeProviderError(status, scrubSecrets(detail || rawBody, getSecretsToScrub(config)), retryAfterMs);
       yield { type: 'error', code: norm.code, message: norm.message };
       return;

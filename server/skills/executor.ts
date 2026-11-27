@@ -291,8 +291,18 @@ export async function runSkillSandboxScript(params: {
     scriptPath,
     approvedPermissions = [],
     timeoutMs = 15_000,
-    requireOsIsolation = false,
+    requireOsIsolation = true,
   } = params;
+
+  const integrity = verifySkillPackageIntegrity(skill);
+  if (!integrity.valid) {
+    return {
+      ok: false,
+      exitCode: -1,
+      output: `Integritas checksum paket skill "${skill.slug}" gagal diverifikasi (diharapkan ${integrity.expectedChecksum.slice(0, 12)}, aktual ${integrity.actualChecksum.slice(0, 12)}).`,
+      isolated: false,
+    };
+  }
 
   const permCheck = checkSkillExecutionPermissions({
     skill,
@@ -545,6 +555,26 @@ export async function executeComposedSkillWorkflow(params: {
   const skippedPreconditions: string[] = [];
   const results: SkillWorkflowExecutionReport['stepsExecuted'] = [];
 
+  const integrity = verifySkillPackageIntegrity(skill);
+  if (!integrity.valid) {
+    return {
+      ok: false,
+      stepsExecuted: [
+        {
+          id: 'integrity-gate',
+          tool: 'policy',
+          ok: false,
+          attempts: 1,
+          durationMs: 0,
+          parallelBatch: 0,
+          errorClass: 'permission',
+          outputSummary: `Integritas paket skill "${skill.slug}" gagal diverifikasi (checksum tidak cocok).`,
+        },
+      ],
+      skippedPreconditions: [],
+    };
+  }
+
   const permCheck = checkSkillExecutionPermissions({
     skill,
     approvedPermissions,
@@ -589,6 +619,7 @@ export async function executeComposedSkillWorkflow(params: {
         scriptPath: step.scriptPath,
         approvedPermissions,
         timeoutMs: step.timeoutMs,
+        requireOsIsolation: true,
       });
       return {
         id: step.id,

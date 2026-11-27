@@ -805,8 +805,16 @@ export async function saveUserSkillPackage(params: {
   });
 
   if (params.skillId) {
-    const existing = await asyncDb.get<{ id: string; owner_user_id: string | null; scope_key: string }>(
-      'SELECT id, owner_user_id, scope_key FROM skills WHERE id = ?',
+    const existing = await asyncDb.get<{
+      id: string;
+      owner_user_id: string | null;
+      scope_key: string;
+      category: string;
+      trust_level: string;
+      manifest_json: unknown;
+      scripts_json: unknown;
+    }>(
+      'SELECT id, owner_user_id, scope_key, category, trust_level, manifest_json, scripts_json FROM skills WHERE id = ?',
       params.skillId
     );
     if (!existing) {
@@ -814,6 +822,27 @@ export async function saveUserSkillPackage(params: {
     }
     if (existing.scope_key === 'system' || existing.owner_user_id !== params.userId) {
       return { ok: false, error: 'Skill bawaan atau milik pengguna lain tidak dapat dimodifikasi.' };
+    }
+
+    // Security: if an APPROVED skill is edited to add/modify scripts or request newly escalated permissions/tools,
+    // automatically demote trust_level back to DRAFT and disable until the user explicitly re-approves.
+    let nextTrustLevel: SkillTrustLevel = params.trustLevel;
+    let nextEnabled: boolean = params.enabled;
+    if (existing.trust_level === 'APPROVED' && nextTrustLevel === 'APPROVED') {
+      const prevManifest = normalizeManifest(existing.manifest_json, existing.category as SkillCategory);
+      const prevScripts = parseJsonColumn<Record<string, string>>(existing.scripts_json, {});
+      const scriptsChanged = JSON.stringify(prevScripts) !== JSON.stringify(scripts);
+      const elevatedSet = new Set<SkillPermission>(['WRITE', 'EXECUTE', 'NETWORK', 'DEPLOY']);
+      const prevPerms = new Set<SkillPermission>(prevManifest.permissions);
+      const prevTools = new Set<string>(prevManifest.tools);
+      const newElevatedPerm = parsed.manifest.permissions.some(
+        (p) => elevatedSet.has(p) && !prevPerms.has(p)
+      );
+      const newToolAdded = parsed.manifest.tools.some((t) => !prevTools.has(t));
+      if (scriptsChanged || newElevatedPerm || newToolAdded) {
+        nextTrustLevel = 'DRAFT';
+        nextEnabled = false;
+      }
     }
 
     await asyncDb.transaction(async (tx) => {
@@ -828,8 +857,8 @@ export async function saveUserSkillPackage(params: {
         parsed.name,
         parsed.manifest.category,
         parsed.description,
-        params.trustLevel,
-        params.enabled,
+        nextTrustLevel,
+        nextEnabled,
         parsed.manifest.version,
         JSON.stringify(parsed.manifest),
         params.skillMd,

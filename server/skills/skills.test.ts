@@ -17,6 +17,7 @@ initDatabase();
 
 const {
   approveSkillPermissions,
+  checkSkillExecutionPermissions,
   composeSkillPlan,
   createSkillDraft,
   discoverRelevantSkills,
@@ -926,4 +927,107 @@ test('Skill Engine V2: recursive dependency resolution, permission propagation, 
   });
   assert.equal(revokedPreflight.loadedSkills.length, 0);
 });
+
+test('P0 Security: APPROVED skill without EXECUTE grant cannot run scripts, tampered script checksum fails closed, and permission/script escalation demotes trust to DRAFT', async () => {
+  const userId = 'u_p0_skill_sec';
+  db.prepare(
+    `INSERT OR IGNORE INTO users (id, email, name, password_hash, locale, theme) VALUES (?, ?, 'P0 Sec', 'h', 'en', 'dark')`
+  ).run(userId, 'p0sec@example.com');
+
+  const readOnlyMd = [
+    '---',
+    'name: p0-script-gate-skill',
+    'description: Read-only skill whose manifest omits EXECUTE permission.',
+    'category: development',
+    'version: 1.0.0',
+    'triggers:',
+    '  - p0gate',
+    'tools:',
+    '  - read_file',
+    'permissions:',
+    '  - READ',
+    '---',
+    '',
+    '## Purpose',
+    'Read only.',
+    '## When to use',
+    'Audit test.',
+    '## Required context',
+    '- workspace',
+    '## Workflow',
+    '1. Read files.',
+    '## Tool mapping',
+    '- `read_file`: Read file.',
+    '## Verification',
+    '- Verified.',
+    '## Failure handling',
+    '- Stop safely.',
+    '## Safety constraints',
+    '- No arbitrary execution.',
+    '## Examples',
+    '- /p0-script-gate-skill',
+  ].join('\n');
+
+  const saved = await saveUserSkillPackage({
+    userId,
+    skillMd: readOnlyMd,
+    scripts: { 'scripts/check.mjs': 'console.log("SHOULD_NOT_RUN_WITHOUT_EXECUTE");' },
+    source: 'created',
+    trustLevel: 'APPROVED',
+    enabled: true,
+  });
+  assert.equal(saved.ok, true);
+  const pkg = saved.skill!;
+
+  // 1) Even though skill is APPROVED and manifest only declares READ, script execution MUST require explicit EXECUTE approval
+  const permRes = checkSkillExecutionPermissions({
+    skill: pkg,
+    approvedPermissions: ['READ'],
+    hasScriptExecution: true,
+  });
+  assert.equal(permRes.allowed, false);
+  assert.equal(permRes.needsApproval, true);
+  assert.deepEqual(permRes.missingPermissions, ['EXECUTE']);
+
+  const runBlocked = await runSkillSandboxScript({
+    projectId: 'p_p0_gate',
+    skill: pkg,
+    scriptPath: 'scripts/check.mjs',
+    approvedPermissions: ['READ'],
+  });
+  assert.equal(runBlocked.ok, false);
+  assert.match(runBlocked.output, /EXECUTE/i);
+
+  // 2) Tampered script content fails integrity check BEFORE spawning sandbox
+  const tamperedRun = await runSkillSandboxScript({
+    projectId: 'p_p0_gate',
+    skill: {
+      ...pkg,
+      scripts: { 'scripts/check.mjs': 'console.log("TAMPERED_PAYLOAD");' },
+    },
+    scriptPath: 'scripts/check.mjs',
+    approvedPermissions: ['READ', 'EXECUTE'],
+  });
+  assert.equal(tamperedRun.ok, false);
+  assert.match(tamperedRun.output, /Integritas|checksum/i);
+
+  // 3) Editing an APPROVED skill to add elevated permission (WRITE/EXECUTE) demotes trustLevel back to DRAFT & disables it
+  const escalatedMd = readOnlyMd
+    .replace('version: 1.0.0', 'version: 1.1.0')
+    .replace('  - READ', '  - READ\n  - WRITE');
+  const edited = await saveUserSkillPackage({
+    userId,
+    skillId: pkg.id,
+    skillMd: escalatedMd,
+    scripts: pkg.scripts,
+    source: 'created',
+    trustLevel: 'APPROVED',
+    enabled: true,
+    changelog: 'Escalate permissions to WRITE',
+  });
+  assert.equal(edited.ok, true);
+  assert.equal(edited.skill?.trustLevel, 'DRAFT', 'Escalated APPROVED skill must be demoted to DRAFT');
+  assert.equal(edited.skill?.enabled, false, 'Escalated APPROVED skill must be disabled until re-approved');
+});
+
 

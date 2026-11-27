@@ -93,12 +93,6 @@ function checkRedisPing(redisUrl) {
 }
 
 async function main() {
-  const redisUrl = (process.env.REDIS_URL || '').trim();
-  if (!redisUrl) {
-    console.error('[apk-worker-health] REDIS_URL tidak diatur.');
-    process.exit(1);
-  }
-
   if (!fs.existsSync(HEALTH_FILE)) {
     console.error(`[apk-worker-health] Heartbeat file tidak ditemukan (${HEALTH_FILE}).`);
     process.exit(1);
@@ -120,6 +114,20 @@ async function main() {
   const updatedAtMs = Date.parse(String(heartbeat.updatedAt || ''));
   if (!Number.isFinite(updatedAtMs) || Date.now() - updatedAtMs > MAX_HEARTBEAT_AGE_MS) {
     console.error('[apk-worker-health] Heartbeat apk-worker kedaluwarsa.');
+    process.exit(1);
+  }
+
+  if (heartbeat.mode === 'db-poll') {
+    if (heartbeat.dbReady === false) {
+      console.error('[apk-worker-health] Database worker dalam mode db-poll tidak siap.');
+      process.exit(1);
+    }
+    process.exit(0);
+  }
+
+  const redisUrl = (process.env.REDIS_URL || '').trim();
+  if (!redisUrl) {
+    console.error('[apk-worker-health] REDIS_URL tidak diatur untuk worker mode Redis.');
     process.exit(1);
   }
 
