@@ -237,8 +237,14 @@ export class CoarenaAdapter implements ProviderAdapter {
       });
 
       const displayName = item.display_name || item.name || item.id;
-      const promptNum = promptPrice !== undefined ? Number(promptPrice) : NaN;
-      const completionNum = completionPrice !== undefined ? Number(completionPrice) : NaN;
+      const promptNum =
+        promptPrice !== undefined && promptPrice !== null && String(promptPrice).trim() !== ''
+          ? Number(promptPrice)
+          : NaN;
+      const completionNum =
+        completionPrice !== undefined && completionPrice !== null && String(completionPrice).trim() !== ''
+          ? Number(completionPrice)
+          : NaN;
 
       models.push({
         id: item.id,
@@ -504,10 +510,17 @@ export class CoarenaAdapter implements ProviderAdapter {
       while (true) {
         if (signal?.aborted) break;
         const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
+        let lines: string[];
+        if (done) {
+          buffer += decoder.decode();
+          if (!buffer.trim()) break;
+          lines = buffer.split('\n');
+          buffer = '';
+        } else {
+          buffer += decoder.decode(value, { stream: true });
+          lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+        }
 
         for (const rawLine of lines) {
           const line = rawLine.trim();
@@ -566,6 +579,7 @@ export class CoarenaAdapter implements ProviderAdapter {
             // Ignore partial SSE comment/keepalive lines
           }
         }
+        if (done) break;
       }
     } catch (err) {
       if (!signal?.aborted) {
@@ -575,6 +589,11 @@ export class CoarenaAdapter implements ProviderAdapter {
       }
     } finally {
       reader.releaseLock();
+    }
+
+    if (signal?.aborted) {
+      yield { type: 'done' };
+      return;
     }
 
     for (const tool of pendingTools.values()) {

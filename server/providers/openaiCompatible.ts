@@ -213,9 +213,11 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
           maxContext: item.context_length ?? entry?.maxContext ?? 'unknown',
           maxOutput: entry?.maxOutput ?? 'unknown',
           promptPricePerMillion:
-            promptPrice !== undefined ? Number(promptPrice) * 1_000_000 : entry?.promptPricePerMillion ?? null,
+            promptPrice !== undefined && promptPrice !== null && String(promptPrice).trim() !== '' && Number.isFinite(Number(promptPrice))
+              ? Number(promptPrice) * 1_000_000
+              : entry?.promptPricePerMillion ?? null,
           completionPricePerMillion:
-            completionPrice !== undefined
+            completionPrice !== undefined && completionPrice !== null && String(completionPrice).trim() !== '' && Number.isFinite(Number(completionPrice))
               ? Number(completionPrice) * 1_000_000
               : entry?.completionPricePerMillion ?? null,
           source: `${baseUrl}/models`,
@@ -518,10 +520,17 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       while (true) {
         if (signal?.aborted) break;
         const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
+        let lines: string[];
+        if (done) {
+          buffer += decoder.decode();
+          if (!buffer.trim()) break;
+          lines = buffer.split('\n');
+          buffer = '';
+        } else {
+          buffer += decoder.decode(value, { stream: true });
+          lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+        }
 
         for (const rawLine of lines) {
           const line = rawLine.trim();
@@ -580,6 +589,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
             // Ignore partial SSE comment lines
           }
         }
+        if (done) break;
       }
     } catch (err) {
       if (!signal?.aborted) {
@@ -589,6 +599,11 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       }
     } finally {
       reader.releaseLock();
+    }
+
+    if (signal?.aborted) {
+      yield { type: 'done' };
+      return;
     }
 
     for (const tool of pendingTools.values()) {

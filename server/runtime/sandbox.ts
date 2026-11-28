@@ -231,7 +231,52 @@ export function tokenizeCommand(cmd: string): string[] | null {
  * - ZERO host secrets (GEMINI_API_KEY, CARMEN_MASTER_KEY, SESSION_SECRET, etc. are NEVER passed).
  * - Only essential minimal system variables + decrypted project-specific env_vars.
  */
-function buildSanitizedChildEnvFromRows(
+const PROTECTED_RUNTIME_ENV_EXACT = new Set([
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'PWD',
+  'TMPDIR',
+  'TEMP',
+  'TMP',
+  'SHELL',
+  'ENV',
+  'ZDOTDIR',
+  'GRADLE_USER_HOME',
+  'ANDROID_HOME',
+  'ANDROID_SDK_ROOT',
+  'JAVA_HOME',
+  'NODE_ENV',
+  'CI',
+  'NO_COLOR',
+]);
+
+const PROTECTED_RUNTIME_ENV_PREFIXES = [
+  'NPM_CONFIG_',
+  'BUN_CONFIG_',
+  'LD_',
+  'DYLD_',
+  'NODE_',
+  'GIT_',
+  'BASH_',
+  'PYTHON',
+  'OPENSSL_',
+  'CARMEN_',
+];
+
+/**
+ * Returns true if an environment variable key could tamper with process execution,
+ * package manager lifecycle scripts, dynamic linker behavior, or CARMEN host internals.
+ */
+export function isProtectedRuntimeEnvKey(rawKey: string): boolean {
+  const upper = String(rawKey || '').trim().toUpperCase();
+  if (!upper) return true;
+  if (PROTECTED_RUNTIME_ENV_EXACT.has(upper)) return true;
+  return PROTECTED_RUNTIME_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix));
+}
+
+export function buildSanitizedChildEnvFromRows(
   rows: Array<{ key: string; encrypted_value: string }>,
   workspaceDir: string,
   tmpDir: string,
@@ -257,26 +302,12 @@ function buildSanitizedChildEnvFromRows(
   if (isMasterKeyConfigured()) {
     for (const row of rows) {
       try {
-        const val = decryptSecret(row.encrypted_value);
-        // Never allow overriding security-sensitive execution env vars
-        if (
-          ![
-            'PATH',
-            'LD_PRELOAD',
-            'LD_LIBRARY_PATH',
-            'NODE_OPTIONS',
-            'HOME',
-            'PWD',
-            'TMPDIR',
-            'TEMP',
-            'TMP',
-            'npm_config_cache',
-            'GRADLE_USER_HOME',
-          ].includes(row.key)
-        ) {
-          env[row.key] = val;
-          secretValues.push(val);
+        if (isProtectedRuntimeEnvKey(row.key)) {
+          continue;
         }
+        const val = decryptSecret(row.encrypted_value);
+        env[row.key] = val;
+        secretValues.push(val);
       } catch {
         // Skip undecryptable env vars
       }
@@ -1696,7 +1727,7 @@ export async function ensureProjectDependenciesInstalled(
         const hasNodeModules = fs.existsSync(path.join(workspaceDir, 'node_modules'));
         const installCmd =
           inspection.packageManager === 'bun'
-            ? 'bun install'
+            ? 'bun install --ignore-scripts'
             : hasPackageLock && !hasNodeModules
               ? 'npm ci --no-audit --no-fund --ignore-scripts'
               : 'npm install --no-audit --no-fund --ignore-scripts';
@@ -1853,5 +1884,16 @@ function triggerInstallFromWorkspaceDir(
 
   void ensureProjectDependenciesInstalled(projectId, options);
   return { started: true, state: getDependencyInstallState(projectId), inspection };
+}
+
+export function closeAllSandboxDbs(): void {
+  for (const [projectId, sdb] of Array.from(sandboxDbs.entries())) {
+    try {
+      sdb.close();
+    } catch {
+      // Best effort on shutdown
+    }
+    sandboxDbs.delete(projectId);
+  }
 }
 

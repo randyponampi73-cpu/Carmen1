@@ -356,3 +356,98 @@ test('Adversarial: Sandbox parsed command validator blocks node -e/-r/--inspect,
   assert.equal(validateParsedCommand(['npx', 'tsc', '--noEmit']).allowed, true);
 });
 
+test('Adversarial: Sandbox child env blocks NPM_CONFIG_*, NODE_*, LD_*, BASH_ENV, GIT_SSH_COMMAND, and tenant proxy strips CARMEN credentials', async () => {
+  const { isProtectedRuntimeEnvKey, buildSanitizedChildEnvFromRows } = await import('./runtime/sandbox');
+  const { encryptSecret } = await import('./security');
+  const { backendRuntimeManager } = await import('./runtime/backendRuntime');
+
+  const dangerousKeys = [
+    'NPM_CONFIG_IGNORE_SCRIPTS',
+    'NPM_CONFIG_SCRIPT_SHELL',
+    'NPM_CONFIG_REGISTRY',
+    'BUN_CONFIG_INSTALL_CACHE',
+    'NODE_OPTIONS',
+    'NODE_EXTRA_CA_CERTS',
+    'LD_PRELOAD',
+    'LD_AUDIT',
+    'DYLD_INSERT_LIBRARIES',
+    'BASH_ENV',
+    'ENV',
+    'SHELL',
+    'ZDOTDIR',
+    'GIT_SSH_COMMAND',
+    'GIT_EXEC_PATH',
+    'OPENSSL_CONF',
+    'PYTHONSTARTUP',
+    'CARMEN_MASTER_KEY',
+    'PATH',
+    'HOME',
+  ];
+
+  for (const key of dangerousKeys) {
+    assert.equal(isProtectedRuntimeEnvKey(key), true, `${key} MUST be classified as protected`);
+  }
+
+  assert.equal(isProtectedRuntimeEnvKey('API_ENDPOINT'), false);
+  assert.equal(isProtectedRuntimeEnvKey('STRIPE_PUBLIC_KEY'), false);
+
+  const prevMaster = process.env.CARMEN_MASTER_KEY;
+  process.env.CARMEN_MASTER_KEY = 'adv-test-master-key-32-bytes-minimum!!';
+  try {
+    const rows = [
+      { key: 'NPM_CONFIG_IGNORE_SCRIPTS', encrypted_value: encryptSecret('false') },
+      { key: 'NODE_EXTRA_CA_CERTS', encrypted_value: encryptSecret('/tmp/evil.pem') },
+      { key: 'BASH_ENV', encrypted_value: encryptSecret('/tmp/pwn.sh') },
+      { key: 'API_ENDPOINT', encrypted_value: encryptSecret('https://api.tenant.example') },
+    ];
+    const sanitized = buildSanitizedChildEnvFromRows(rows, '/tmp/ws', '/tmp/t', '/tmp/cache');
+    assert.equal(sanitized.env.NPM_CONFIG_IGNORE_SCRIPTS, undefined);
+    assert.equal(sanitized.env.NODE_EXTRA_CA_CERTS, undefined);
+    assert.equal(sanitized.env.BASH_ENV, undefined);
+    assert.equal(sanitized.env.API_ENDPOINT, 'https://api.tenant.example');
+  } finally {
+    if (prevMaster === undefined) delete process.env.CARMEN_MASTER_KEY;
+    else process.env.CARMEN_MASTER_KEY = prevMaster;
+  }
+
+  // Tenant backend proxy must strip CARMEN session/preview cookies, x-carmen-* headers, and CARMEN session bearer
+  const fakeReq = {
+    headers: {
+      host: 'carmen.example.com',
+      cookie:
+        'CARMEN_SESSION=secret-sess; carmen_preview_proj123=secret-preview-jwt; tenant_sid=keep-me; theme=dark',
+      'x-carmen-preview-token': 'preview-tok-secret',
+      'x-carmen-preview-bridge-nonce': 'nonce-123',
+      'x-carmen-preview-parent-origin': 'https://carmen.example.com',
+      authorization: 'Bearer carmen-main-session-token',
+      'x-tenant-header': 'allowed-value',
+    },
+  } as unknown as import('express').Request;
+
+  const forwarded = backendRuntimeManager.buildSafeProxyForwardHeaders(
+    fakeReq,
+    4123,
+    'carmen-main-session-token'
+  );
+  assert.equal(forwarded.host, '127.0.0.1:4123');
+  assert.equal(forwarded['x-carmen-preview-token'], undefined);
+  assert.equal(forwarded['x-carmen-preview-bridge-nonce'], undefined);
+  assert.equal(forwarded['x-carmen-preview-parent-origin'], undefined);
+  assert.equal(forwarded.authorization, undefined, 'CARMEN main-app Bearer token must be stripped');
+  assert.equal(forwarded.cookie, 'tenant_sid=keep-me; theme=dark');
+  assert.equal(forwarded['x-tenant-header'], 'allowed-value');
+
+  // Tenant-specific Authorization header (distinct from CARMEN session) must be preserved
+  const tenantAuthReq = {
+    headers: {
+      authorization: 'Bearer tenant-app-jwt-999',
+    },
+  } as unknown as import('express').Request;
+  const forwardedTenantAuth = backendRuntimeManager.buildSafeProxyForwardHeaders(
+    tenantAuthReq,
+    4123,
+    'carmen-main-session-token'
+  );
+  assert.equal(forwardedTenantAuth.authorization, 'Bearer tenant-app-jwt-999');
+});
+

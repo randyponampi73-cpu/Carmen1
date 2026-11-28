@@ -2883,4 +2883,143 @@ test('Internal Preview Engine Repair: proxy origin/CSP/base alignment, code-spli
   assert.equal(ownerReset.json.ok, true);
 });
 
+test('Security hardening: CSRF bearer/cookie precedence, protected env var rejection, HTTPS preview cookie Partitioned, and provider key validation', async () => {
+  resetRateLimitsForTest();
+
+  const reg = await apiJson('/api/auth/register', {
+    method: 'POST',
+    body: { email: 'hardening@example.com', password: 'password123', name: 'Hardening User' },
+  });
+  assert.equal(reg.status, 201);
+  const token = String(reg.json.sessionToken);
+
+  const projRes = await apiJson('/api/projects', {
+    method: 'POST',
+    token,
+    body: { name: 'Hardening App', type: 'web', templateId: 'web-static-landing' },
+  });
+  assert.equal(projRes.status, 201);
+  const projectId = String((projRes.json.project as { id: string }).id);
+
+  // 1) CSRF bypass check: sending bogus Authorization: Bearer alongside valid carmen_session cookie
+  // MUST NOT fall back to the cookie to bypass CSRF validation.
+  const csrfBypassAttempt = await fetch(`${baseUrl}/api/projects/${projectId}/env`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Origin: 'https://evil-attacker.invalid',
+      Cookie: `carmen_session=${token}`,
+      Authorization: 'Bearer invalid-bogus-token',
+    },
+    body: JSON.stringify({ key: 'SAFE_VAR', value: 'pwned' }),
+  });
+  assert.equal(
+    csrfBypassAttempt.status,
+    401,
+    'Bogus Bearer header must fail auth (401) rather than falling back to cookie after bypassing CSRF'
+  );
+
+  // 2) Protected runtime env var keys MUST be rejected with HTTP 400
+  for (const blockedKey of ['NPM_CONFIG_IGNORE_SCRIPTS', 'NODE_OPTIONS', 'LD_AUDIT', 'BASH_ENV', 'GIT_SSH_COMMAND']) {
+    const blockedRes = await apiJson(`/api/projects/${projectId}/env`, {
+      method: 'POST',
+      token,
+      body: { key: blockedKey, value: 'evil' },
+    });
+    assert.equal(blockedRes.status, 400, `Protected env var ${blockedKey} must return 400`);
+  }
+
+  // Normal tenant env var remains allowed
+  const okEnv = await apiJson(`/api/projects/${projectId}/env`, {
+    method: 'POST',
+    token,
+    body: { key: 'PUBLIC_APP_TAG', value: 'v1' },
+  });
+  assert.equal(okEnv.status, 201);
+
+  // 3) HTTPS preview session cookie MUST include SameSite=None, Secure, and Partitioned for third-party iframes
+  const pTokRes = await apiJson(`/api/projects/${projectId}/preview-token`, {
+    token,
+  });
+  assert.equal(pTokRes.status, 200);
+  const previewToken = String(pTokRes.json.token);
+
+  const httpsSessionRes = await fetch(`${baseUrl}/preview/${projectId}/session`, {
+    method: 'POST',
+    headers: {
+      'X-Carmen-Preview-Token': previewToken,
+      'X-Forwarded-Proto': 'https',
+    },
+  });
+  assert.equal(httpsSessionRes.status, 200);
+  const setCookie = httpsSessionRes.headers.get('set-cookie') || '';
+  assert.match(setCookie, /SameSite=None/i);
+  assert.match(setCookie, /Secure/i);
+  assert.match(setCookie, /Partitioned/i);
+  assert.match(setCookie, /HttpOnly/i);
+
+  // 4) Provider key enum validation + PATCH extraHeaders support
+  const badTierRes = await apiJson('/api/providers/keys', {
+    method: 'POST',
+    token,
+    body: {
+      provider: 'openai',
+      label: 'Bad Tier Key',
+      apiKey: 'sk-test-invalid-tier-1234',
+      tierDeclared: 'enterprise',
+    },
+  });
+  assert.equal(badTierRes.status, 400);
+
+  const badTriStateRes = await apiJson('/api/providers/keys', {
+    method: 'POST',
+    token,
+    body: {
+      provider: 'openai',
+      label: 'Bad TriState Key',
+      apiKey: 'sk-test-invalid-tools-1234',
+      supportsTools: 'maybe',
+    },
+  });
+  assert.equal(badTriStateRes.status, 400);
+
+  const goodKeyRes = await apiJson('/api/providers/keys', {
+    method: 'POST',
+    token,
+    body: {
+      provider: 'custom',
+      label: 'Custom Hardening Key',
+      apiKey: 'sk-custom-valid-123456',
+      baseUrl: 'https://api.example.com/v1',
+      tierDeclared: 'paid',
+      supportsTools: 'yes',
+      supportsVision: 'no',
+    },
+  });
+  assert.equal(goodKeyRes.status, 201);
+  const keyId = String((goodKeyRes.json.key as { id: string }).id);
+
+  // PATCH rejects invalid enum and invalid extraHeaders (e.g. forbidden Host header), accepts valid extraHeaders
+  const badPatchEnum = await apiJson(`/api/providers/keys/${keyId}`, {
+    method: 'PATCH',
+    token,
+    body: { tierDeclared: 'ultra' },
+  });
+  assert.equal(badPatchEnum.status, 400);
+
+  const badPatchHeader = await apiJson(`/api/providers/keys/${keyId}`, {
+    method: 'PATCH',
+    token,
+    body: { extraHeaders: { Host: 'evil.invalid' } },
+  });
+  assert.equal(badPatchHeader.status, 400);
+
+  const goodPatchHeader = await apiJson(`/api/providers/keys/${keyId}`, {
+    method: 'PATCH',
+    token,
+    body: { extraHeaders: { 'X-Custom-Tenant': 'acme-1' } },
+  });
+  assert.equal(goodPatchHeader.status, 200);
+});
+
 

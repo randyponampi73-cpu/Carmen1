@@ -66,10 +66,16 @@ export function ApkBuildModal({
   }, []);
 
   useEffect(() => {
+    let active = true;
     api
       .getAndroidToolchain()
-      .then((res) => setToolchain(res.toolchain))
+      .then((res) => {
+        if (active) setToolchain(res.toolchain);
+      })
       .catch(() => {});
+    return () => {
+      active = false;
+    };
   }, []);
 
   const buildId = activeBuild?.id;
@@ -124,10 +130,17 @@ export function ApkBuildModal({
         let buf = '';
         while (true) {
           const { value, done } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          const lines = buf.split('\n');
-          buf = lines.pop() ?? '';
+          let lines: string[];
+          if (done) {
+            buf += decoder.decode();
+            if (!buf.trim()) break;
+            lines = buf.split('\n');
+            buf = '';
+          } else {
+            buf += decoder.decode(value, { stream: true });
+            lines = buf.split('\n');
+            buf = lines.pop() ?? '';
+          }
           for (const raw of lines) {
             const line = raw.trimEnd();
             if (line.startsWith('data:')) {
@@ -141,6 +154,7 @@ export function ApkBuildModal({
               }
             }
           }
+          if (done) break;
         }
       } catch {
         // Ignore abort on unmount; polling fallback handles detached workers

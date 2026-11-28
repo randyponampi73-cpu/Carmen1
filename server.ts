@@ -32,6 +32,7 @@ import {
   MAX_PROJECT_FILES,
   runAgentTurn,
   stopAgentSession,
+  stopAllAgentSessions,
 } from './server/agent/orchestrator';
 import { providerHealthMonitor, type RouteCandidate } from './server/agent/router';
 import {
@@ -108,8 +109,10 @@ import {
   servePreviewStaticAsset,
 } from './server/runtime/preview';
 import {
+  closeAllSandboxDbs,
   getDependencyInstallState,
   invalidateDependencyInstallState,
+  isProtectedRuntimeEnvKey,
   projectRuntime,
   triggerProjectDependenciesInstallIfNeededAsync,
 } from './server/runtime/sandbox';
@@ -545,13 +548,13 @@ function getSessionCookieOptions(req: Request) {
 }
 
 function extractSessionToken(req: Request): string | null {
-  const cookieToken = typeof req.cookies?.[SESSION_COOKIE] === 'string' ? req.cookies[SESSION_COOKIE].trim() : '';
-  if (cookieToken) return cookieToken;
   const authHeader = typeof req.headers.authorization === 'string' ? req.headers.authorization.trim() : '';
   if (/^Bearer\s+/i.test(authHeader)) {
     const bearer = authHeader.replace(/^Bearer\s+/i, '').trim();
-    if (bearer) return bearer;
+    return bearer || null;
   }
+  const cookieToken = typeof req.cookies?.[SESSION_COOKIE] === 'string' ? req.cookies[SESSION_COOKIE].trim() : '';
+  if (cookieToken) return cookieToken;
   return null;
 }
 
@@ -1251,6 +1254,15 @@ app.post('/api/providers/keys', requireAuth, asyncHandler(async (req: AuthedRequ
   if (!apiKey || apiKey.trim().length < 4) {
     return res.status(400).json({ error: 'API key wajib diisi.' });
   }
+  if (!['free', 'paid', 'unknown'].includes(tierDeclared)) {
+    return res.status(400).json({ error: 'Tier provider tidak valid (harus free, paid, atau unknown).' });
+  }
+  if (!['yes', 'no', 'unknown'].includes(supportsTools)) {
+    return res.status(400).json({ error: 'Nilai supportsTools tidak valid (harus yes, no, atau unknown).' });
+  }
+  if (!['yes', 'no', 'unknown'].includes(supportsVision)) {
+    return res.status(400).json({ error: 'Nilai supportsVision tidak valid (harus yes, no, atau unknown).' });
+  }
 
   let normalizedBaseUrl: string | null = null;
   if (provider === 'custom') {
@@ -1341,18 +1353,39 @@ app.patch('/api/providers/keys/:id', requireAuth, asyncHandler(async (req: Authe
   );
   if (!row) return res.status(404).json({ error: 'Key tidak ditemukan.' });
 
-  const { label, apiKey, tierDeclared, baseUrl, authHeader, chatPath, customModels, supportsTools, supportsVision } =
-    req.body as {
-      label?: string;
-      apiKey?: string;
-      tierDeclared?: ModelTier;
-      baseUrl?: string;
-      authHeader?: string;
-      chatPath?: string;
-      customModels?: string[];
-      supportsTools?: TriState;
-      supportsVision?: TriState;
-    };
+  const {
+    label,
+    apiKey,
+    tierDeclared,
+    baseUrl,
+    authHeader,
+    chatPath,
+    customModels,
+    extraHeaders,
+    supportsTools,
+    supportsVision,
+  } = req.body as {
+    label?: string;
+    apiKey?: string;
+    tierDeclared?: ModelTier;
+    baseUrl?: string;
+    authHeader?: string;
+    chatPath?: string;
+    customModels?: string[];
+    extraHeaders?: Record<string, string> | null;
+    supportsTools?: TriState;
+    supportsVision?: TriState;
+  };
+
+  if (tierDeclared !== undefined && !['free', 'paid', 'unknown'].includes(tierDeclared)) {
+    return res.status(400).json({ error: 'Tier provider tidak valid (harus free, paid, atau unknown).' });
+  }
+  if (supportsTools !== undefined && !['yes', 'no', 'unknown'].includes(supportsTools)) {
+    return res.status(400).json({ error: 'Nilai supportsTools tidak valid (harus yes, no, atau unknown).' });
+  }
+  if (supportsVision !== undefined && !['yes', 'no', 'unknown'].includes(supportsVision)) {
+    return res.status(400).json({ error: 'Nilai supportsVision tidak valid (harus yes, no, atau unknown).' });
+  }
 
   let nextBaseUrl = row.base_url as string | null;
   if (row.provider === 'custom' && baseUrl !== undefined) {
@@ -1387,6 +1420,27 @@ app.patch('/api/providers/keys/:id', requireAuth, asyncHandler(async (req: Authe
     nextChatPath = pathCheck.normalized || '/chat/completions';
   }
 
+  let nextExtraHeadersEnc = row.extra_headers_enc as string | null;
+  if (extraHeaders !== undefined) {
+    if (extraHeaders === null) {
+      nextExtraHeadersEnc = null;
+    } else {
+      const extraHeadersCheck = validateProviderExtraHeaders(extraHeaders);
+      if (!extraHeadersCheck.valid) {
+        return res.status(400).json({ error: extraHeadersCheck.error });
+      }
+      if (extraHeadersCheck.normalized && Object.keys(extraHeadersCheck.normalized).length > 0) {
+        const keyConfigErr = getMasterKeyConfigurationError();
+        if (keyConfigErr) {
+          return res.status(503).json({ error: keyConfigErr });
+        }
+        nextExtraHeadersEnc = encryptSecret(JSON.stringify(extraHeadersCheck.normalized));
+      } else {
+        nextExtraHeadersEnc = null;
+      }
+    }
+  }
+
   if (apiKey && apiKey.trim().length >= 4) {
     const keyConfigErr = getMasterKeyConfigurationError();
     if (keyConfigErr) {
@@ -1401,7 +1455,7 @@ app.patch('/api/providers/keys/:id', requireAuth, asyncHandler(async (req: Authe
     `UPDATE provider_keys SET
       label = ?, encrypted_key = ?, key_last4 = ?, tier_declared = ?,
       base_url = ?, auth_header = ?, chat_path = ?, custom_models_json = ?,
-      supports_tools = ?, supports_vision = ?
+      extra_headers_enc = ?, supports_tools = ?, supports_vision = ?
      WHERE id = ? AND user_id = ?`,
     label?.trim().slice(0, 80) || String(row.label),
     nextEncKey,
@@ -1413,6 +1467,7 @@ app.patch('/api/providers/keys/:id', requireAuth, asyncHandler(async (req: Authe
     customModels !== undefined
       ? JSON.stringify(customModels.map((m) => m.trim()).filter(Boolean))
       : (row.custom_models_json as string | null),
+    nextExtraHeadersEnc,
     supportsTools || String(row.supports_tools),
     supportsVision || String(row.supports_vision),
     req.params.id,
@@ -3125,6 +3180,11 @@ app.post('/api/projects/:id/env', requireAuth, requireProjectOwner, asyncHandler
       .status(400)
       .json({ error: 'Nama variabel harus huruf kapital, angka, atau garis bawah (mis. API_ENDPOINT).' });
   }
+  if (isProtectedRuntimeEnvKey(cleanKey)) {
+    return res
+      .status(400)
+      .json({ error: `Variabel "${cleanKey}" dilindungi sistem demi keamanan sandbox dan tidak dapat ditimpa.` });
+  }
   if (!value) return res.status(400).json({ error: 'Nilai variabel wajib diisi.' });
   const keyConfigErr = getMasterKeyConfigurationError();
   if (keyConfigErr) {
@@ -4003,12 +4063,12 @@ function setPreviewCorsHeaders(req: Request, res: Response, allowCredentials = f
 
 function getPreviewSessionCookieOptions(req: Request, projectId: string): express.CookieOptions {
   const https = isHttpsRequest(req);
-  const crossOriginPreview = Boolean(process.env.PREVIEW_ORIGIN);
   const safePathId = projectId.replace(/[^a-zA-Z0-9_-]/g, '');
   return {
     httpOnly: true,
-    sameSite: https && crossOriginPreview ? 'none' : 'lax',
+    sameSite: https ? 'none' : 'lax',
     secure: https,
+    partitioned: https,
     path: `/preview/${safePathId}/`,
     maxAge: 3600 * 1000,
   };
@@ -4429,7 +4489,9 @@ async function handlePreviewCustomBackendProxy(
   const apiPathname = sub ? `/api/${sub}` : '/api';
   const qsIdx = req.originalUrl.indexOf('?');
   const qs = qsIdx >= 0 ? req.originalUrl.slice(qsIdx) : '';
-  await backendRuntimeManager.proxyHttpRequest(projectId, req, res, `${apiPathname}${qs}`);
+  await backendRuntimeManager.proxyHttpRequest(projectId, req, res, `${apiPathname}${qs}`, {
+    carmenSessionToken: extractSessionToken(req),
+  });
 }
 
 // Token-free preview routes (authorized via X-Carmen-Preview-Token header, path-scoped HttpOnly cookie, or owner session)
@@ -4545,6 +4607,7 @@ async function startServer() {
   await cleanupExpiredBuildArtifactsAsync().catch(() => {});
   const { port: PORT, host: HOST } = resolveServerListenOptions();
   const httpServer = http.createServer(app);
+  let viteServer: Awaited<ReturnType<typeof createViteServer>> | null = null;
 
   if (process.env.NODE_ENV === 'production') {
     if (!isMasterKeyConfigured()) {
@@ -4570,6 +4633,7 @@ async function startServer() {
       },
       appType: 'spa',
     });
+    viteServer = vite;
     if (disableHmr) {
       app.get('/@vite/client', (_req, res) => {
         res.type('application/javascript').send(`
@@ -4627,10 +4691,13 @@ export function removeStyle(id) {
     if (shuttingDown) return;
     shuttingDown = true;
     previewLifecycleManager.stopReaper();
+    stopAllAgentSessions();
     void closeApkQueueConnections();
     void closeSharedQuotaRedis();
     void closeRateLimiterRedis();
     projectRuntime.stopAllProcesses();
+    closeAllSandboxDbs();
+    void viteServer?.close().catch(() => {});
     clearInterval(cleanupTimer);
     server.closeIdleConnections?.();
     const forceTimer = setTimeout(() => {

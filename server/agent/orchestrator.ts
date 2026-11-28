@@ -198,6 +198,21 @@ export function stopAgentSession(projectId: string, expectedSessionId?: string):
   return true;
 }
 
+export function stopAllAgentSessions(): number {
+  let count = 0;
+  for (const [projectId, rec] of Array.from(activeSessions.entries())) {
+    try {
+      rec.controller.abort();
+    } catch {
+      // Best effort
+    }
+    activeSessions.delete(projectId);
+    projectRuntime.stopRunningProcess(projectId);
+    count += 1;
+  }
+  return count;
+}
+
 function captureWorkspaceSnapshotMap(projectId: string): Record<string, string> {
   const rows = db
     .prepare('SELECT path, content FROM project_files WHERE project_id = ? ORDER BY path')

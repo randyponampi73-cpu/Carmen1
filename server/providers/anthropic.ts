@@ -331,10 +331,17 @@ export class AnthropicAdapter implements ProviderAdapter {
       while (true) {
         if (signal?.aborted) break;
         const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
+        let lines: string[];
+        if (done) {
+          buffer += decoder.decode();
+          if (!buffer.trim()) break;
+          lines = buffer.split('\n');
+          buffer = '';
+        } else {
+          buffer += decoder.decode(value, { stream: true });
+          lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+        }
 
         for (const rawLine of lines) {
           const line = rawLine.trim();
@@ -418,6 +425,7 @@ export class AnthropicAdapter implements ProviderAdapter {
             // Ignore malformed keepalive chunks
           }
         }
+        if (done) break;
       }
     } catch (err) {
       if (!signal?.aborted) {

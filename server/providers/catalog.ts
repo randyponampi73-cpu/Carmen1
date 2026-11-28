@@ -173,15 +173,18 @@ export function resolveModelTier(params: {
   const { provider, tierDeclared, catalogEntry, openRouterPromptPrice, openRouterCompletionPrice } = params;
 
   if (provider === 'openrouter' || provider === 'coarena') {
-    if (
+    const hasPrompt =
       openRouterPromptPrice !== undefined &&
       openRouterPromptPrice !== null &&
+      String(openRouterPromptPrice).trim() !== '';
+    const hasCompletion =
       openRouterCompletionPrice !== undefined &&
-      openRouterCompletionPrice !== null
-    ) {
+      openRouterCompletionPrice !== null &&
+      String(openRouterCompletionPrice).trim() !== '';
+    if (hasPrompt && hasCompletion) {
       const p = Number(openRouterPromptPrice);
       const c = Number(openRouterCompletionPrice);
-      if (!Number.isNaN(p) && !Number.isNaN(c)) {
+      if (Number.isFinite(p) && Number.isFinite(c)) {
         return {
           tier: p === 0 && c === 0 ? 'free' : 'paid',
           ...(provider === 'coarena' && p === 0 && c === 0 ? { tierNote: 'Batas harian/menit berlaku sesuai akun Coarena' } : {}),

@@ -610,8 +610,26 @@ export default function App() {
         user={user}
         route={route}
         onNavigate={(next) => setRoute(next)}
-        onToggleTheme={() => void handleUpdateProfile({ theme: user.theme === 'dark' ? 'light' : 'dark' })}
-        onToggleLocale={() => void handleUpdateProfile({ locale: user.locale === 'id' ? 'en' : 'id' })}
+        onToggleTheme={() => {
+          void handleUpdateProfile({ theme: user.theme === 'dark' ? 'light' : 'dark' }).catch((err) => {
+            pushToast({
+              id: 'toast_theme_err',
+              type: 'error',
+              title: COPY[effectiveLocale].appearanceThemeLabel,
+              message: err instanceof Error ? err.message : COPY[effectiveLocale].profileUpdateFail,
+            });
+          });
+        }}
+        onToggleLocale={() => {
+          void handleUpdateProfile({ locale: user.locale === 'id' ? 'en' : 'id' }).catch((err) => {
+            pushToast({
+              id: 'toast_locale_err',
+              type: 'error',
+              title: COPY[effectiveLocale].appearanceLangLabel,
+              message: err instanceof Error ? err.message : COPY[effectiveLocale].profileUpdateFail,
+            });
+          });
+        }}
         onLogout={() => void handleLogout()}
       />
 

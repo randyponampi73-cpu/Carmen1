@@ -1,5 +1,7 @@
 # Dependencies & Build Outputs
 node_modules/
+bun.lock
+bun.lockb
 build/
 dist/
 .android-ci/

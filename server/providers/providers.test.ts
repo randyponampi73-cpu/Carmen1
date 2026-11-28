@@ -1127,3 +1127,148 @@ test('Master Audit F-01: AnthropicAdapter groups consecutive tool_result turns i
   assert.ok(Array.isArray(sentMsgs[2].content));
   assert.equal((sentMsgs[2].content as Array<unknown>).length, 2);
 });
+
+test('Provider stream reliability: abort mid-tool-call returns clean done, EOF flushes trailing SSE line, and null/empty pricing is never coerced to $0 free', async () => {
+  // 1) Null or empty pricing fields must NOT coerce to 0 ($0/M) or free tier
+  const openRouterNullPrice = new OpenAICompatibleAdapter('openrouter', async () =>
+    makeJsonResponse({
+      data: [
+        {
+          id: 'mystery/null-price-model',
+          name: 'Null Price Model',
+          pricing: { prompt: null as unknown as string, completion: '' },
+        },
+      ],
+    })
+  );
+  const orModels = await openRouterNullPrice.listModels({
+    providerKeyId: 'k_or_null',
+    provider: 'openrouter',
+    label: 'OpenRouter',
+    apiKey: 'sk-or-test-1234',
+    tierDeclared: 'unknown',
+  });
+  assert.equal(orModels.length, 1);
+  assert.equal(orModels[0].promptPricePerMillion, null);
+  assert.equal(orModels[0].completionPricePerMillion, null);
+  assert.equal(orModels[0].tier, 'unknown', 'Null/empty pricing must not be classified as free');
+
+  const coarenaNullPrice = new CoarenaAdapter(async () =>
+    makeJsonResponse({
+      data: [
+        {
+          id: 'coarena/null-price',
+          name: 'Coarena Null Price',
+          pricing: { prompt: null as unknown as string, completion: '   ' },
+        },
+      ],
+    })
+  );
+  const caModels = await coarenaNullPrice.listModels({
+    providerKeyId: 'k_ca_null',
+    provider: 'coarena',
+    label: 'Coarena',
+    apiKey: 'sk-ca-test-1234',
+    tierDeclared: 'unknown',
+  });
+  assert.equal(caModels.length, 1);
+  assert.equal(caModels[0].promptPricePerMillion, null);
+  assert.equal(caModels[0].completionPricePerMillion, null);
+  assert.equal(caModels[0].tier, 'unknown');
+
+  // 2) Trailing SSE line without final newline must be flushed at EOF (OpenAI-compatible + Anthropic)
+  const trailingOai = new OpenAICompatibleAdapter('openai', async () =>
+    makeSseResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: 'NoTrailingNewline' } }] })}`,
+    ])
+  );
+  const trailingOaiEvents = await collectEvents(
+    trailingOai.chatStream({
+      config: {
+        providerKeyId: 'k_oai_eof',
+        provider: 'openai',
+        label: 'OpenAI',
+        apiKey: 'sk-test-eof-1234',
+        tierDeclared: 'paid',
+      },
+      modelId: 'gpt-4o-mini',
+      systemPrompt: 'Sys',
+      messages: [{ role: 'user', content: 'Hi' }],
+    })
+  );
+  assert.equal(
+    trailingOaiEvents.some((e) => e.type === 'text_delta' && e.text === 'NoTrailingNewline'),
+    true,
+    'OpenAI-compatible adapter must flush trailing SSE line without \\n at EOF'
+  );
+
+  const trailingAnt = new AnthropicAdapter(async () =>
+    makeSseResponse([
+      `data: ${JSON.stringify({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'AntNoNewline' } })}`,
+    ])
+  );
+  const trailingAntEvents = await collectEvents(
+    trailingAnt.chatStream({
+      config: {
+        providerKeyId: 'k_ant_eof',
+        provider: 'anthropic',
+        label: 'Anthropic',
+        apiKey: 'sk-ant-eof-1234',
+        tierDeclared: 'paid',
+      },
+      modelId: 'claude-sonnet-4-5',
+      systemPrompt: 'Sys',
+      messages: [{ role: 'user', content: 'Hi' }],
+    })
+  );
+  assert.equal(
+    trailingAntEvents.some((e) => e.type === 'text_delta' && e.text === 'AntNoNewline'),
+    true,
+    'Anthropic adapter must flush trailing SSE line without \\n at EOF'
+  );
+
+  // 3) Aborting mid-tool-call stream must yield { type: 'done' } without spurious JSON parse error
+  const ac = new AbortController();
+  const abortingOai = new OpenAICompatibleAdapter('openai', async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({
+              choices: [
+                {
+                  delta: {
+                    tool_calls: [{ index: 0, id: 'call_abort_1', function: { name: 'write_file', arguments: '{"path":"index.html","content":' } }],
+                  },
+                },
+              ],
+            })}\n\n`
+          )
+        );
+        ac.abort();
+        controller.close();
+      },
+    });
+    return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+  });
+  const abortedEvents = await collectEvents(
+    abortingOai.chatStream({
+      config: {
+        providerKeyId: 'k_oai_abort',
+        provider: 'openai',
+        label: 'OpenAI',
+        apiKey: 'sk-test-abort-1234',
+        tierDeclared: 'paid',
+      },
+      modelId: 'gpt-4o-mini',
+      systemPrompt: 'Sys',
+      messages: [{ role: 'user', content: 'Write' }],
+      tools: SAMPLE_TOOLS,
+      signal: ac.signal,
+    })
+  );
+  assert.equal(abortedEvents.some((e) => e.type === 'error'), false, 'Aborted partial tool call must not emit spurious JSON error');
+  assert.deepEqual(abortedEvents[abortedEvents.length - 1], { type: 'done' });
+});
+

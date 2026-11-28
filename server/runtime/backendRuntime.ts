@@ -919,11 +919,69 @@ export class BackendRuntimeManager {
     return toPublicStatus(rec);
   }
 
+  buildSafeProxyForwardHeaders(
+    req: Request,
+    targetPort: number,
+    carmenSessionToken?: string | null
+  ): http.OutgoingHttpHeaders {
+    const forwardHeaders: http.OutgoingHttpHeaders = {};
+    const normalizedCarmenToken = typeof carmenSessionToken === 'string' ? carmenSessionToken.trim() : '';
+
+    for (const [key, val] of Object.entries(req.headers)) {
+      if (val === undefined) continue;
+      const lower = key.toLowerCase();
+      if (
+        lower === 'host' ||
+        lower === 'connection' ||
+        lower === 'content-length' ||
+        lower === 'transfer-encoding' ||
+        lower === 'keep-alive' ||
+        lower === 'upgrade' ||
+        lower === 'proxy-authorization' ||
+        lower === 'proxy-connection' ||
+        lower === 'te' ||
+        lower === 'trailer' ||
+        lower.startsWith('x-carmen-')
+      ) {
+        continue;
+      }
+      if (lower === 'cookie') {
+        const rawCookie = Array.isArray(val) ? val.join('; ') : String(val);
+        const filtered = rawCookie
+          .split(';')
+          .map((c) => c.trim())
+          .filter((c) => {
+            if (!c) return false;
+            const eqIdx = c.indexOf('=');
+            const name = (eqIdx >= 0 ? c.slice(0, eqIdx) : c).trim().toLowerCase();
+            if (name === 'carmen_session' || name.startsWith('carmen_preview_')) {
+              return false;
+            }
+            return true;
+          })
+          .join('; ');
+        if (filtered) forwardHeaders.cookie = filtered;
+        continue;
+      }
+      if (lower === 'authorization' && normalizedCarmenToken) {
+        const rawAuth = Array.isArray(val) ? val[0] : String(val);
+        const match = rawAuth.trim().match(/^Bearer\s+(.+)$/i);
+        if (match && match[1].trim() === normalizedCarmenToken) {
+          continue;
+        }
+      }
+      forwardHeaders[lower] = val;
+    }
+    forwardHeaders.host = `127.0.0.1:${targetPort || 3000}`;
+    return forwardHeaders;
+  }
+
   async proxyHttpRequest(
     projectId: string,
     req: Request,
     res: Response,
-    targetApiPathWithQuery: string
+    targetApiPathWithQuery: string,
+    options?: { carmenSessionToken?: string | null }
   ): Promise<void> {
     const state = await this.ensureRunning(projectId, { requireRunnable: true });
     const rec = activeBackends.get(projectId);
@@ -936,33 +994,11 @@ export class BackendRuntimeManager {
       return;
     }
 
-    const forwardHeaders: http.OutgoingHttpHeaders = {};
-    for (const [key, val] of Object.entries(req.headers)) {
-      if (val === undefined) continue;
-      const lower = key.toLowerCase();
-      if (
-        lower === 'host' ||
-        lower === 'connection' ||
-        lower === 'content-length' ||
-        lower === 'transfer-encoding' ||
-        lower === 'keep-alive' ||
-        lower === 'upgrade'
-      ) {
-        continue;
-      }
-      if (lower === 'cookie') {
-        const rawCookie = Array.isArray(val) ? val.join('; ') : String(val);
-        const filtered = rawCookie
-          .split(';')
-          .map((c) => c.trim())
-          .filter((c) => c && !c.startsWith('carmen_session='))
-          .join('; ');
-        if (filtered) forwardHeaders.cookie = filtered;
-        continue;
-      }
-      forwardHeaders[lower] = val;
-    }
-    forwardHeaders.host = `127.0.0.1:${rec.port || 3000}`;
+    const forwardHeaders = this.buildSafeProxyForwardHeaders(
+      req,
+      rec.port || 3000,
+      options?.carmenSessionToken
+    );
 
     let bodyPayload: Buffer | null = null;
     const reqWithRaw = req as Request & { rawBody?: Buffer };

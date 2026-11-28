@@ -1073,6 +1073,21 @@ test('P0 Security: APPROVED skill without EXECUTE grant cannot run scripts, tamp
   assert.equal(rolledBack.ok, true);
   assert.equal(rolledBack.skill?.trustLevel, 'DRAFT', 'Rollback introducing scripts/EXECUTE must demote to DRAFT');
   assert.equal(rolledBack.skill?.enabled, false, 'Rollback introducing scripts/EXECUTE must disable skill');
+
+  // 5) REVOKED skills MUST NOT be approved or enabled via approveSkillPermissions
+  db.prepare(`UPDATE skills SET trust_level = 'REVOKED', enabled = 0 WHERE id = ?`).run(rbSkillId);
+  const approveRevoked = await approveSkillPermissions({
+    skillId: rbSkillId,
+    userId,
+    permissions: ['READ'],
+    promoteTrust: true,
+  });
+  assert.equal(approveRevoked.ok, false, 'approveSkillPermissions must reject REVOKED skills');
+  assert.match(approveRevoked.error || '', /REVOKED/i);
+  const prefRow = db
+    .prepare('SELECT enabled FROM user_skill_preferences WHERE user_id = ? AND skill_id = ?')
+    .get(userId, rbSkillId) as { enabled?: number } | undefined;
+  assert.notEqual(prefRow?.enabled, 1, 'REVOKED skill must not have enabled preference written');
 });
 
 

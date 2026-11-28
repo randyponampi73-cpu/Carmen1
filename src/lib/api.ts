@@ -608,9 +608,19 @@ export function loadLocalOnlyKeys(): LocalOnlyKey[] {
   }
 }
 
+function writeLocalOnlyKeysStorage(items: LocalOnlyKey[]): void {
+  try {
+    localStorage.setItem(LOCAL_KEYS_STORAGE, JSON.stringify(items));
+  } catch {
+    throw new Error(
+      'Penyimpanan lokal browser (localStorage) dibatasi atau penuh. Pastikan izin penyimpanan aktif atau simpan key terenkripsi di server.'
+    );
+  }
+}
+
 export function saveLocalOnlyKey(item: LocalOnlyKey): void {
   const existing = loadLocalOnlyKeys().filter((k) => k.id !== item.id);
-  localStorage.setItem(LOCAL_KEYS_STORAGE, JSON.stringify([item, ...existing]));
+  writeLocalOnlyKeysStorage([item, ...existing]);
 }
 
 export function updateLocalOnlyKey(
@@ -627,10 +637,10 @@ export function updateLocalOnlyKey(
       keyLast4: nextApiKey.slice(-4),
     };
   });
-  localStorage.setItem(LOCAL_KEYS_STORAGE, JSON.stringify(updated));
+  writeLocalOnlyKeysStorage(updated);
 }
 
 export function removeLocalOnlyKey(id: string): void {
   const existing = loadLocalOnlyKeys().filter((k) => k.id !== id);
-  localStorage.setItem(LOCAL_KEYS_STORAGE, JSON.stringify(existing));
+  writeLocalOnlyKeysStorage(existing);
 }

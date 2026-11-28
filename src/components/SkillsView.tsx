@@ -154,17 +154,27 @@ export function SkillsView({ locale }: SkillsViewProps) {
   }, []);
 
   useEffect(() => {
+    let active = true;
     if (tab === 'marketplace' && !marketplace) {
       api
         .getSkillMarketplace()
-        .then(setMarketplace)
-        .catch((err) => setError(err instanceof Error ? err.message : 'Gagal memuat katalog skill.'));
+        .then((res) => {
+          if (active) setMarketplace(res);
+        })
+        .catch((err) => {
+          if (active) setError(err instanceof Error ? err.message : 'Gagal memuat katalog skill.');
+        });
     } else if (tab === 'analytics') {
       api
         .getSkillAnalytics()
-        .then((res) => setAnalytics(res.analytics))
+        .then((res) => {
+          if (active) setAnalytics(res.analytics);
+        })
         .catch(() => {});
     }
+    return () => {
+      active = false;
+    };
   }, [tab, marketplace]);
 
   const filteredSkills = useMemo(() => {

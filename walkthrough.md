@@ -1,7 +1,7 @@
 # Security Summary
 
-**Reviewed Files**: 156 (158 total repository files; 2 binary PDFs excluded from text inspection)
-**Issues Resolved**: 49
+**Reviewed Files**: 165 (165 total repository files inventoried; 2 binary PDFs excluded from text inspection)
+**Issues Resolved**: 55
 
 ### Issues Resolved
 | Area | File | Line | What Was Happening | Impact | Status | How It Was Fixed |
@@ -47,6 +47,12 @@
 | Skill Sandbox Container Script Path & Rollback Demotion | `server/skills/executor.ts`, `server/skills/registry.ts` | 366 / 960 | `runSkillSandboxScript` passed host absolute `/tmp/...` paths and `bash` (missing in `node:22-alpine`), and `rollbackSkillVersion` could restore an older script/elevated-permission version while retaining `APPROVED` status. | High | Fixed | Switched skill script invocation to workspace-relative `./skill-script.*` with POSIX `sh`, and enforced `APPROVED` -> `DRAFT` + disabled demotion during `rollbackSkillVersion` whenever scripts or elevated permissions/tools change. |
 | Android CI Least-Privilege Permissions & SDK Fallback | `.github/workflows/android-build.yml` | 1 / 147 / 263 | Workflow omitted top-level read-only `permissions:` and referenced `$ANDROID_SDK_ROOT` without falling back to `$ANDROID_HOME`. | High | Fixed | Added top-level `permissions: { contents: read }` and resolved `SDK_DIR="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"` for `apksigner` and `aapt2`. |
 | Deployment Link Protocol Guard & Custom Provider Test Parity | `src/components/workspace/DeployModal.tsx`, `src/components/SettingsView.tsx`, `src/lib/api.ts` | 361 / 185 | `DeployModal` rendered `deploymentUrl` links without validating `http(s)://` scheme, and `SettingsView` omitted configured `extraHeaders` during pre-save custom provider connection tests. | Low | Fixed | Added `/^https?:\/\//i` validation + `rel="noopener noreferrer"` on deployment links and forwarded `extraHeaders` from `handleTestFormKey` to `/api/providers/test-ephemeral`. |
+| Tenant Backend Proxy Credential Stripping | `server/runtime/backendRuntime.ts`, `server.ts` | 922 / 4422 | Proxying preview `/api/*` requests to custom tenant backends only stripped case-sensitive `carmen_session=`, forwarding `carmen_preview_*` cookies, `x-carmen-preview-*` headers, and CARMEN's `Authorization` Bearer token to untrusted tenant code. | High | Fixed | Extracted `buildSafeProxyForwardHeaders()` to strip all `x-carmen-*` headers, hop-by-hop headers, case-insensitive `carmen_session` & `carmen_preview_*` cookies, and matching CARMEN session Bearer tokens while preserving tenant app cookies and headers. |
+| Sandbox Runtime Env Escape & Unprotected Bun Install | `server/runtime/sandbox.ts`, `server.ts` | 234 / 1697 / 3120 | Project env vars could set `NPM_CONFIG_IGNORE_SCRIPTS=false`, `NPM_CONFIG_SCRIPT_SHELL`, `NODE_EXTRA_CA_CERTS`, `LD_AUDIT`, `BASH_ENV`, or `GIT_SSH_COMMAND` to tamper with sandbox execution, and automatic `bun install` omitted `--ignore-scripts`. | High | Fixed | Exported `isProtectedRuntimeEnvKey()` blocking dangerous runtime prefixes/keys in both `buildSanitizedChildEnvFromRows()` and `POST /api/projects/:id/env` (HTTP 400), and changed automatic Bun install to `bun install --ignore-scripts`. |
+| CSRF Auth Token Precedence Mismatch | `server.ts` | 547 / 588 | `csrfOriginCheck` skipped Origin validation whenever any `Authorization: Bearer` header was present, while `extractSessionToken()` preferred the session cookie over the Bearer header, enabling a forged Bearer header to bypass CSRF while authenticating via cookie. | High | Fixed | Updated `extractSessionToken()` so any request carrying `Authorization: Bearer ...` authenticates strictly via that Bearer token without falling back to the cookie. |
+| Cross-Site HTTPS Preview Session Cookie | `server.ts` | 4004 | `getPreviewSessionCookieOptions()` set `SameSite=Lax` without `Partitioned` when `PREVIEW_ORIGIN` was unset, breaking preview session cookies inside HTTPS third-party iframes. | Medium | Fixed | Aligned `getPreviewSessionCookieOptions()` with `getSessionCookieOptions()` using `sameSite: https ? 'none' : 'lax'`, `secure: https`, and `partitioned: https`. |
+| Revoked Skill Approval & PG Boolean Rollback Parity | `server/skills/registry.ts` | 688 / 1008 | `approveSkillPermissions()` did not block `REVOKED` skills before saving `enabled = true` user preferences, and `rollbackSkillVersion()` used `Boolean(existing.enabled)` instead of `toBooleanFlag()`. | Medium | Fixed | Rejected `pkg.trustLevel === 'REVOKED'` immediately in `approveSkillPermissions()` and switched `rollbackSkillVersion()` to `toBooleanFlag(existing.enabled)`. |
+| Provider Key Enum Validation & PATCH `extraHeaders` Parity | `server.ts` | 1251 / 1364 | `POST`/`PATCH /api/providers/keys` did not validate `tierDeclared`, `supportsTools`, or `supportsVision` enum values, and `PATCH` omitted validated encrypted updates for `extraHeaders`. | Medium | Fixed | Enforced strict allowlist checks on `tierDeclared`, `supportsTools`, and `supportsVision`, and wired `validateProviderExtraHeaders()` + encryption on `PATCH /api/providers/keys/:id`. |
 
 ### Safeguards Verified
 | Area | File | How It's Protected |
@@ -385,3 +391,30 @@ Normalized host absolute paths to container-safe executable names inside `buildC
 
 #### Conclusion
 **Fix Verified** - Verified via `server/runtime/isolation.test.ts` and `server/skills/skills.test.ts`. Live Docker daemon execution remains external to this container (`docker` binary not installed).
+
+### Tenant Backend Proxy Credential Isolation, Sandbox Env Denylist & CSRF Precedence
+#### Summary
+| Field | Value |
+|---|---|
+| Issue Type | Cross-Boundary Credential Leakage, Sandbox Env Override & CSRF Auth Precedence Bypass |
+| Impact | High |
+| Affected Files | `server/runtime/backendRuntime.ts:922-985`, `server/runtime/sandbox.ts:234-300,1697`, `server.ts:545-555,3120-3130,3995-4008`, `server/skills/registry.ts:688-691` |
+| Test Scenarios | `buildSafeProxyForwardHeaders` with `CARMEN_SESSION`, `carmen_preview_*`, `x-carmen-preview-*`, and CARMEN vs tenant Bearer headers (`server/security.adversarial.test.ts`); `isProtectedRuntimeEnvKey` + `POST /api/projects/:id/env` against `NPM_CONFIG_IGNORE_SCRIPTS`, `NODE_OPTIONS`, `LD_AUDIT`, `BASH_ENV`, `GIT_SSH_COMMAND`, bogus `Authorization: Bearer` + valid cookie cross-origin CSRF attempt, HTTPS `/preview/:id/session` `Partitioned` cookie check, and provider key enum/`extraHeaders` validation (`server/api.integration.test.ts` #28); `approveSkillPermissions` against a `REVOKED` skill (`server/skills/skills.test.ts`) |
+
+#### How It Was Fixed
+- Stripped all `x-carmen-*` headers, hop-by-hop headers, case-insensitive `carmen_session` & `carmen_preview_*` cookies, and CARMEN's main-app Bearer token inside `buildSafeProxyForwardHeaders()` while preserving tenant app cookies and tenant `Authorization` headers.
+- Enforced `isProtectedRuntimeEnvKey()` in both `buildSanitizedChildEnvFromRows()` and `POST /api/projects/:id/env` (HTTP 400), and added `--ignore-scripts` to automatic `bun install`.
+- Reversed `extractSessionToken()` precedence so requests with `Authorization: Bearer ...` authenticate exclusively via the Bearer token and never fall back to the session cookie.
+- Aligned `getPreviewSessionCookieOptions()` with `SameSite=None; Secure; Partitioned` on HTTPS requests, rejected `REVOKED` skills in `approveSkillPermissions()`, and validated provider key enums and `PATCH` `extraHeaders`.
+
+#### Step-by-Step Trace
+| Step | What Happens in the Code | Outcome |
+|---|---|---|
+| 1 | Cross-origin `POST /api/projects/:id/env` sends valid `carmen_session` cookie + bogus `Authorization: Bearer invalid-bogus-token` | `extractSessionToken()` returns `'invalid-bogus-token'` without cookie fallback -> fails authentication with `HTTP 401` |
+| 2 | Authenticated owner posts `NPM_CONFIG_IGNORE_SCRIPTS`, `NODE_OPTIONS`, `LD_AUDIT`, `BASH_ENV`, or `GIT_SSH_COMMAND` to `/api/projects/:id/env` | `isProtectedRuntimeEnvKey()` matches -> rejected with `HTTP 400` |
+| 3 | Preview proxy prepares headers for untrusted tenant backend | `carmen_session`, `carmen_preview_*`, `x-carmen-preview-*`, and CARMEN's Bearer token are removed; tenant cookies and tenant Bearer tokens pass through |
+| 4 | `approveSkillPermissions()` called on a `REVOKED` skill | Returns `{ ok: false }` before writing `user_skill_preferences` |
+
+#### Conclusion
+**Fix Verified** - All new adversarial, skill, provider, and HTTP integration regression tests pass cleanly across the full test suite (`test:unit` 119/119, `test:skills` 18/18, `test:security` 9/9, `test:integration` 28/28, `test:e2e` 1/1).
+

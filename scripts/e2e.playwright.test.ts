@@ -7,9 +7,19 @@ import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { chromium, type Browser } from 'playwright-core';
 
-const CHROMIUM_EXECUTABLE =
-  process.env.CHROMIUM_PATH ||
-  '/ms-playwright/chromium_headless_shell-1247/chrome-headless-shell-linux64/chrome-headless-shell';
+function resolveChromiumExecutable(): string {
+  const candidates = [
+    process.env.CHROMIUM_PATH,
+    '/ms-playwright/chrome-headless-shell-linux64/chrome-headless-shell',
+    '/ms-playwright/chromium_headless_shell-1247/chrome-headless-shell-linux64/chrome-headless-shell',
+  ].filter((p): p is string => Boolean(p && p.trim()));
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return chromium.executablePath();
+}
+
+const CHROMIUM_EXECUTABLE = resolveChromiumExecutable();
 
 function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {

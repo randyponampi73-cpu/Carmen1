@@ -685,6 +685,9 @@ export async function approveSkillPermissions(params: {
   if (!pkg) {
     return { ok: false, error: 'Skill tidak ditemukan atau tidak dimiliki pengguna.' };
   }
+  if (pkg.trustLevel === 'REVOKED') {
+    return { ok: false, error: 'Skill yang telah dicabut (REVOKED) tidak dapat disetujui atau diaktifkan.' };
+  }
 
   const normalizedPerms = Array.from(
     new Set(permissions.map((p) => String(p).toUpperCase() as SkillPermission))
@@ -1006,7 +1009,7 @@ export async function rollbackSkillVersion(
   }
 
   let nextTrustLevel: SkillTrustLevel = existing.trust_level;
-  let nextEnabled = Boolean(existing.enabled);
+  let nextEnabled = toBooleanFlag(existing.enabled);
   if (existing.trust_level === 'APPROVED') {
     const prevManifest = normalizeManifest(existing.manifest_json, existing.category as SkillCategory);
     const prevScripts = parseJsonColumn<Record<string, string>>(existing.scripts_json, {});

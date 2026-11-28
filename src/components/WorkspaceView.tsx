@@ -149,11 +149,19 @@ export function WorkspaceView({
   const [lastVerificationGate, setLastVerificationGate] = useState<VerificationGateSummary | null>(null);
 
   const autoRanRef = useRef(false);
+  const isMountedRef = useRef(true);
   const chatAbortRef = useRef<AbortController | null>(null);
   const userStoppedRef = useRef(false);
   const previewTokenIssuedAtRef = useRef<number>(0);
   const fileSyncTimerRef = useRef<number | null>(null);
   const previewReloadTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const isCodeTabActive = isMobile
     ? mobileTab === 'code' && mobileCodeSubtab === 'code'
@@ -612,12 +620,18 @@ export function WorkspaceView({
 
         while (true) {
           const { value, done } = await reader.read();
-          if (done) break;
-          resetIdleTimeout();
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() ?? '';
+          let lines: string[];
+          if (done) {
+            buffer += decoder.decode();
+            if (!buffer.trim()) break;
+            lines = buffer.split('\n');
+            buffer = '';
+          } else {
+            resetIdleTimeout();
+            buffer += decoder.decode(value, { stream: true });
+            lines = buffer.split('\n');
+            buffer = lines.pop() ?? '';
+          }
 
           for (const rawLine of lines) {
             const line = rawLine.trimEnd();
@@ -744,8 +758,10 @@ export function WorkspaceView({
               }
             }
           }
+          if (done) break;
         }
       } catch (err) {
+        if (!isMountedRef.current) return;
         if (timedOut) {
           setStreamError(
             locale === 'id'
@@ -769,17 +785,21 @@ export function WorkspaceView({
         if (chatAbortRef.current === abortController) {
           chatAbortRef.current = null;
         }
-        await loadWorkspace();
-        if (pendingFilesMutated) {
-          void handleRefreshPreview();
+        if (isMountedRef.current) {
+          await loadWorkspace();
+          if (isMountedRef.current) {
+            if (pendingFilesMutated) {
+              void handleRefreshPreview();
+            }
+            setStreaming(false);
+            setStreamingText('');
+            setStreamingActions([]);
+            setStreamingPlan(null);
+            setFallbackNotice(null);
+            setStreamingTaskState('idle');
+            setStreamingStageTarget(null);
+          }
         }
-        setStreaming(false);
-        setStreamingText('');
-        setStreamingActions([]);
-        setStreamingPlan(null);
-        setFallbackNotice(null);
-        setStreamingTaskState('idle');
-        setStreamingStageTarget(null);
       }
     },
     [models, selectedModelKey, projectId, mode, skillModeOption, locale, t.sessionMissing, clearDebounceTimers, handleRefreshPreview, loadWorkspace]

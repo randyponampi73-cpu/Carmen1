@@ -313,6 +313,15 @@ export function CodePane({
     return () => window.clearTimeout(timer);
   }, [revealRequest]);
 
+  const copiedTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (copiedTimerRef.current !== null) {
+        window.clearTimeout(copiedTimerRef.current);
+      }
+    };
+  }, []);
+
   const openFile = useCallback(
     (path: string, line?: number) => {
       setOpenTabs((prev) => {
@@ -487,7 +496,13 @@ export function CodePane({
     try {
       await navigator.clipboard.writeText(path);
       setCopiedNotice(t.copiedPathNotice.replace('{path}', path));
-      window.setTimeout(() => setCopiedNotice(null), 2000);
+      if (copiedTimerRef.current !== null) {
+        window.clearTimeout(copiedTimerRef.current);
+      }
+      copiedTimerRef.current = window.setTimeout(() => {
+        copiedTimerRef.current = null;
+        setCopiedNotice(null);
+      }, 2000);
     } catch {
       // Clipboard may be unavailable in restricted iframe
     }
