@@ -6,10 +6,9 @@ interface ToastContainerProps {
   closeLabel: string;
   onDismiss: (id: string) => void;
   onOpenProject?: (projectId: string) => void;
-  onDownloadBuild?: (buildId: string, token: string) => void;
 }
 
-export function ToastContainer({ toasts, closeLabel, onDismiss, onOpenProject, onDownloadBuild }: ToastContainerProps) {
+export function ToastContainer({ toasts, closeLabel, onDismiss, onOpenProject }: ToastContainerProps) {
   if (toasts.length === 0) return null;
 
   return (
@@ -20,8 +19,7 @@ export function ToastContainer({ toasts, closeLabel, onDismiss, onOpenProject, o
     >
       {toasts.map((toast) => {
         const isSuccess = toast.type === 'success';
-        const hasAuthDownload = Boolean(toast.buildId && toast.downloadToken && onDownloadBuild && toast.actionLabel);
-        const hasLegacyDownload = Boolean(!hasAuthDownload && toast.downloadUrl && toast.actionLabel);
+        const hasDownload = Boolean(toast.downloadUrl && toast.actionLabel);
         return (
           <div
             key={toast.id}
@@ -38,21 +36,9 @@ export function ToastContainer({ toasts, closeLabel, onDismiss, onOpenProject, o
             <div className="min-w-0 flex-1 space-y-1">
               <div className="font-semibold text-[var(--text)] leading-snug">{toast.title}</div>
               <div className="text-[12px] text-[var(--text-muted)] leading-snug">{toast.message}</div>
-              {(hasAuthDownload || hasLegacyDownload || (toast.projectId && onOpenProject)) && (
+              {(hasDownload || (toast.projectId && onOpenProject)) && (
                 <div className="pt-1 flex flex-wrap items-center gap-3">
-                  {hasAuthDownload && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onDownloadBuild!(toast.buildId!, toast.downloadToken!);
-                      }}
-                      className="inline-flex items-center gap-1 text-[12px] font-medium text-[var(--accent-text)] hover:underline cursor-pointer"
-                    >
-                      <Download className="w-3.5 h-3.5" strokeWidth={1.5} />
-                      <span>{toast.actionLabel}</span>
-                    </button>
-                  )}
-                  {hasLegacyDownload && (
+                  {hasDownload && (
                     <a
                       href={toast.downloadUrl}
                       className="inline-flex items-center gap-1 text-[12px] font-medium text-[var(--accent-text)] hover:underline"

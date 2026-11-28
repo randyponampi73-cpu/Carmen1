@@ -82,7 +82,6 @@ describe('Playwright + Chromium Real Browser E2E Verification (F-21)', () => {
         NODE_ENV: 'production',
         PORT: String(port),
         CARMEN_DB_PATH: path.join(tempDir, 'e2e.db'),
-        CARMEN_ARTIFACT_DIR: path.join(tempDir, 'artifacts'),
         CARMEN_SANDBOX_ROOT: path.join(tempDir, 'sandboxes'),
         CARMEN_MASTER_KEY: 'carmen-e2e-master-key-32-bytes-min!!',
         CARMEN_ENABLE_DEMO: '0',

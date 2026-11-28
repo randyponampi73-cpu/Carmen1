@@ -1,6 +1,6 @@
 import IORedis from 'ioredis';
 import { asyncDb, repositories } from '../db';
-import { validateRedisConfiguration } from '../builds/apkBuilder';
+import { validateRedisConfiguration } from '../runtime/redisConfig';
 
 export interface SharedKeyQuotaConfig {
   maxRequestsPerDay: number;

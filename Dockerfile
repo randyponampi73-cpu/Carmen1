@@ -1,6 +1,5 @@
 # CARMEN Multi-Stage Production Web Application Image
 # Target: Web Full-Stack AI App Builder (Node.js 22 + built-in node:sqlite / PostgreSQL + Vite SPA bundle)
-# Note: Dedicated Android APK build worker lives separately in Dockerfile.android.
 
 # ── Stage 1: Build Vite frontend production bundle ────────────────────────────
 FROM node:22-bookworm-slim AS builder

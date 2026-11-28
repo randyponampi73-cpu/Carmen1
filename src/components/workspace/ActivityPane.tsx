@@ -8,12 +8,10 @@ import {
   MessageSquare,
   Rocket,
   Search,
-  Smartphone,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { COPY, formatDateTime } from '../../i18n';
 import type {
-  ApkBuildRecord,
   ChatMessage,
   DeploymentRecord,
   Locale,
@@ -28,18 +26,17 @@ interface ActivityPaneProps {
   files: ProjectFile[];
   versions: ProjectVersion[];
   messages: ChatMessage[];
-  builds: ApkBuildRecord[];
   deployments: DeploymentRecord[];
   onOpenDiff: (versionId: string) => void;
   onOpenCodeTab: () => void;
 }
 
-type ActivityFilter = 'all' | 'changes' | 'builds' | 'prompts';
+type ActivityFilter = 'all' | 'changes' | 'deployments' | 'prompts';
 
 interface ProjectActivityItem {
   id: string;
-  category: 'changes' | 'builds' | 'prompts';
-  kind: 'version' | 'file' | 'build' | 'deployment' | 'prompt';
+  category: 'changes' | 'deployments' | 'prompts';
+  kind: 'version' | 'file' | 'deployment' | 'prompt';
   title: string;
   detail: string;
   status?: 'success' | 'failed' | 'running' | 'info';
@@ -59,7 +56,6 @@ export function ActivityPane({
   files,
   versions,
   messages,
-  builds,
   deployments,
   onOpenDiff,
   onOpenCodeTab,
@@ -116,22 +112,6 @@ export function ActivityPane({
       }
     }
 
-    for (const b of builds) {
-      const status: ProjectActivityItem['status'] =
-        b.status === 'success' ? 'success' : b.status === 'failed' ? 'failed' : 'running';
-      const statusText =
-        b.status === 'success' ? t.statusSuccess : b.status === 'failed' ? t.statusFailed : t.statusRunning;
-      items.push({
-        id: `bld_${b.id}`,
-        category: 'builds',
-        kind: 'build',
-        title: `${b.type.toUpperCase()} · ${b.config.buildType} (v${b.config.versionName})`,
-        detail: statusText,
-        status,
-        createdAt: b.createdAt,
-      });
-    }
-
     for (const d of deployments) {
       const status: ProjectActivityItem['status'] =
         d.status === 'ready' ? 'success' : d.status === 'failed' ? 'failed' : 'running';
@@ -139,7 +119,7 @@ export function ActivityPane({
         d.status === 'ready' ? t.statusSuccess : d.status === 'failed' ? t.statusFailed : t.statusRunning;
       items.push({
         id: `dep_${d.id}`,
-        category: 'builds',
+        category: 'deployments',
         kind: 'deployment',
         title: `${t.activityDeployLabel} · ${d.target}`,
         detail: d.deploymentUrl ? `${statusText} · ${d.deploymentUrl}` : statusText,
@@ -150,7 +130,6 @@ export function ActivityPane({
 
     return items.sort((a, b) => parseTimestampMs(b.createdAt) - parseTimestampMs(a.createdAt));
   }, [
-    builds,
     deployments,
     files,
     messages,
@@ -187,7 +166,7 @@ export function ActivityPane({
             </h2>
             <p className="mt-0.5 text-[12px] text-[var(--text-muted)] font-mono tabular-nums">
               {project.name} · {files.length} {t.colFile.toLowerCase()} · {versions.length} {t.colVersions.toLowerCase()} ·{' '}
-              {builds.length} {t.activityBuildLabel.toLowerCase()}
+              {deployments.length} {t.activityDeployLabel.toLowerCase()}
             </p>
           </div>
 
@@ -216,7 +195,7 @@ export function ActivityPane({
                 [
                   ['all', t.activityFilterAll],
                   ['changes', t.activityFilterChanges],
-                  ['builds', t.activityFilterBuilds],
+                  ['deployments', t.activityFilterDeployments],
                   ['prompts', t.activityFilterPrompts],
                 ] as const
               ).map(([id, label]) => (
@@ -249,22 +228,18 @@ export function ActivityPane({
               const Icon =
                 item.kind === 'prompt'
                   ? MessageSquare
-                  : item.kind === 'build'
-                    ? Smartphone
-                    : item.kind === 'deployment'
-                      ? Rocket
-                      : item.kind === 'file'
-                        ? Code2
-                        : GitCommitHorizontal;
+                  : item.kind === 'deployment'
+                    ? Rocket
+                    : item.kind === 'file'
+                      ? Code2
+                      : GitCommitHorizontal;
 
               const kindLabel =
                 item.kind === 'prompt'
                   ? t.activityPromptLabel
-                  : item.kind === 'build'
-                    ? t.activityBuildLabel
-                    : item.kind === 'deployment'
-                      ? t.activityDeployLabel
-                      : t.activityChangeLabel;
+                  : item.kind === 'deployment'
+                    ? t.activityDeployLabel
+                    : t.activityChangeLabel;
 
               return (
                 <div

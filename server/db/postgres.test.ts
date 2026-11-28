@@ -462,21 +462,12 @@ describe('PostgreSQL Compatibility Layer & Dual-Mode Repositories', () => {
         type: 'web',
         stack: 'React + Express + SQLite',
         rules: '',
-        apkConfig: {
-          appName: 'Fullstack App',
-          packageId: 'id.carmen.fullstack',
-          versionName: '1.0.0',
-          versionCode: 1,
-          iconColor: '#C8324B',
-          buildType: 'debug',
-        },
         files: {
           'client/index.html': '<!doctype html><html><body><div id="root"></div></body></html>',
           'server/index.ts': 'export const ok = true;',
         },
       });
       assert.equal(p1.archived, false);
-      assert.equal(p1.apkConfig.packageId, 'id.carmen.fullstack');
 
       await repos.projects.createWithFiles({
         id: 'prj_dual_2',
@@ -485,14 +476,6 @@ describe('PostgreSQL Compatibility Layer & Dual-Mode Repositories', () => {
         type: 'web',
         stack: 'Static',
         rules: '',
-        apkConfig: {
-          appName: 'Archived App',
-          packageId: 'id.carmen.arch',
-          versionName: '1.0.0',
-          versionCode: 1,
-          iconColor: '#C8324B',
-          buildType: 'debug',
-        },
         files: { 'index.html': '<h1>Hi</h1>' },
       });
       assert.equal(await repos.projects.setArchived('prj_dual_2', 'usr_dual_1', true), true);
@@ -565,7 +548,7 @@ describe('PostgreSQL Compatibility Layer & Dual-Mode Repositories', () => {
     assert.equal(unreachable.configured, true);
   });
 
-  it('verifies F-01..F-04 FASE 1 deliverables: lockfile sync, multi-stage Dockerfile, Android CI assembler, and explicit Postgres fail-fast', async () => {
+  it('verifies F-01..F-04 deliverables: lockfile sync, multi-stage Dockerfile, and explicit Postgres fail-fast', async () => {
     // F-01: package.json runtime deps & lockfile sync, no bun.lock
     const pkg = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf8')) as {
       dependencies?: Record<string, string>;
@@ -588,30 +571,6 @@ describe('PostgreSQL Compatibility Layer & Dual-Mode Repositories', () => {
     assert.match(dockerfile, /USER\s+node/);
     assert.match(dockerfile, /VOLUME\s+\["\/app\/data"\]/);
     assert.match(dockerfile, /CMD\s+\["npm",\s*"start"\]/);
-
-    // F-03: Android CI workflow & project assembler never false-green
-    const ciYaml = fs.readFileSync(path.resolve(process.cwd(), '.github/workflows/android-build.yml'), 'utf8');
-    assert.match(ciYaml, /prepare-android-ci\.ts/);
-    assert.match(ciYaml, /if-no-files-found:\s*error/);
-    const { assembleAndroidGradleProject } = await import('../../scripts/prepare-android-ci');
-    const ciTmp = fs.mkdtempSync(path.join(tempDir, 'android-ci-'));
-    const fakeDist = path.join(ciTmp, 'dist');
-    const androidOut = path.join(ciTmp, 'android');
-    fs.mkdirSync(fakeDist, { recursive: true });
-    fs.writeFileSync(path.join(fakeDist, 'index.html'), '<!doctype html><html><body>OK</body></html>');
-    const generated = assembleAndroidGradleProject({
-      outDir: androidOut,
-      webDistDir: fakeDist,
-      appName: 'Carmen Audit App',
-      packageId: 'id.carmen.audit',
-      versionName: '1.2.3',
-      versionCode: 4,
-    });
-    assert.equal(generated.packageId, 'id.carmen.audit');
-    assert.ok(generated.assetFilesCopied >= 1);
-    assert.ok(fs.existsSync(path.join(androidOut, 'app', 'src', 'main', 'AndroidManifest.xml')));
-    assert.ok(fs.existsSync(path.join(androidOut, 'app', 'build.gradle')));
-    assert.match(fs.readFileSync(path.join(androidOut, 'app', 'build.gradle'), 'utf8'), /id\.carmen\.audit/);
 
     // F-04: Explicit Postgres selection fails fast when DATABASE_URL is missing
     const { createAsyncDbClient, buildPgPoolConfig } = await import('./client');

@@ -122,10 +122,9 @@ function scoreAutoSkill(
     }
   } else if (skill.category === 'devops') {
     if (
-      /\b(docker|container|deploy|deployment|ci|cd|github actions|env|environment|cloud run|caddy|nginx|build apk|apk|android|gradle)\b/i.test(
+      /\b(docker|container|deploy|deployment|ci|cd|github actions|env|environment|cloud run|caddy|nginx)\b/i.test(
         promptLower
       ) ||
-      (ctx.projectType === 'android' && /\b(build|release|apk|aab|ci|package)\b/i.test(promptLower)) ||
       (hasDockerfile && /\b(build|run|deploy|container)\b/i.test(promptLower))
     ) {
       score += 0.38;

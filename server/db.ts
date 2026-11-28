@@ -326,13 +326,13 @@ export function seedDemoWorkspace(): void {
 
     ensureServerGeminiKey(userId);
 
-    for (const tpl of PROJECT_TEMPLATES.slice(0, 2)) {
-      const projectId = tpl.type === 'web' ? 'prj_todo_sqlite' : 'prj_habit_android';
+    for (const tpl of PROJECT_TEMPLATES.slice(0, 1)) {
+      const projectId = 'prj_todo_sqlite';
       rawSqliteDb
         .prepare(
           `INSERT INTO projects (id, user_id, name, type, stack, rules, apk_config_json) VALUES (?, ?, ?, ?, ?, ?, ?)`
         )
-        .run(projectId, userId, tpl.name, tpl.type, tpl.stack, tpl.defaultRules, JSON.stringify(tpl.apkConfig));
+        .run(projectId, userId, tpl.name, tpl.type, tpl.stack, tpl.defaultRules, '{}');
 
       const snapshot: Record<string, string> = {};
       for (const [filePath, content] of Object.entries(tpl.files)) {
@@ -349,10 +349,7 @@ export function seedDemoWorkspace(): void {
         .prepare(`INSERT INTO project_versions (id, project_id, message_id, label, snapshot_json) VALUES (?, ?, ?, ?, ?)`)
         .run(versionId, projectId, msgId, 'Versi 1 — Inisialisasi proyek', JSON.stringify(snapshot));
 
-      const userPrompt =
-        tpl.type === 'web'
-          ? 'Buat aplikasi todo dengan database SQLite dan filter prioritas.'
-          : 'Buat aplikasi Android pencatat kebiasaan harian dengan Capacitor dan SQLite.';
+      const userPrompt = 'Buat aplikasi todo dengan database SQLite dan filter prioritas.';
 
       rawSqliteDb
         .prepare(`INSERT INTO messages (id, project_id, role, content, mode) VALUES (?, ?, 'user', ?, 'build')`)
@@ -374,12 +371,8 @@ export function seedDemoWorkspace(): void {
         .run(
           msgId,
           projectId,
-          tpl.type === 'web'
-            ? 'Proyek aplikasi Todo fullstack telah dibuat lengkap dengan frontend, API CRUD, dan skema tabel SQLite `todos`. Preview dan tab Database siap digunakan.'
-            : 'Proyek Android Pencatat Kebiasaan berbasis Capacitor telah disiapkan bersama konfigurasi manifest Android dan tabel SQLite `habits`. Gunakan tombol Build APK untuk mengemas artefak debug.',
-          tpl.type === 'web'
-            ? '1. Siapkan skema tabel SQLite todos\n2. Bangun antarmuka daftar tugas dengan filter prioritas\n3. Hubungkan operasi tambah, ubah status, dan hapus ke API'
-            : '1. Siapkan konfigurasi Capacitor dan AndroidManifest.xml\n2. Bangun antarmuka mobile pencatat kebiasaan\n3. Hubungkan data rangkaian harian ke tabel SQLite habits',
+          'Proyek aplikasi Todo fullstack telah dibuat lengkap dengan frontend, API CRUD, dan skema tabel SQLite `todos`. Preview dan tab Database siap digunakan.',
+          '1. Siapkan skema tabel SQLite todos\n2. Bangun antarmuka daftar tugas dengan filter prioritas\n3. Hubungkan operasi tambah, ubah status, dan hapus ke API',
           JSON.stringify(toolEvents),
           'gemini',
           'gemini-4-hydrogen',
@@ -414,8 +407,8 @@ export async function seedDemoWorkspaceAsync(): Promise<void> {
 
     ensureServerGeminiKey(userId);
 
-    for (const tpl of PROJECT_TEMPLATES.slice(0, 2)) {
-      const projectId = tpl.type === 'web' ? 'prj_todo_sqlite' : 'prj_habit_android';
+    for (const tpl of PROJECT_TEMPLATES.slice(0, 1)) {
+      const projectId = 'prj_todo_sqlite';
       await tx.run(
         `INSERT INTO projects (id, user_id, name, type, stack, rules, apk_config_json) VALUES (?, ?, ?, ?, ?, ?, ?)`,
         projectId,
@@ -424,7 +417,7 @@ export async function seedDemoWorkspaceAsync(): Promise<void> {
         tpl.type,
         tpl.stack,
         tpl.defaultRules,
-        JSON.stringify(tpl.apkConfig)
+        '{}'
       );
 
       const snapshot: Record<string, string> = {};
@@ -452,10 +445,7 @@ export async function seedDemoWorkspaceAsync(): Promise<void> {
         JSON.stringify(snapshot)
       );
 
-      const userPrompt =
-        tpl.type === 'web'
-          ? 'Buat aplikasi todo dengan database SQLite dan filter prioritas.'
-          : 'Buat aplikasi Android pencatat kebiasaan harian dengan Capacitor dan SQLite.';
+      const userPrompt = 'Buat aplikasi todo dengan database SQLite dan filter prioritas.';
 
       await tx.run(
         `INSERT INTO messages (id, project_id, role, content, mode) VALUES (?, ?, 'user', ?, 'build')`,
@@ -477,12 +467,8 @@ export async function seedDemoWorkspaceAsync(): Promise<void> {
          VALUES (?, ?, 'assistant', ?, 'build', ?, ?, ?, ?, ?, ?, ?)`,
         msgId,
         projectId,
-        tpl.type === 'web'
-          ? 'Proyek aplikasi Todo fullstack telah dibuat lengkap dengan frontend, API CRUD, dan skema tabel SQLite `todos`. Preview dan tab Database siap digunakan.'
-          : 'Proyek Android Pencatat Kebiasaan berbasis Capacitor telah disiapkan bersama konfigurasi manifest Android dan tabel SQLite `habits`. Gunakan tombol Build APK untuk mengemas artefak debug.',
-        tpl.type === 'web'
-          ? '1. Siapkan skema tabel SQLite todos\n2. Bangun antarmuka daftar tugas dengan filter prioritas\n3. Hubungkan operasi tambah, ubah status, dan hapus ke API'
-          : '1. Siapkan konfigurasi Capacitor dan AndroidManifest.xml\n2. Bangun antarmuka mobile pencatat kebiasaan\n3. Hubungkan data rangkaian harian ke tabel SQLite habits',
+        'Proyek aplikasi Todo fullstack telah dibuat lengkap dengan frontend, API CRUD, dan skema tabel SQLite `todos`. Preview dan tab Database siap digunakan.',
+        '1. Siapkan skema tabel SQLite todos\n2. Bangun antarmuka daftar tugas dengan filter prioritas\n3. Hubungkan operasi tambah, ubah status, dan hapus ke API',
         JSON.stringify(toolEvents),
         'gemini',
         'gemini-4-hydrogen',

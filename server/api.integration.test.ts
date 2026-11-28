@@ -153,7 +153,7 @@ test('Auth security: register, login, logout invalidation, magic-link no-takeove
   assert.equal(afterLogout.status, 401);
 });
 
-test('Authorization & IDOR protection: User B is blocked from User A projects, builds, keys, and previews', async () => {
+test('Authorization & IDOR protection: User B is blocked from User A projects, keys, and previews', async () => {
   resetRateLimitsForTest();
 
   const loginA = await apiJson('/api/auth/login', {
@@ -168,7 +168,7 @@ test('Authorization & IDOR protection: User B is blocked from User A projects, b
   });
   const tokenB = String(regB.json.sessionToken);
 
-  // User A creates a project and a provider key and starts an APK build
+  // User A creates a project and a provider key
   const projRes = await apiJson('/api/projects', {
     method: 'POST',
     token: tokenA,
@@ -185,24 +185,7 @@ test('Authorization & IDOR protection: User B is blocked from User A projects, b
   assert.equal(keyRes.status, 201);
   const keyAId = String((keyRes.json.key as { id: string }).id);
 
-  const buildRes = await apiJson(`/api/projects/${projectAId}/builds`, {
-    method: 'POST',
-    token: tokenA,
-    body: {
-      config: {
-        appName: 'Alice <App> "1"',
-        packageId: 'id.carmen.aliceapp',
-        versionName: '1.0.0',
-        versionCode: 1,
-        iconColor: '#C8324B',
-        buildType: 'debug',
-      },
-    },
-  });
-  assert.equal(buildRes.status, 201);
-  const buildAId = String((buildRes.json.build as { id: string }).id);
-
-  // User B tries to access User A's project workspace, files, DB, terminal, preview-token, export, and build
+  // User B tries to access User A's project workspace, files, DB, terminal, preview-token, and export
   assert.equal((await apiJson(`/api/projects/${projectAId}/workspace`, { token: tokenB })).status, 404);
   assert.equal(
     (
@@ -227,8 +210,6 @@ test('Authorization & IDOR protection: User B is blocked from User A projects, b
   );
   assert.equal((await apiJson(`/api/projects/${projectAId}/preview-token`, { token: tokenB })).status, 404);
   assert.equal((await apiJson(`/api/projects/${projectAId}/export.zip`, { token: tokenB })).status, 404);
-  assert.equal((await apiJson(`/api/builds/${buildAId}`, { token: tokenB })).status, 404);
-  assert.equal((await apiJson(`/api/builds/${buildAId}/logs`, { token: tokenB })).status, 404);
 
   // User B tries to bind User A's provider key to User B's profile
   const hijackKey = await apiJson('/api/auth/profile', {
@@ -383,7 +364,7 @@ test('Real sandbox execution runs real node commands and strips host secrets fro
   assert.match(String(attachSave.json.runtimeError), /ATTACH/i);
 });
 
-test('ZIP export excludes secrets/env and Android toolchain endpoint reports honest host status', async () => {
+test('ZIP export excludes secrets/env and scrubs embedded API keys', async () => {
   resetRateLimitsForTest();
 
   const loginA = await apiJson('/api/auth/login', {
@@ -391,12 +372,6 @@ test('ZIP export excludes secrets/env and Android toolchain endpoint reports hon
     body: { email: 'alice@example.com', password: 'password123' },
   });
   const tokenA = String(loginA.json.sessionToken);
-
-  const tcRes = await apiJson('/api/system/android-toolchain', { token: tokenA });
-  assert.equal(tcRes.status, 200);
-  const tc = tcRes.json.toolchain as { readyForNativeApk: boolean; missing: string[] };
-  assert.equal(typeof tc.readyForNativeApk, 'boolean');
-  assert.ok(Array.isArray(tc.missing));
 
   const projRes = await apiJson('/api/projects', {
     method: 'POST',
@@ -428,7 +403,7 @@ test('ZIP export excludes secrets/env and Android toolchain endpoint reports hon
   assert.equal(appJs.includes('sk-ant-secret'), false, 'Embedded API keys must be scrubbed');
 });
 
-test('Dedicated Coarena AI provider CRUD, sandbox-status, preview-error reporting, and release keystore validation', async () => {
+test('Dedicated Coarena AI provider CRUD, sandbox-status, and preview-error reporting', async () => {
   resetRateLimitsForTest();
 
   const loginA = await apiJson('/api/auth/login', {
@@ -688,7 +663,7 @@ test('Version restore creates an automatic pre-restore backup snapshot before ov
   assert.equal(backupFiles['pre-restore-marker.txt'], 'UNSAVED_WORK_KEEP_IN_BACKUP');
 });
 
-test('AAB build queueing & artifact metadata, custom-PK queryTable, Sec-Fetch-Site CSRF, and JSON /api/* 404', async () => {
+test('Custom-PK queryTable, Sec-Fetch-Site CSRF, and JSON /api/* 404', async () => {
   resetRateLimitsForTest();
 
   const loginA = await apiJson('/api/auth/login', {
@@ -700,7 +675,7 @@ test('AAB build queueing & artifact metadata, custom-PK queryTable, Sec-Fetch-Si
   const projRes = await apiJson('/api/projects', {
     method: 'POST',
     token: tokenA,
-    body: { name: 'AAB and Table Test', type: 'android' },
+    body: { name: 'Custom PK and Table Test', type: 'web' },
   });
   assert.equal(projRes.status, 201);
   const projectId = String((projRes.json.project as { id: string }).id);
@@ -743,45 +718,6 @@ INSERT OR IGNORE INTO custom_pk_items (sku, qty) VALUES ('SKU-001', 5);`,
   const rowsJson = (await rowsRes.json()) as { rows: Array<{ sku: string; qty: number }> };
   assert.equal(rowsJson.rows.length, 1);
   assert.equal(rowsJson.rows[0].sku, 'SKU-001');
-
-  // 4. Queue build with format='aab' and verify getArtifactByToken handles .aab extension + MIME cleanly
-  const buildRes = await apiJson(`/api/projects/${projectId}/builds`, {
-    method: 'POST',
-    token: tokenA,
-    body: {
-      format: 'aab',
-      config: {
-        appName: 'Habit AAB',
-        packageId: 'id.carmen.habitaab',
-        versionName: '1.0.0',
-        versionCode: 1,
-        iconColor: '#C8324B',
-        buildType: 'debug',
-      },
-    },
-  });
-  assert.equal(buildRes.status, 201);
-  const buildObj = buildRes.json.build as { id: string; type: string };
-  assert.equal(buildObj.type, 'aab');
-
-  // Wait briefly for worker zip/aab build record to settle before test temp cleanup
-  await new Promise((r) => setTimeout(r, 350));
-
-  const { getArtifactByToken } = await import('./builds/apkBuilder');
-  const { ARTIFACT_DIR } = await import('./db');
-  const fsSync = await import('node:fs');
-  const pathMod = await import('node:path');
-  const fakeAabPath = pathMod.default.join(ARTIFACT_DIR, `${buildObj.id}-id.carmen.habitaab-debug.aab`);
-  fsSync.default.writeFileSync(fakeAabPath, 'aab-binary-placeholder');
-  db.prepare(`UPDATE builds SET status = 'success', artifact_path = ?, download_token = 'tok_aab_test' WHERE id = ?`).run(
-    fakeAabPath,
-    buildObj.id
-  );
-  const artifactInfo = getArtifactByToken(buildObj.id, 'tok_aab_test');
-  assert.ok(artifactInfo);
-  assert.equal(artifactInfo.artifactKind, 'debug-aab');
-  assert.equal(artifactInfo.contentType, 'application/octet-stream');
-  assert.ok(artifactInfo.fileName.endsWith('-debug.aab'), `Expected .aab filename, got ${artifactInfo.fileName}`);
 });
 
 test('Preview pipeline handles HTML, React/Vite+Tailwind, assets/fonts, CSP, error statuses (401/403/404/500), and refresh after edits', async () => {
@@ -1125,7 +1061,7 @@ createRoot(document.getElementById('root')!).render(<App />);`,
   assert.equal((missingHealth.json.health as { hasIndexHtml: boolean }).hasIndexHtml, false);
 });
 
-test('Multi-tenant upgrades: APK build status & concurrency limit, preview sleep/wake lifecycle, and isolated DB schema metadata', async () => {
+test('Multi-tenant upgrades: preview sleep/wake lifecycle and isolated DB schema metadata', async () => {
   resetRateLimitsForTest();
 
   const reg = await apiJson('/api/auth/register', {
@@ -1140,7 +1076,7 @@ test('Multi-tenant upgrades: APK build status & concurrency limit, preview sleep
   const p1Res = await apiJson('/api/projects', {
     method: 'POST',
     token,
-    body: { name: 'Tenant App One', type: 'android', templateId: 'web-todo-sqlite' },
+    body: { name: 'Tenant App One', type: 'web', templateId: 'web-todo-sqlite' },
   });
   assert.equal(p1Res.status, 201);
   const project1Id = String((p1Res.json.project as { id: string }).id);
@@ -1162,60 +1098,7 @@ test('Multi-tenant upgrades: APK build status & concurrency limit, preview sleep
   assert.equal(isolation.coreTablesSeparated, true);
   assert.ok(isolation.tenantSchema.startsWith('tenant_'));
 
-  // 2) APK build queue status endpoint (/api/builds/:id/status) & per-user concurrent limit (429)
-  const prevApkLimit = process.env.APK_MAX_CONCURRENT_PER_USER;
-  process.env.APK_MAX_CONCURRENT_PER_USER = '1';
-  try {
-    const build1 = await apiJson(`/api/projects/${project1Id}/builds`, {
-      method: 'POST',
-      token,
-      body: {
-        format: 'apk',
-        config: {
-          appName: 'Tenant APK',
-          packageId: 'id.carmen.tenantapk',
-          versionName: '1.0.0',
-          versionCode: 1,
-          iconColor: '#C8324B',
-          buildType: 'debug',
-        },
-      },
-    });
-    assert.equal(build1.status, 201);
-    const buildId = String((build1.json.build as { id: string }).id);
-
-    const statusRes = await apiJson(`/api/builds/${buildId}/status`, { token });
-    assert.equal(statusRes.status, 200);
-    assert.ok(['queued', 'building', 'completed', 'failed'].includes(String(statusRes.json.status)));
-    assert.equal(statusRes.json.queueMode, 'local-async');
-
-    // Immediately submitting a second concurrent build for the same user hits APK_MAX_CONCURRENT_PER_USER=1
-    const build2 = await apiJson(`/api/projects/${project1Id}/builds`, {
-      method: 'POST',
-      token,
-      body: {
-        format: 'apk',
-        config: {
-          appName: 'Tenant APK 2',
-          packageId: 'id.carmen.tenantapk2',
-          versionName: '1.0.0',
-          versionCode: 1,
-          iconColor: '#C8324B',
-          buildType: 'debug',
-        },
-      },
-    });
-    assert.equal(build2.status, 429);
-    assert.equal(build2.json.code, 'BUILD_LIMIT_EXCEEDED');
-
-    // Let async local build finish cleanly
-    await new Promise((r) => setTimeout(r, 400));
-  } finally {
-    if (prevApkLimit === undefined) delete process.env.APK_MAX_CONCURRENT_PER_USER;
-    else process.env.APK_MAX_CONCURRENT_PER_USER = prevApkLimit;
-  }
-
-  // 3) Preview auto-sleep, eviction when exceeding PREVIEW_MAX_CONCURRENT_PER_USER, and seamless wake preserving files
+  // 2) Preview auto-sleep, eviction when exceeding PREVIEW_MAX_CONCURRENT_PER_USER, and seamless wake preserving files
   const { previewLifecycleManager } = await import('./runtime/preview');
   const prevMaxPreviews = process.env.PREVIEW_MAX_CONCURRENT_PER_USER;
   process.env.PREVIEW_MAX_CONCURRENT_PER_USER = '1';
@@ -1555,10 +1438,6 @@ test('Group E audit fixes: corrupt DB JSON resilience, disk binary ZIP export, t
      VALUES ('key_corrupt_e', ?, 'custom', 'Corrupt Key', 'dummy', '9999', '{not-valid-json', 1)`
   ).run(userId);
   db.prepare(
-    `INSERT INTO builds (id, project_id, type, status, config_json, logs_json, artifact_path, download_token, expires_at)
-     VALUES ('bld_corrupt_e', ?, 'apk', 'success', '{bad-cfg', '{bad-logs', NULL, 'tok-e', datetime('now', '+1 day'))`
-  ).run(projectId);
-  db.prepare(
     `INSERT INTO deployments (id, project_id, target, status, deployment_url, external_id, project_name, logs_json)
      VALUES ('dep_corrupt_e', ?, 'self-hosted', 'ready', NULL, NULL, 'app', '{bad-deploy-logs')`
   ).run(projectId);
@@ -1570,21 +1449,13 @@ test('Group E audit fixes: corrupt DB JSON resilience, disk binary ZIP export, t
   const keysRes = await apiJson('/api/providers/keys', { token });
   assert.equal(keysRes.status, 200);
 
-  const { getBuildRecord } = await import('./builds/apkBuilder');
-  const buildRec = getBuildRecord('bld_corrupt_e');
-  assert.ok(buildRec);
-  assert.deepEqual(buildRec.logs, []);
-  assert.equal(buildRec.config.buildType, 'debug');
-
   const { getDeploymentById, listProjectDeployments } = await import('./deploy/adapters');
   assert.deepEqual(getDeploymentById('dep_corrupt_e')?.logs, []);
   assert.equal(listProjectDeployments(projectId).length, 1);
 
   // 3) Templates escape HTML when rendering user-entered items
   const { PROJECT_TEMPLATES } = await import('./templates/projectTemplates');
-  const habitTpl = PROJECT_TEMPLATES.find((t) => t.id === 'android-habit-capacitor');
   const posTpl = PROJECT_TEMPLATES.find((t) => t.id === 'web-umkm-inventory');
-  assert.ok(habitTpl?.files['index.html']?.includes('escapeHtml(h.name)'));
   assert.ok(posTpl?.files['index.html']?.includes('escapeHtml(p.sku)'));
   assert.ok(posTpl?.files['index.html']?.includes('escapeHtml(p.name)'));
 
@@ -1725,19 +1596,15 @@ test('Session cookie persists across reloads with Partitioned attribute on HTTPS
   const meReloadJson = (await meReloadRes.json()) as { user: { id: string } };
   assert.equal(meReloadJson.user.id, userAId);
 
-  // 3) Create project, build, and deployment for User A and another project for User B
+  // 3) Create project and deployment for User A and another project for User B
   const projARes = await apiJson('/api/projects', {
     method: 'POST',
     token: regBody.sessionToken,
-    body: { name: 'Alpha Tracker', type: 'android' },
+    body: { name: 'Alpha Tracker', type: 'web' },
   });
   assert.equal(projARes.status, 201);
   const projAId = String((projARes.json.project as { id: string }).id);
 
-  db.prepare(
-    `INSERT INTO builds (id, project_id, type, status, config_json, logs_json, expires_at)
-     VALUES ('bld_act_a', ?, 'apk', 'success', '{}', '[]', datetime('now', '+1 day'))`
-  ).run(projAId);
   db.prepare(
     `INSERT INTO deployments (id, project_id, target, status, deployment_url, project_name, logs_json)
      VALUES ('dep_act_a', ?, 'self-hosted', 'ready', 'https://alpha.example.com', 'alpha-tracker', '[]')`
@@ -1756,19 +1623,17 @@ test('Session cookie persists across reloads with Partitioned attribute on HTTPS
   });
   assert.equal(projBRes.status, 201);
 
-  // 4) /api/activity must contain User A's edits, builds, deployments, and creations, and zero User B projects
+  // 4) /api/activity must contain User A's edits, deployments, and creations, and zero User B projects
   const actARes = await apiJson('/api/activity', { token: regBody.sessionToken });
   assert.equal(actARes.status, 200);
   const recentA = actARes.json.recentActivity as Array<{ kind: string; projectId: string; projectName: string }>;
   const logA = actARes.json.activityLog as Array<{ kind: string; projectId: string; projectName: string }>;
 
   assert.equal(recentA.some((item) => item.projectId === projAId && item.kind === 'edit'), true);
-  assert.equal(recentA.some((item) => item.projectId === projAId && item.kind === 'build'), true);
   assert.equal(recentA.some((item) => item.projectId === projAId && item.kind === 'deployment'), true);
   assert.equal(recentA.some((item) => item.projectName === 'Secret Beta Project'), false);
 
   assert.equal(logA.some((item) => item.projectId === projAId && item.kind === 'project'), true);
-  assert.equal(logA.some((item) => item.projectId === projAId && item.kind === 'build'), true);
   assert.equal(logA.some((item) => item.projectName === 'Secret Beta Project'), false);
 
   // 5) Workspace payload includes deployments array for the current project Activity tab
@@ -1790,75 +1655,6 @@ test('Session cookie persists across reloads with Partitioned attribute on HTTPS
   assert.equal(afterLogoutRes.status, 200);
   const afterLogoutJson = (await afterLogoutRes.json()) as { user: unknown };
   assert.equal(afterLogoutJson.user, null);
-});
-
-test('Build artifact download requires owner authentication, enforces success status, and sets Cache-Control no-store', async () => {
-  resetRateLimitsForTest();
-
-  const regOwner = await apiJson('/api/auth/register', {
-    method: 'POST',
-    body: { email: 'dl.owner@example.com', password: 'password123', name: 'Build Owner' },
-  });
-  assert.equal(regOwner.status, 201);
-  const ownerToken = String(regOwner.json.sessionToken);
-
-  const regOther = await apiJson('/api/auth/register', {
-    method: 'POST',
-    body: { email: 'dl.other@example.com', password: 'password123', name: 'Other User' },
-  });
-  assert.equal(regOther.status, 201);
-  const otherToken = String(regOther.json.sessionToken);
-
-  const projRes = await apiJson('/api/projects', {
-    method: 'POST',
-    token: ownerToken,
-    body: { name: 'Build Auth App', type: 'android' },
-  });
-  assert.equal(projRes.status, 201);
-  const projectId = String((projRes.json.project as { id: string }).id);
-
-  const { ARTIFACT_DIR } = await import('./db');
-  const fsSync = await import('node:fs');
-  const pathMod = await import('node:path');
-  const buildId = 'bld_dl_auth_test';
-  const artifactPath = pathMod.default.join(ARTIFACT_DIR, `${buildId}-demo-debug.apk`);
-  fsSync.default.writeFileSync(artifactPath, 'apk-binary-payload');
-
-  db.prepare(
-    `INSERT INTO builds (id, project_id, type, status, config_json, logs_json, artifact_path, download_token, expires_at)
-     VALUES (?, ?, 'apk', 'queued', '{}', '[]', ?, 'tok_dl_secret', datetime('now', '+1 day'))`
-  ).run(buildId, projectId, artifactPath);
-
-  // 1) Unauthenticated download rejected (401)
-  const unauthRes = await fetch(`${baseUrl}/api/builds/${buildId}/download?token=tok_dl_secret`);
-  assert.equal(unauthRes.status, 401);
-
-  // 2) Cross-user download rejected (404)
-  const crossRes = await fetch(`${baseUrl}/api/builds/${buildId}/download?token=tok_dl_secret`, {
-    headers: { Authorization: `Bearer ${otherToken}` },
-  });
-  assert.equal(crossRes.status, 404);
-
-  // 3) Owner cannot download while status !== 'success' (404)
-  const nonSuccessRes = await fetch(`${baseUrl}/api/builds/${buildId}/download?token=tok_dl_secret`, {
-    headers: { Authorization: `Bearer ${ownerToken}` },
-  });
-  assert.equal(nonSuccessRes.status, 404);
-
-  // 4) Once status === 'success', owner downloads with valid token & Cache-Control: no-store
-  db.prepare(`UPDATE builds SET status = 'success' WHERE id = ?`).run(buildId);
-  const okRes = await fetch(`${baseUrl}/api/builds/${buildId}/download?token=tok_dl_secret`, {
-    headers: { Authorization: `Bearer ${ownerToken}` },
-  });
-  assert.equal(okRes.status, 200);
-  assert.equal(okRes.headers.get('cache-control'), 'no-store');
-  assert.equal(await okRes.text(), 'apk-binary-payload');
-
-  // 5) Wrong token rejected (404)
-  const badTokRes = await fetch(`${baseUrl}/api/builds/${buildId}/download?token=wrong`, {
-    headers: { Authorization: `Bearer ${ownerToken}` },
-  });
-  assert.equal(badTokRes.status, 404);
 });
 
 test('ZIP importer rejects symlinks and oversized file counts without creating orphaned project rows', async () => {
@@ -2564,7 +2360,7 @@ test('Phase 5: Per-category rate limiter emits X-RateLimit-* + Retry-After heade
   assert.match(String(bombRes.json.error || ''), /Rasio kompresi/i);
 });
 
-test('Audit Hardening: /api/health exposes rateLimiter & DB TLS metadata, JSON null bodies return 400 cleanly, and build cancel enforces ownership', async () => {
+test('Audit Hardening: /api/health exposes rateLimiter & DB TLS metadata, JSON null bodies return 400 cleanly, and removed Android routes return 404', async () => {
   resetRateLimitsForTest();
 
   // 1) /api/health exposes rateLimiter and database ssl/directUrl fields cleanly
@@ -2586,54 +2382,11 @@ test('Audit Hardening: /api/health exposes rateLimiter & DB TLS metadata, JSON n
   });
   assert.equal(nullLoginRes.status, 400);
 
-  // 3) POST /api/builds/:id/cancel enforces authentication & project ownership (404 cross-user, 200/409 owner)
-  const userA = await apiJson('/api/auth/register', {
-    method: 'POST',
-    body: { email: 'cancel-a@example.com', password: 'password123', name: 'Cancel A' },
-  });
-  assert.equal(userA.status, 201);
-  const tokenA = String(userA.json.sessionToken);
-
-  const userB = await apiJson('/api/auth/register', {
-    method: 'POST',
-    body: { email: 'cancel-b@example.com', password: 'password123', name: 'Cancel B' },
-  });
-  assert.equal(userB.status, 201);
-  const tokenB = String(userB.json.sessionToken);
-
-  const projRes = await apiJson('/api/projects', {
-    method: 'POST',
-    token: tokenA,
-    body: { name: 'CancelAuthzApp', type: 'android' },
-  });
-  assert.equal(projRes.status, 201);
-  const projId = String((projRes.json.project as { id: string }).id);
-
-  // Insert a queued build directly so we can reliably test cancel ownership before worker completes it
-  const queuedBuildId = `bld_intcan_${Date.now()}`;
-  const dbMod = await import('./db');
-  dbMod.db
-    .prepare(
-      `INSERT INTO builds (id, project_id, type, status, config_json, logs_json, expires_at) VALUES (?, ?, 'apk', 'queued', '{}', '[]', ?)`
-    )
-    .run(queuedBuildId, projId, new Date(Date.now() + 3_600_000).toISOString());
-
-  // Unauthenticated -> 401
-  const unauthCancel = await apiJson(`/api/builds/${queuedBuildId}/cancel`, { method: 'POST' });
-  assert.equal(unauthCancel.status, 401);
-
-  // Cross-user User B -> 404 (prevents build ID enumeration)
-  const crossUserCancel = await apiJson(`/api/builds/${queuedBuildId}/cancel`, { method: 'POST', token: tokenB });
-  assert.equal(crossUserCancel.status, 404);
-
-  // Owner User A -> 200 cancelled
-  const ownerCancel = await apiJson(`/api/builds/${queuedBuildId}/cancel`, { method: 'POST', token: tokenA });
-  assert.equal(ownerCancel.status, 200);
-  assert.equal((ownerCancel.json.build as { status?: string })?.status, 'failed');
-
-  // Cancelling an already-failed build returns 409
-  const repeatCancel = await apiJson(`/api/builds/${queuedBuildId}/cancel`, { method: 'POST', token: tokenA });
-  assert.equal(repeatCancel.status, 409);
+  // 3) Removed Android Builder endpoints return clean JSON 404
+  const removedToolchain = await apiJson('/api/system/android-toolchain');
+  assert.equal(removedToolchain.status, 404);
+  const removedBuildStatus = await apiJson('/api/builds/bld_removed/status');
+  assert.equal(removedBuildStatus.status, 404);
 });
 
 test('Internal Preview Engine Repair: proxy origin/CSP/base alignment, code-split dist chunks, non-blocking 202 install + reset ownership, and fullstack API proxy recovery', async () => {

@@ -1,7 +1,7 @@
 export type Locale = 'id' | 'en';
 export type ThemeMode = 'dark' | 'light';
 export type AccentColorId = 'crimson' | 'cobalt' | 'emerald' | 'amber' | 'indigo';
-export type ProjectType = 'web' | 'android';
+export type ProjectType = 'web';
 
 export type BuiltInProviderId = 'anthropic' | 'openai' | 'openrouter' | 'groq' | 'gemini' | 'coarena';
 export type ProviderType = BuiltInProviderId | 'custom';
@@ -70,16 +70,6 @@ export interface ProviderModel {
   isNonChat?: boolean;
 }
 
-export interface ApkConfig {
-  appName: string;
-  packageId: string;
-  versionName: string;
-  versionCode: number;
-  iconColor: string;
-  buildType: 'debug' | 'release';
-  hasKeystore?: boolean;
-}
-
 export interface ProjectSummary {
   id: string;
   name: string;
@@ -87,7 +77,6 @@ export interface ProjectSummary {
   stack: string;
   archived: boolean;
   rules: string;
-  apkConfig: ApkConfig;
   fileCount: number;
   versionCount: number;
   createdAt: string;
@@ -192,66 +181,6 @@ export interface BuildLogEntry {
   message: string;
 }
 
-export interface ApkSigningCredentials {
-  storePassword: string;
-  keyAlias: string;
-  keyPassword: string;
-}
-
-export type ApkArtifactKind =
-  | 'capacitor-source-zip'
-  | 'debug-apk'
-  | 'signed-release-apk'
-  | 'unsigned-release-apk'
-  | 'debug-aab'
-  | 'signed-release-aab'
-  | 'unsigned-release-aab';
-
-export interface ApkBuildRecord {
-  id: string;
-  projectId: string;
-  type: 'apk' | 'aab';
-  status: 'queued' | 'running' | 'success' | 'failed';
-  config: ApkConfig;
-  logs: BuildLogEntry[];
-  downloadToken?: string | null;
-  artifactSizeBytes?: number | null;
-  artifactKind?: ApkArtifactKind;
-  signingVerified?: boolean;
-  createdAt: string;
-  expiresAt: string;
-}
-
-export interface BuildJobStatusResponse {
-  id: string;
-  projectId: string;
-  type: 'apk' | 'aab';
-  status: 'queued' | 'building' | 'completed' | 'failed';
-  buildStatus: ApkBuildRecord['status'];
-  queueMode: 'bullmq' | 'local-async';
-  logsCount: number;
-  logs: BuildLogEntry[];
-  downloadToken?: string | null;
-  artifactSizeBytes?: number | null;
-  artifactKind?: ApkArtifactKind;
-  signingVerified?: boolean;
-  createdAt: string;
-  expiresAt: string;
-}
-
-export interface AndroidToolchainStatus {
-  readyForNativeApk: boolean;
-  jdk: { available: boolean; version?: string };
-  javac: { available: boolean; version?: string };
-  gradle: { available: boolean; version?: string };
-  androidSdk: { available: boolean; path?: string };
-  apksigner?: { available: boolean; path?: string };
-  jarsigner?: { available: boolean; version?: string };
-  keytool?: { available: boolean; version?: string };
-  missing: string[];
-  installInstructions: string[];
-}
-
 export interface SandboxIsolationStatus {
   driver: 'docker' | 'podman' | 'linux-namespace' | 'restricted-host';
   osLevelIsolation: boolean;
@@ -349,8 +278,6 @@ export interface ToastNotification {
   title: string;
   message: string;
   projectId?: string;
-  buildId?: string;
-  downloadToken?: string;
   downloadUrl?: string;
   actionLabel?: string;
   openProjectLabel?: string;
@@ -358,7 +285,7 @@ export interface ToastNotification {
 
 export interface DashboardActivityItem {
   id: string;
-  kind: 'edit' | 'build' | 'deployment';
+  kind: 'edit' | 'deployment';
   projectId: string;
   projectName: string;
   projectType: ProjectType;
@@ -370,7 +297,7 @@ export interface DashboardActivityItem {
 
 export interface ActivityLogEntry {
   id: string;
-  kind: 'project' | 'build';
+  kind: 'project';
   projectId: string;
   projectName: string;
   projectType: ProjectType;

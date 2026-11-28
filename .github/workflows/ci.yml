@@ -19,14 +19,12 @@ on:
       - 'index.html'
       - 'metadata.json'
       - 'Dockerfile'
-      - 'Dockerfile.android'
       - '.dockerignore'
       - '.env.example'
       - 'public/**'
       - 'docker-compose.yml'
       - 'Caddyfile'
       - '.github/workflows/ci.yml'
-      - '.github/workflows/android-build.yml'
   pull_request:
     branches:
       - main
@@ -44,14 +42,12 @@ on:
       - 'index.html'
       - 'metadata.json'
       - 'Dockerfile'
-      - 'Dockerfile.android'
       - '.dockerignore'
       - '.env.example'
       - 'public/**'
       - 'docker-compose.yml'
       - 'Caddyfile'
       - '.github/workflows/ci.yml'
-      - '.github/workflows/android-build.yml'
 
 permissions:
   contents: read
@@ -94,7 +90,7 @@ jobs:
       - name: Gate 4 — Skill engine & skill-optional invariant tests
         run: npm run test:skills
 
-      - name: Gate 5 — Core unit tests (agent, providers, builds, deploy, db dialect)
+      - name: Gate 5 — Core unit tests (agent, providers, deploy, db dialect)
         run: npm run test:unit
 
       - name: Gate 6 — Concurrency, reliability, benchmark & API integration tests

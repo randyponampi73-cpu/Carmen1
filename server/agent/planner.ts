@@ -223,7 +223,7 @@ export function buildExecutionPlan(params: {
   isBlankStarter: boolean;
   projectHandoff?: string;
 }): AgentExecutionPlan {
-  const { prompt, mode, projectType, existingFiles, lastError, isBlankStarter, projectHandoff } = params;
+  const { prompt, mode, existingFiles, lastError, isBlankStarter, projectHandoff } = params;
   const continuation = mode === 'build' && isContinuationPrompt(prompt);
   const handoffCtx = continuation ? parseProjectHandoffForPlan(projectHandoff) : null;
 
@@ -334,7 +334,7 @@ export function buildExecutionPlan(params: {
     const wantsDbOrBackend =
       FULLSTACK_KEYWORDS.test(prompt) ||
       (PERSISTENT_DATA_APP_KEYWORDS.test(prompt) && !EXPLICIT_STATIC_KEYWORDS.test(prompt));
-    const needsDb = projectType === 'android' ? FULLSTACK_KEYWORDS.test(prompt) : wantsDbOrBackend;
+    const needsDb = wantsDbOrBackend;
     const steps: StructuredPlanStep[] = [
       { id: 'step_1', phase: 'design', title: 'Rancang struktur UI responsif, alur data, dan komponen utama', status: 'pending' },
       ...(needsDb

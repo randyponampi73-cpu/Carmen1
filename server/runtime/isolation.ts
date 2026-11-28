@@ -184,8 +184,7 @@ export function buildContainerRunArgs(opts: ContainerRunArgsOptions): string[] {
       k === 'TEMP' ||
       k === 'TMP' ||
       k === 'PATH' ||
-      k === 'npm_config_cache' ||
-      k === 'GRADLE_USER_HOME'
+      k === 'npm_config_cache'
     ) {
       continue;
     }
@@ -197,9 +196,7 @@ export function buildContainerRunArgs(opts: ContainerRunArgsOptions): string[] {
     '-e',
     'TMPDIR=/tmp',
     '-e',
-    'npm_config_cache=/tmp/.npm',
-    '-e',
-    'GRADLE_USER_HOME=/tmp/.gradle'
+    'npm_config_cache=/tmp/.npm'
   );
   containerArgs.push(opts.image, resolveContainerExecutable(opts.bin), ...opts.args);
   return containerArgs;
@@ -215,8 +212,6 @@ const CONTAINER_BARE_EXECUTABLES = new Set([
   'python',
   'sh',
   'bash',
-  'gradle',
-  'gradlew',
 ]);
 
 /**
@@ -800,10 +795,6 @@ export function spawnIsolatedProcess(opts: IsolatedSpawnOptions): IsolatedSpawnH
     sandboxTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `carmen-tmp-${safeProject}-`));
     const npmCacheSubdir = path.join(sandboxTmpDir, 'npm-cache');
     fs.mkdirSync(npmCacheSubdir, { recursive: true });
-    const gradleHomeSubdir = path.join(sandboxTmpDir, '.gradle');
-    if (opts.env.GRADLE_USER_HOME) {
-      fs.mkdirSync(gradleHomeSubdir, { recursive: true });
-    }
 
     const resolvedWorkspace = path.resolve(opts.workspaceDir);
     const resolvedDataDir = path.resolve(DATA_DIR);
@@ -839,7 +830,6 @@ export function spawnIsolatedProcess(opts: IsolatedSpawnOptions): IsolatedSpawnH
       TEMP: sandboxTmpDir,
       TMP: sandboxTmpDir,
       npm_config_cache: npmCacheSubdir,
-      ...(opts.env.GRADLE_USER_HOME ? { GRADLE_USER_HOME: path.join(sandboxTmpDir, '.gradle') } : {}),
     };
 
     if (caps.setprivAvailable) {

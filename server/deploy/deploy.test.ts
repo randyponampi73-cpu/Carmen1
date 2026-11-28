@@ -1,15 +1,10 @@
 import assert from 'node:assert/strict';
-import { execFile, execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { promisify } from 'node:util';
 import JSZip from 'jszip';
-
-const execFileAsync = promisify(execFile);
 import { checkSqliteIntegrity, rollbackLastSqliteMigration, runSqliteMigrations } from '../db/migrations';
 import {
   buildTenantSchemaProvisionSql,
@@ -168,7 +163,7 @@ describe('Database Migrations, Postgres Config & Real Deployment Adapters', () =
     assert.equal(fullstackJsArtifacts.Dockerfile.includes('npx'), false);
 
     const composeRaw = fs.readFileSync(path.resolve(process.cwd(), 'docker-compose.yml'), 'utf8');
-    assert.match(composeRaw, /profiles:\s*\["apk-queue"\]/);
+    assert.match(composeRaw, /profiles:\s*\["redis"\]/);
 
     const record = await deployMod.executeDeployment({
       projectId,
@@ -361,65 +356,5 @@ describe('Database Migrations, Postgres Config & Real Deployment Adapters', () =
     assert.equal(cfManifest['/public/logo.png'], expectedHash);
     const cfBlob = cfForm!.get(expectedHash) as File;
     assert.deepEqual(Buffer.from(await cfBlob.arrayBuffer()), pngBytes);
-  });
-
-  it('verifies Android worker non-HTTP healthcheck checks live worker PID, fresh heartbeat, and Redis PING (F-12)', async () => {
-    const dockerAndroid = fs.readFileSync(path.resolve(process.cwd(), 'Dockerfile.android'), 'utf8');
-    assert.equal(dockerAndroid.includes('/api/health'), false, 'Dockerfile.android must not use web HTTP healthcheck');
-    assert.match(dockerAndroid, /scripts\/apk-worker-healthcheck\.mjs/);
-    assert.match(dockerAndroid, /worker:apk/);
-
-    const composeRaw = fs.readFileSync(path.resolve(process.cwd(), 'docker-compose.yml'), 'utf8');
-    assert.match(composeRaw, /apk-worker:[\s\S]*scripts\/apk-worker-healthcheck\.mjs/);
-
-    const scriptPath = path.resolve(process.cwd(), 'scripts/apk-worker-healthcheck.mjs');
-    const healthFile = path.join(tempDir, 'apk-worker-health.json');
-
-    // Fails when heartbeat file is missing
-    assert.throws(() =>
-      execFileSync(process.execPath, [scriptPath], {
-        env: { ...process.env, REDIS_URL: 'redis://127.0.0.1:6399', CARMEN_APK_WORKER_HEALTH_FILE: healthFile },
-        stdio: 'pipe',
-      })
-    );
-
-    // Fails when heartbeat is stale
-    fs.writeFileSync(
-      healthFile,
-      JSON.stringify({ pid: process.pid, running: true, updatedAt: new Date(Date.now() - 120_000).toISOString() })
-    );
-    assert.throws(() =>
-      execFileSync(process.execPath, [scriptPath], {
-        env: { ...process.env, REDIS_URL: 'redis://127.0.0.1:6399', CARMEN_APK_WORKER_HEALTH_FILE: healthFile },
-        stdio: 'pipe',
-      })
-    );
-
-    // Passes ONLY when heartbeat is fresh, PID is alive, AND Redis responds +PONG
-    const server = net.createServer((socket) => {
-      socket.on('data', (chunk) => {
-        if (chunk.toString('utf8').includes('PING')) {
-          socket.write('+PONG\r\n');
-        }
-      });
-    });
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
-    const addr = server.address() as net.AddressInfo;
-
-    try {
-      fs.writeFileSync(
-        healthFile,
-        JSON.stringify({ pid: process.pid, running: true, updatedAt: new Date().toISOString() })
-      );
-      await execFileAsync(process.execPath, [scriptPath], {
-        env: {
-          ...process.env,
-          REDIS_URL: `redis://127.0.0.1:${addr.port}`,
-          CARMEN_APK_WORKER_HEALTH_FILE: healthFile,
-        },
-      });
-    } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    }
   });
 });

@@ -10,7 +10,6 @@ import {
   Loader2,
   Lock,
   Rocket,
-  Smartphone,
   X,
 } from 'lucide-react';
 import { useMemo, useRef, useState } from 'react';
@@ -106,11 +105,10 @@ export function HomeView({
   const t = COPY[locale];
   const [homeTab, setHomeTab] = useState<'overview' | 'activity-log'>('overview');
   const [prompt, setPrompt] = useState('');
-  const [projectType, setProjectType] = useState<ProjectType>('web');
   const [submitting, setSubmitting] = useState(false);
   const [creatingTemplate, setCreatingTemplate] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [pendingChip, setPendingChip] = useState<{ label: string; prompt: string; type: 'web' | 'android' } | null>(null);
+  const [pendingChip, setPendingChip] = useState<{ label: string; prompt: string; type: ProjectType } | null>(null);
   const [attachedImage, setAttachedImage] = useState<{
     name: string;
     base64: string;
@@ -178,7 +176,7 @@ export function HomeView({
     try {
       await onStartFromPrompt({
         prompt: prompt.trim(),
-        type: projectType,
+        type: 'web',
         imageBase64: attachedImage?.base64,
         imageMimeType: attachedImage?.mimeType,
       });
@@ -227,9 +225,8 @@ export function HomeView({
     reader.readAsDataURL(file);
   }
 
-  function applySuggestion(chip: { label: string; prompt: string; type: 'web' | 'android' }) {
+  function applySuggestion(chip: { label: string; prompt: string; type: ProjectType }) {
     setPrompt(chip.prompt);
-    setProjectType(chip.type);
     setPendingChip(null);
     requestAnimationFrame(() => promptRef.current?.focus());
   }
@@ -354,40 +351,6 @@ export function HomeView({
 
                 <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-2.5 sm:gap-2 border-t border-[var(--border)] px-3 py-2.5 sm:py-2">
                   <div className="flex flex-wrap items-center gap-2 min-w-0">
-                    {/* Web | Android segmented toggle */}
-                    <div
-                      role="group"
-                      aria-label={t.projectTypeGroupAria}
-                      className="inline-flex items-center rounded-[6px] border border-[var(--border)] bg-[var(--surface-2)] p-0.5 shrink-0"
-                    >
-                      <button
-                        type="button"
-                        onClick={() => setProjectType('web')}
-                        aria-pressed={projectType === 'web'}
-                        className={`h-8 sm:h-7 px-2.5 rounded-[5px] text-[12px] font-medium flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
-                          projectType === 'web'
-                            ? 'bg-[var(--surface)] text-[var(--text)] border border-[var(--border)]'
-                            : 'text-[var(--text-muted)] hover:text-[var(--text)]'
-                        }`}
-                      >
-                        <Globe className="w-3.5 h-3.5" strokeWidth={1.5} />
-                        <span>{t.web}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setProjectType('android')}
-                        aria-pressed={projectType === 'android'}
-                        className={`h-8 sm:h-7 px-2.5 rounded-[5px] text-[12px] font-medium flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
-                          projectType === 'android'
-                            ? 'bg-[var(--surface)] text-[var(--text)] border border-[var(--border)]'
-                            : 'text-[var(--text-muted)] hover:text-[var(--text)]'
-                        }`}
-                      >
-                        <Smartphone className="w-3.5 h-3.5" strokeWidth={1.5} />
-                        <span>{t.android}</span>
-                      </button>
-                    </div>
-
                     {/* Model dropdown */}
                     <div className="flex-1 min-w-[160px] sm:flex-none sm:w-[250px] max-w-full">
                       <ModelSelect
@@ -570,12 +533,8 @@ export function HomeView({
                           <div className="text-[13px] font-semibold text-[var(--text)] truncate">{proj.name}</div>
                           <div className="text-[12px] text-[var(--text-muted)] flex items-center gap-2 font-mono tabular-nums">
                             <span className="inline-flex items-center gap-1 font-sans">
-                              {proj.type === 'android' ? (
-                                <Smartphone className="w-3 h-3" strokeWidth={1.6} />
-                              ) : (
-                                <Globe className="w-3 h-3" strokeWidth={1.6} />
-                              )}
-                              <span>{proj.type === 'android' ? t.android : t.web}</span>
+                              <Globe className="w-3 h-3" strokeWidth={1.6} />
+                              <span>{t.web}</span>
                             </span>
                             <span aria-hidden="true">·</span>
                             <span>{proj.fileCount} {t.colFile.toLowerCase()}</span>
@@ -614,12 +573,8 @@ export function HomeView({
                             </td>
                             <td className="py-2.5 px-3 text-[var(--text-muted)] whitespace-nowrap">
                               <span className="inline-flex items-center gap-1.5">
-                                {proj.type === 'android' ? (
-                                  <Smartphone className="w-3.5 h-3.5" strokeWidth={1.5} />
-                                ) : (
-                                  <Globe className="w-3.5 h-3.5" strokeWidth={1.5} />
-                                )}
-                                <span>{proj.type === 'android' ? t.android : t.web}</span>
+                                <Globe className="w-3.5 h-3.5" strokeWidth={1.5} />
+                                <span>{t.web}</span>
                               </span>
                             </td>
                             <td className="py-2.5 px-3 text-[var(--text-muted)] hidden md:table-cell truncate max-w-[260px]">
@@ -755,17 +710,11 @@ export function HomeView({
                   <div className="divide-y divide-[var(--border)] max-h-[220px] overflow-y-auto -mx-1 px-1">
                     {recentActivity.slice(0, 8).map((item) => {
                       const Icon =
-                        item.kind === 'build'
-                          ? Smartphone
-                          : item.kind === 'deployment'
-                            ? Rocket
-                            : GitCommitHorizontal;
+                        item.kind === 'deployment' ? Rocket : GitCommitHorizontal;
                       const kindText =
-                        item.kind === 'build'
-                          ? t.activityKindBuild
-                          : item.kind === 'deployment'
-                            ? t.activityKindDeployment
-                            : t.activityKindEdit;
+                        item.kind === 'deployment'
+                          ? t.activityKindDeployment
+                          : t.activityKindEdit;
 
                       return (
                         <div key={item.id} className="py-2 flex items-start justify-between gap-3 text-[12px]">
@@ -821,7 +770,7 @@ export function HomeView({
                   >
                     <div>
                       <div className="flex items-center justify-between gap-2 text-[12px] text-[var(--text-muted)] mb-1">
-                        <span>{tpl.type === 'android' ? 'Android · Capacitor' : 'Web · Fullstack'}</span>
+                        <span>Web · Fullstack</span>
                       </div>
                       <h3 className="text-[14px] font-semibold text-[var(--text)]">
                         {locale === 'id' ? tpl.name : tpl.nameEn}
@@ -890,14 +839,8 @@ export function HomeView({
                         <tr key={entry.id} className="hover:bg-[var(--surface-2)]">
                           <td className="py-2.5 px-4 whitespace-nowrap text-[var(--text)]">
                             <span className="inline-flex items-center gap-2">
-                              {entry.kind === 'project' ? (
-                                <FolderPlus className="w-3.5 h-3.5 text-[var(--text-muted)]" strokeWidth={1.5} />
-                              ) : (
-                                <Smartphone className="w-3.5 h-3.5 text-[var(--text-muted)]" strokeWidth={1.5} />
-                              )}
-                              <span>
-                                {entry.kind === 'project' ? t.activityTypeProjectCreated : t.activityTypeBuild}
-                              </span>
+                              <FolderPlus className="w-3.5 h-3.5 text-[var(--text-muted)]" strokeWidth={1.5} />
+                              <span>{t.activityTypeProjectCreated}</span>
                             </span>
                           </td>
                           <td className="py-2.5 px-3">

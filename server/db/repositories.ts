@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import type { ApkConfig, BuildLogEntry, DeploymentRecord, DeploymentTarget, UserProfile } from '../../src/types';
+import type { BuildLogEntry, DeploymentRecord, DeploymentTarget, ProjectType, UserProfile } from '../../src/types';
 import { sha256 } from '../security';
 import type { AsyncDbClient } from './client';
 import { isUniqueConstraintError, parseJsonColumn, toBooleanFlag, toIsoTimestamp } from './dialect';
@@ -8,10 +8,9 @@ export interface ProjectRecord {
   id: string;
   userId: string;
   name: string;
-  type: 'web' | 'android';
+  type: ProjectType;
   stack: string;
   rules: string;
-  apkConfig: ApkConfig;
   archived: boolean;
   createdAt: string;
   updatedAt: string;
@@ -21,15 +20,6 @@ export interface PaginationOptions {
   limit?: number;
   offset?: number;
 }
-
-const DEFAULT_APK_CONFIG: ApkConfig = {
-  appName: 'CARMEN App',
-  packageId: 'id.carmen.app',
-  versionName: '1.0.0',
-  versionCode: 1,
-  iconColor: '#C8324B',
-  buildType: 'debug',
-};
 
 function mapUser(row: Record<string, unknown>): UserProfile {
   return {
@@ -48,27 +38,14 @@ function mapUser(row: Record<string, unknown>): UserProfile {
 
 function mapProject(row: Record<string, unknown>): ProjectRecord {
   const name = String(row.name || 'CARMEN App');
-  const parsedApk = parseJsonColumn<Partial<ApkConfig>>(row.apk_config_json, {});
-  const apkConfig: ApkConfig = {
-    appName: typeof parsedApk.appName === 'string' && parsedApk.appName ? parsedApk.appName : name,
-    packageId: typeof parsedApk.packageId === 'string' && parsedApk.packageId ? parsedApk.packageId : DEFAULT_APK_CONFIG.packageId,
-    versionName: typeof parsedApk.versionName === 'string' && parsedApk.versionName ? parsedApk.versionName : DEFAULT_APK_CONFIG.versionName,
-    versionCode:
-      typeof parsedApk.versionCode === 'number' && Number.isFinite(parsedApk.versionCode)
-        ? parsedApk.versionCode
-        : DEFAULT_APK_CONFIG.versionCode,
-    iconColor: typeof parsedApk.iconColor === 'string' && parsedApk.iconColor ? parsedApk.iconColor : DEFAULT_APK_CONFIG.iconColor,
-    buildType: parsedApk.buildType === 'release' ? 'release' : 'debug',
-  };
 
   return {
     id: String(row.id),
     userId: String(row.user_id),
     name,
-    type: row.type === 'android' ? 'android' : 'web',
+    type: 'web',
     stack: String(row.stack || ''),
     rules: String(row.rules || ''),
-    apkConfig,
     archived: toBooleanFlag(row.archived),
     createdAt: toIsoTimestamp(row.created_at),
     updatedAt: toIsoTimestamp(row.updated_at),
@@ -192,10 +169,9 @@ export function createRepositories(client: AsyncDbClient) {
         id: string;
         userId: string;
         name: string;
-        type: 'web' | 'android';
+        type?: ProjectType;
         stack: string;
         rules: string;
-        apkConfig: ApkConfig;
         files: Record<string, string>;
       }): Promise<ProjectRecord> {
         return await client.transaction(async (tx) => {
@@ -204,10 +180,10 @@ export function createRepositories(client: AsyncDbClient) {
             input.id,
             input.userId,
             input.name,
-            input.type,
+            input.type ?? 'web',
             input.stack,
             input.rules,
-            JSON.stringify(input.apkConfig)
+            '{}'
           );
           for (const [filePath, content] of Object.entries(input.files)) {
             await tx.run(

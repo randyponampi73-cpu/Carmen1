@@ -1,4 +1,4 @@
-import type { ApkConfig, ProjectType } from '../../src/types';
+import type { ProjectType } from '../../src/types';
 
 export interface ProjectTemplate {
   id: string;
@@ -9,7 +9,6 @@ export interface ProjectTemplate {
   type: ProjectType;
   stack: string;
   defaultRules: string;
-  apkConfig: ApkConfig;
   files: Record<string, string>;
 }
 
@@ -266,99 +265,6 @@ router.delete('/api/todos/:id', (req, res) => {
 export default router;
 `;
 
-const HABIT_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS habits (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  target_per_week INTEGER NOT NULL DEFAULT 7,
-  streak INTEGER NOT NULL DEFAULT 0,
-  done_today INTEGER NOT NULL DEFAULT 0
-);
-INSERT INTO habits (name, target_per_week, streak, done_today)
-SELECT 'Minum 2 liter air', 7, 5, 1
-WHERE NOT EXISTS (SELECT 1 FROM habits);
-INSERT INTO habits (name, target_per_week, streak, done_today)
-SELECT 'Membaca dokumentasi 20 menit', 5, 3, 0
-WHERE (SELECT COUNT(*) FROM habits) < 2;
-INSERT INTO habits (name, target_per_week, streak, done_today)
-SELECT 'Jalan kaki 30 menit', 5, 4, 1
-WHERE (SELECT COUNT(*) FROM habits) < 3;`;
-
-const HABIT_PREVIEW_HTML = `<!doctype html>
-<html lang="id">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Kebiasaan Harian — Android</title>
-  <style>
-    :root { --bg: #0E0F11; --surface: #151618; --surface2: #1B1D20; --border: #26282C; --text: #E8E9EA; --muted: #8B8F96; --accent: #C8324B; --ok: #3FA66B; }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); padding: 16px; }
-    h1 { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
-    .sub { font-size: 12px; color: var(--muted); margin-bottom: 14px; font-variant-numeric: tabular-nums; }
-    form { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
-    input { flex: 1 1 150px; min-width: 0; background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 8px 10px; font-size: 13px; }
-    button { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 8px 12px; font-size: 12px; font-weight: 500; cursor: pointer; }
-    .list { display: flex; flex-direction: column; gap: 8px; }
-    .card { display: flex; align-items: center; justify-content: space-between; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
-    .card.done { border-color: var(--ok); }
-    .name { font-size: 14px; font-weight: 500; }
-    .streak { font-size: 12px; color: var(--muted); margin-top: 2px; font-variant-numeric: tabular-nums; }
-    .check { background: var(--surface2); border: 1px solid var(--border); color: var(--text); padding: 6px 10px; border-radius: 6px; font-size: 12px; }
-    .card.done .check { background: var(--ok); border-color: var(--ok); color: #fff; }
-  </style>
-</head>
-<body>
-  <h1>Kebiasaan Harian</h1>
-  <div class="sub" id="summary">Memuat...</div>
-  <form id="habit-form">
-    <input id="habit-name" type="text" placeholder="Tambah kebiasaan baru..." required />
-    <button type="submit">Tambah</button>
-  </form>
-  <div class="list" id="habit-list"></div>
-  <script>
-    const API = './api/habits';
-    let habits = [];
-    async function load() {
-      const res = await fetch(API);
-      const data = await res.json();
-      habits = data.rows || [];
-      render();
-    }
-    function escapeHtml(s) {
-      return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    }
-    function render() {
-      const done = habits.filter(h => Number(h.done_today) === 1).length;
-      document.getElementById('summary').textContent = done + ' dari ' + habits.length + ' selesai hari ini · Capacitor + SQLite';
-      document.getElementById('habit-list').innerHTML = habits.map(h => \`
-        <div class="card \${Number(h.done_today) === 1 ? 'done' : ''}">
-          <div>
-            <div class="name">\${escapeHtml(h.name)}</div>
-            <div class="streak">Rangkaian: \${Number(h.streak) || 0} hari · Target \${Number(h.target_per_week) || 0}x/minggu</div>
-          </div>
-          <button type="button" class="check" onclick="toggleHabit(\${Number(h.id) || 0}, \${Number(h.done_today) === 1 ? 0 : 1}, \${Number(h.streak) || 0})">
-            \${Number(h.done_today) === 1 ? 'Selesai' : 'Tandai'}
-          </button>
-        </div>\`).join('');
-    }
-    window.toggleHabit = async (id, nextDone, curStreak) => {
-      const streak = nextDone ? Number(curStreak) + 1 : Math.max(0, Number(curStreak) - 1);
-      await fetch(API + '/' + id, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ done_today: nextDone, streak }) });
-      await load();
-    };
-    document.getElementById('habit-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const input = document.getElementById('habit-name');
-      if (!input.value.trim()) return;
-      await fetch(API, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name: input.value.trim(), target_per_week: 7, streak: 0, done_today: 0 }) });
-      input.value = '';
-      await load();
-    });
-    load();
-  </script>
-</body>
-</html>`;
-
 const POS_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS products (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   sku TEXT NOT NULL,
@@ -440,14 +346,6 @@ export const PROJECT_TEMPLATES: ProjectTemplate[] = [
     type: 'web',
     stack: 'React + Vite + Tailwind + Node API + SQLite',
     defaultRules: 'Gunakan Bahasa Indonesia pada teks UI, simpan data ke tabel SQLite todos, dan pastikan kode tidak memuat API key.',
-    apkConfig: {
-      appName: 'Daftar Tugas',
-      packageId: 'id.carmen.todo',
-      versionName: '1.0.0',
-      versionCode: 1,
-      iconColor: '#C8324B',
-      buildType: 'debug',
-    },
     files: {
       'index.html': TODO_PREVIEW_HTML,
       'src/App.tsx': TODO_REACT_APP,
@@ -469,62 +367,6 @@ export const PROJECT_TEMPLATES: ProjectTemplate[] = [
     },
   },
   {
-    id: 'android-habit-capacitor',
-    name: 'Pencatat Kebiasaan (Android)',
-    nameEn: 'Daily Habit Tracker (Android)',
-    description: 'Aplikasi Android berbasis React + Capacitor dengan pelacak rangkaian harian dan SQLite.',
-    descriptionEn: 'Android app built with React + Capacitor with daily streak tracker and SQLite.',
-    type: 'android',
-    stack: 'React + Vite + Capacitor (Android) + SQLite',
-    defaultRules: 'Desain tata letak mobile-first selebar 390px untuk Capacitor Android dengan target sentuh minimal 44px.',
-    apkConfig: {
-      appName: 'Kebiasaan Harian',
-      packageId: 'id.carmen.habittracker',
-      versionName: '1.0.0',
-      versionCode: 1,
-      iconColor: '#C8324B',
-      buildType: 'debug',
-    },
-    files: {
-      'index.html': HABIT_PREVIEW_HTML,
-      'capacitor.config.json': JSON.stringify(
-        {
-          appId: 'id.carmen.habittracker',
-          appName: 'Kebiasaan Harian',
-          webDir: 'dist',
-          android: { allowMixedContent: false },
-        },
-        null,
-        2
-      ),
-      'android/app/src/main/AndroidManifest.xml': `<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="id.carmen.habittracker">
-  <uses-permission android:name="android.permission.INTERNET" />
-  <application android:label="Kebiasaan Harian" android:allowBackup="true">
-    <activity android:name=".MainActivity" android:exported="true">
-      <intent-filter>
-        <action android:name="android.intent.action.MAIN" />
-        <category android:name="android.intent.category.LAUNCHER" />
-      </intent-filter>
-    </activity>
-  </application>
-</manifest>`,
-      'schema.sql': HABIT_SCHEMA_SQL,
-      'package.json': JSON.stringify(
-        {
-          name: 'carmen-habit-android',
-          version: '1.0.0',
-          type: 'module',
-          scripts: { dev: 'vite', build: 'vite build', 'cap:sync': 'npx cap sync android' },
-          dependencies: { react: '^19.0.0', 'react-dom': '^19.0.0', '@capacitor/core': '^6.0.0' },
-          devDependencies: { vite: '^8.3.0' },
-        },
-        null,
-        2
-      ),
-    },
-  },
-  {
     id: 'web-umkm-inventory',
     name: 'Inventaris & Kasir UMKM',
     nameEn: 'SME Inventory & POS',
@@ -533,14 +375,6 @@ export const PROJECT_TEMPLATES: ProjectTemplate[] = [
     type: 'web',
     stack: 'React + Vite + Tailwind + Node API + SQLite',
     defaultRules: 'Gunakan angka tabular dan format Rupiah Indonesia pada tabel harga.',
-    apkConfig: {
-      appName: 'Kasir UMKM',
-      packageId: 'id.carmen.umkm',
-      versionName: '1.0.0',
-      versionCode: 1,
-      iconColor: '#C8324B',
-      buildType: 'debug',
-    },
     files: {
       'index.html': POS_PREVIEW_HTML,
       'schema.sql': POS_SCHEMA_SQL,
@@ -560,7 +394,7 @@ export const PROJECT_TEMPLATES: ProjectTemplate[] = [
   },
 ];
 
-export function buildBlankProjectFiles(name: string, type: ProjectType, _prompt?: string): Record<string, string> {
+export function buildBlankProjectFiles(name: string, _type: ProjectType = 'web', _prompt?: string): Record<string, string> {
   const safeName = name.replace(/[<>"]/g, '');
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '') || 'app';
   const html = `<!doctype html>
@@ -589,24 +423,13 @@ export function buildBlankProjectFiles(name: string, type: ProjectType, _prompt?
         version: '1.0.0',
         type: 'module',
         scripts: { dev: 'vite', build: 'vite build' },
-        dependencies:
-          type === 'android'
-            ? { react: '^19.0.0', 'react-dom': '^19.0.0', '@capacitor/core': '^6.0.0' }
-            : { react: '^19.0.0', 'react-dom': '^19.0.0', express: '^4.21.0' },
+        dependencies: { react: '^19.0.0', 'react-dom': '^19.0.0', express: '^4.21.0' },
         devDependencies: { vite: '^8.3.0' },
       },
       null,
       2
     ),
   };
-
-  if (type === 'android') {
-    files['capacitor.config.json'] = JSON.stringify(
-      { appId: `id.carmen.${slug}`, appName: safeName, webDir: 'dist' },
-      null,
-      2
-    );
-  }
 
   return files;
 }

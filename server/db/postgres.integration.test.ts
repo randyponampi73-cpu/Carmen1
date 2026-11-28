@@ -101,14 +101,6 @@ describe('Live PostgreSQL Integration Verification (Requires Real PostgreSQL Ser
         type: 'web',
         stack: 'React + Express + PostgreSQL',
         rules: '',
-        apkConfig: {
-          appName: 'PG Live App',
-          packageId: 'id.carmen.pglive',
-          versionName: '1.0.0',
-          versionCode: 1,
-          iconColor: '#C8324B',
-          buildType: 'debug',
-        },
         files: {
           'client/index.html': '<!doctype html><html><body><h1>Live PG</h1></body></html>',
           'server/index.ts': 'export const pg = true;',

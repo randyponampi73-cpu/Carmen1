@@ -10,11 +10,10 @@ import {
   scrubClientPreviewMessage,
   type PreviewLifecycleStage,
 } from '../../lib/previewState';
-import type { Locale, ProjectType } from '../../types';
+import type { Locale } from '../../types';
 
 interface PreviewPaneProps {
   projectId: string;
-  projectType: ProjectType;
   locale: Locale;
   reloadKey: number;
   previewToken?: string;
@@ -53,7 +52,6 @@ function generateBridgeNonce(): string {
 
 export function PreviewPane({
   projectId,
-  projectType,
   locale,
   reloadKey,
   previewToken,
@@ -71,7 +69,7 @@ export function PreviewPane({
   onPreviewStatusChange,
 }: PreviewPaneProps) {
   const t = COPY[locale];
-  const [viewport, setViewport] = useState<ViewportPreset>(projectType === 'android' ? 'mobile' : 'desktop');
+  const [viewport, setViewport] = useState<ViewportPreset>('desktop');
   const [stage, setStage] = useState<PreviewLifecycleStage>(
     isEmptyApp ? 'empty' : installingDependencies ? 'installing' : 'loading_html'
   );
@@ -726,8 +724,7 @@ export function PreviewPane({
         <div className={`${frameClass} flex flex-col overflow-hidden relative`}>
           {viewport === 'mobile' && (
             <div className="h-7 border-b border-[var(--border)] bg-[var(--surface)] px-3 flex items-center justify-between text-[12px] font-mono text-[var(--text-muted)] shrink-0">
-              <span>{projectType === 'android' ? 'Android · 390×760' : 'Mobile · 390px'}</span>
-              {projectType === 'android' && <span>Capacitor</span>}
+              <span>Mobile · 390px</span>
             </div>
           )}
           {isEmptyApp ? (

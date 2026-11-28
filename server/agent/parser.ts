@@ -114,7 +114,6 @@ export function buildAgentSystemPrompt(params: {
 }): string {
   const {
     projectName,
-    projectType,
     stack,
     filePaths,
     rules,
@@ -135,7 +134,7 @@ export function buildAgentSystemPrompt(params: {
 
   const lines: string[] = [
     'Kamu adalah agent pembuat aplikasi web full-stack profesional di dalam platform CARMEN.',
-    `Proyek aktif: "${projectName}" (Tipe: ${projectType === 'android' ? 'Android Capacitor APK' : 'Web Fullstack'}, Stack: ${stack}).`,
+    `Proyek aktif: "${projectName}" (Tipe: Web Fullstack, Stack: ${stack}).`,
     'Aturan keamanan mutlak:',
     '- JANGAN PERNAH menulis API key, token rahasia, atau kredensial ke dalam file proyek.',
     '- JANGAN menjalankan perintah destruktif di luar direktori proyek.',

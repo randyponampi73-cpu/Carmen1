@@ -16,7 +16,6 @@ import {
   MessageSquare,
   PanelLeft,
   Rocket,
-  Smartphone,
   Terminal as TerminalIcon,
   X,
 } from 'lucide-react';
@@ -27,7 +26,6 @@ import { api, getAuthHeaders, loadLocalOnlyKeys, notifyUnauthorized, type Worksp
 import type {
   AgentPlanSummary,
   AgentTaskState,
-  ApkBuildRecord,
   FallbackEvent,
   Locale,
   PreviewHealthReport,
@@ -47,7 +45,7 @@ import { DatabasePane } from './workspace/DatabasePane';
 import { DeployModal } from './workspace/DeployModal';
 import { PreviewPane } from './workspace/PreviewPane';
 import { TerminalPane } from './workspace/TerminalPane';
-import { ApkBuildModal, DiffModal, EnvVarsModal, ProjectRulesModal } from './workspace/WorkspaceModals';
+import { DiffModal, EnvVarsModal, ProjectRulesModal } from './workspace/WorkspaceModals';
 
 const CodePane = lazy(() =>
   import('./workspace/CodePane').then((m) => ({ default: m.CodePane }))
@@ -62,7 +60,6 @@ interface WorkspaceViewProps {
   onSelectModelKey: (k: string) => void;
   initialPromptToRun?: { prompt: string; imageBase64?: string; imageMimeType?: string } | null;
   onConsumedInitialPrompt?: () => void;
-  onTrackBuild?: (build: ApkBuildRecord, projectName?: string) => void;
   onBack: () => void;
   onOpenSettings: () => void;
 }
@@ -79,7 +76,6 @@ export function WorkspaceView({
   onSelectModelKey,
   initialPromptToRun,
   onConsumedInitialPrompt,
-  onTrackBuild,
   onBack,
   onOpenSettings,
 }: WorkspaceViewProps) {
@@ -120,7 +116,7 @@ export function WorkspaceView({
   const [hasUnsavedFiles, setHasUnsavedFiles] = useState(false);
   const [confirmExitOpen, setConfirmExitOpen] = useState(false);
 
-  const [modal, setModal] = useState<'none' | 'apk' | 'env' | 'rules' | 'deploy'>('none');
+  const [modal, setModal] = useState<'none' | 'env' | 'rules' | 'deploy'>('none');
   const [diffVersionId, setDiffVersionId] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(1);
 
@@ -199,13 +195,6 @@ export function WorkspaceView({
       setNameDraft(ws.project.name);
       previewTokenIssuedAtRef.current = Date.now();
       setLoadError(null);
-      if (onTrackBuild) {
-        for (const b of ws.builds) {
-          if (b.status === 'queued' || b.status === 'running') {
-            onTrackBuild(b, ws.project.name);
-          }
-        }
-      }
       api
         .getPreviewHealth(projectId)
         .then((res) => setPreviewHealth(res.health))
@@ -219,7 +208,7 @@ export function WorkspaceView({
     } finally {
       setLoading(false);
     }
-  }, [projectId, t.workspaceLoadFail, onTrackBuild]);
+  }, [projectId, t.workspaceLoadFail]);
 
   const refreshPreviewTokenIfNeeded = useCallback(async (force = false): Promise<string | null> => {
     if (!force && Date.now() - previewTokenIssuedAtRef.current <= 55 * 60_000) return null;
@@ -1007,7 +996,6 @@ export function WorkspaceView({
   const previewPaneElement = (
     <PreviewPane
       projectId={projectId}
-      projectType={data.project.type}
       locale={locale}
       reloadKey={reloadKey}
       previewToken={data.previewToken}
@@ -1284,26 +1272,14 @@ export function WorkspaceView({
             )}
           </div>
 
-          {data.project.type === 'android' ? (
-            <button
-              type="button"
-              onClick={() => setModal('apk')}
-              className="h-8 sm:h-7 px-2 sm:px-3 rounded-[6px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-[12px] font-medium flex items-center gap-1 sm:gap-1.5 whitespace-nowrap cursor-pointer"
-            >
-              <Smartphone className="w-3.5 h-3.5" strokeWidth={1.5} />
-              <span className="hidden sm:inline">{t.buildApk}</span>
-              <span className="sm:hidden">APK</span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setModal('deploy')}
-              className="h-8 sm:h-7 px-2 sm:px-3 rounded-[6px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-[12px] font-medium flex items-center gap-1 sm:gap-1.5 whitespace-nowrap cursor-pointer"
-            >
-              <Rocket className="w-3.5 h-3.5" strokeWidth={1.5} />
-              <span>{t.deploy}</span>
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => setModal('deploy')}
+            className="h-8 sm:h-7 px-2 sm:px-3 rounded-[6px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-[12px] font-medium flex items-center gap-1 sm:gap-1.5 whitespace-nowrap cursor-pointer"
+          >
+            <Rocket className="w-3.5 h-3.5" strokeWidth={1.5} />
+            <span>{t.deploy}</span>
+          </button>
         </div>
       </header>
 
@@ -1435,7 +1411,6 @@ export function WorkspaceView({
                   files={data.files}
                   versions={data.versions}
                   messages={data.messages}
-                  builds={data.builds}
                   deployments={data.deployments ?? []}
                   onOpenDiff={(vid) => setDiffVersionId(vid)}
                   onOpenCodeTab={() => setActiveTab('code')}
@@ -1512,7 +1487,6 @@ export function WorkspaceView({
                 files={data.files}
                 versions={data.versions}
                 messages={data.messages}
-                builds={data.builds}
                 deployments={data.deployments ?? []}
                 onOpenDiff={(vid) => setDiffVersionId(vid)}
                 onOpenCodeTab={() => {
@@ -1561,24 +1535,6 @@ export function WorkspaceView({
       )}
 
       {/* MODALS */}
-      {modal === 'apk' && (
-        <ApkBuildModal
-          projectId={projectId}
-          initialConfig={data.project.apkConfig}
-          existingBuilds={data.builds}
-          locale={locale}
-          onBuildQueued={(build) => onTrackBuild?.(build, data.project.name)}
-          onClose={() => {
-            setModal('none');
-            void loadWorkspace();
-          }}
-          onFixWithAi={(err) => {
-            if (isMobile) setMobileTab('chat');
-            void handleSendPrompt(err);
-          }}
-        />
-      )}
-
       {modal === 'env' && (
         <EnvVarsModal
           projectId={projectId}

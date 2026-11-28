@@ -88,7 +88,6 @@ test('Resource budget scales conservatively from actual host CPU/RAM and honors 
   assert.equal(smallHost.hostTotalMemoryMb, 2048);
   assert.equal(smallHost.maxConcurrentSandboxes, 2);
   assert.equal(smallHost.maxConcurrentAgentSessions, 5);
-  assert.equal(smallHost.maxConcurrentApkBuildsGlobal, 1);
 
   const prodHost = computeRuntimeResourceBudget(
     { CARMEN_MAX_CONCURRENT_SANDBOXES: '6', CARMEN_MAX_CONCURRENT_AGENT_SESSIONS: '12' },
@@ -162,14 +161,6 @@ test('10 concurrent asyncDb.transaction mutations serialize cleanly without SQLi
         type: 'web',
         stack: 'HTML + SQLite',
         rules: '',
-        apkConfig: {
-          appName: `TX App ${idx}`,
-          packageId: `id.carmen.tx${idx}`,
-          versionName: '1.0.0',
-          versionCode: 1,
-          iconColor: '#C8324B',
-          buildType: 'debug',
-        },
         files: {
           'index.html': `<!doctype html><html><body><h1>TX-${idx}</h1></body></html>`,
         },

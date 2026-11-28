@@ -1,10 +1,5 @@
 import type {
   ActivityLogEntry,
-  AndroidToolchainStatus,
-  ApkBuildRecord,
-  ApkConfig,
-  ApkSigningCredentials,
-  BuildJobStatusResponse,
   ChatMessage,
   DashboardActivityItem,
   DatabaseIsolationInfo,
@@ -120,7 +115,6 @@ export interface WorkspacePayload {
   versions: ProjectVersion[];
   envVars: EnvVarItem[];
   logs: TerminalLogEntry[];
-  builds: ApkBuildRecord[];
   deployments?: DeploymentRecord[];
 }
 
@@ -310,7 +304,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
-  updateProject: (id: string, body: Partial<{ name: string; archived: boolean; rules: string; apkConfig: ApkConfig }>) =>
+  updateProject: (id: string, body: Partial<{ name: string; archived: boolean; rules: string }>) =>
     request<{ ok: boolean }>(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   duplicateProject: (id: string) =>
     request<{ id: string; name: string }>(`/api/projects/${id}/duplicate`, { method: 'POST' }),
@@ -415,53 +409,12 @@ export const api = {
     return { deployment: data.deployment, artifacts: data.artifacts, error: data.error };
   },
 
-  // System Sandbox, Provider Health & Android Toolchain / APK Builds
+  // System Sandbox & Provider Health
   getProviderHealth: () =>
     request<{ health: Array<{ key: string; consecutiveFailures: number; cooldownUntil: number; lastErrorCode?: string }> }>(
       '/api/system/provider-health'
     ),
   getSandboxStatus: () => request<{ sandbox: SandboxIsolationStatus }>('/api/system/sandbox-status'),
-  getAndroidToolchain: () => request<{ toolchain: AndroidToolchainStatus }>('/api/system/android-toolchain'),
-  startApkBuild: (
-    projectId: string,
-    config: ApkConfig,
-    keystoreBase64?: string,
-    signingCredentials?: ApkSigningCredentials,
-    format: 'apk' | 'aab' = 'apk'
-  ) =>
-    request<{ build: ApkBuildRecord }>(`/api/projects/${projectId}/builds`, {
-      method: 'POST',
-      body: JSON.stringify({ config, keystoreBase64, signingCredentials, format }),
-    }),
-  getBuild: (buildId: string) => request<{ build: ApkBuildRecord }>(`/api/builds/${buildId}`),
-  getBuildStatus: (buildId: string) => request<BuildJobStatusResponse>(`/api/builds/${buildId}/status`),
-  cancelApkBuild: (buildId: string) =>
-    request<{ build: ApkBuildRecord }>(`/api/builds/${buildId}/cancel`, { method: 'POST' }),
-  downloadBuildArtifact: async (buildId: string, token: string) => {
-    const res = await fetch(`/api/builds/${buildId}/download?token=${encodeURIComponent(token)}`, {
-      credentials: 'include',
-      headers: { ...getAuthHeaders() },
-    });
-    if (res.status === 401) {
-      notifyUnauthorized();
-      throw new Error(defaultUnauthorizedMessage);
-    }
-    if (!res.ok) {
-      throw new Error(`Gagal mengunduh artefak build (HTTP ${res.status}).`);
-    }
-    const blob = await res.blob();
-    const disp = res.headers.get('content-disposition') || '';
-    const match = disp.match(/filename="([^"]+)"/);
-    const filename = match?.[1] || `${buildId}.apk`;
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  },
 
   // Dynamic Skill Intelligence System
   listSkills: (params?: {

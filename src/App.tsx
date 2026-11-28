@@ -11,7 +11,6 @@ import { applyAccentCssVariables, getStoredAccentId, saveStoredAccentId } from '
 import type {
   AccentColorId,
   ActivityLogEntry,
-  ApkBuildRecord,
   DashboardActivityItem,
   Locale,
   ProjectSummary,
@@ -104,22 +103,13 @@ export default function App() {
   const [activityLoading, setActivityLoading] = useState(false);
   const [templates, setTemplates] = useState<TemplateItem[]>([]);
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
-  const [trackedBuildIds, setTrackedBuildIds] = useState<string[]>([]);
 
   const userRef = useRef<UserProfile | null>(null);
-  const projectsRef = useRef<ProjectSummary[]>([]);
   const toastTimersRef = useRef<Map<string, number>>(new Map());
-  const trackedBuildMetaRef = useRef<Map<string, { projectId: string; projectName: string; format: 'apk' | 'aab' }>>(
-    new Map()
-  );
 
   useEffect(() => {
     userRef.current = user;
   }, [user]);
-
-  useEffect(() => {
-    projectsRef.current = projects;
-  }, [projects]);
 
   const effectiveTheme: ThemeMode = user?.theme ?? guestTheme;
   const effectiveLocale: Locale = user?.locale ?? guestLocale;
@@ -174,8 +164,6 @@ export default function App() {
       setProjects([]);
       setRecentActivity([]);
       setActivityLog([]);
-      setTrackedBuildIds([]);
-      trackedBuildMetaRef.current.clear();
       clearAllToasts();
       setAuthNotice(msg || t.sessionExpired);
     });
@@ -339,76 +327,6 @@ export default function App() {
     }
   }, []);
 
-  const handleTrackBuild = useCallback((build: ApkBuildRecord, projectName?: string) => {
-    if (build.status !== 'queued' && build.status !== 'running') return;
-    const knownProject =
-      projectName ||
-      build.config?.appName ||
-      projectsRef.current.find((p) => p.id === build.projectId)?.name ||
-      build.projectId;
-    trackedBuildMetaRef.current.set(build.id, {
-      projectId: build.projectId,
-      projectName: knownProject,
-      format: build.type,
-    });
-    setTrackedBuildIds((prev) => (prev.includes(build.id) ? prev : [...prev, build.id]));
-  }, []);
-
-  // Poll any active background APK/AAB builds and emit success/error toast on completion
-  useEffect(() => {
-    if (trackedBuildIds.length === 0 || !user) return;
-    let cancelled = false;
-
-    const checkBuilds = async () => {
-      for (const buildId of trackedBuildIds) {
-        if (cancelled) return;
-        try {
-          const st = await api.getBuildStatus(buildId);
-          if (cancelled) return;
-          if (st.buildStatus === 'success' || st.buildStatus === 'failed') {
-            const meta = trackedBuildMetaRef.current.get(buildId);
-            trackedBuildMetaRef.current.delete(buildId);
-            setTrackedBuildIds((prev) => prev.filter((id) => id !== buildId));
-
-            const t = COPY[userRef.current?.locale ?? effectiveLocale];
-            const formatUpper = (st.type || meta?.format || 'apk').toUpperCase();
-            const projName = meta?.projectName || st.projectId;
-            const hasDownload = st.buildStatus === 'success' && Boolean(st.downloadToken);
-
-            pushToast({
-              id: `toast_build_${st.id}`,
-              type: st.buildStatus === 'success' ? 'success' : 'error',
-              title: (st.buildStatus === 'success' ? t.apkToastSuccessTitle : t.apkToastFailTitle).replace(
-                '{format}',
-                formatUpper
-              ),
-              message: (st.buildStatus === 'success' ? t.apkToastSuccessMsg : t.apkToastFailMsg).replace(
-                '{name}',
-                projName
-              ),
-              projectId: st.projectId,
-              buildId: hasDownload ? st.id : undefined,
-              downloadToken: hasDownload ? (st.downloadToken ?? undefined) : undefined,
-              actionLabel: hasDownload ? t.apkToastDownload : undefined,
-              openProjectLabel: t.apkToastOpenProject,
-            });
-            void loadActivity();
-          }
-        } catch {
-          // Ignore transient polling failure
-        }
-      }
-    };
-
-    const timer = window.setInterval(() => {
-      void checkBuilds();
-    }, 2500);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [trackedBuildIds, user, effectiveLocale, pushToast, loadActivity]);
-
   const hydrateAuthed = useCallback(
     async (u: UserProfile) => {
       setUser(u);
@@ -469,8 +387,6 @@ export default function App() {
     setProjects([]);
     setRecentActivity([]);
     setActivityLog([]);
-    setTrackedBuildIds([]);
-    trackedBuildMetaRef.current.clear();
     clearAllToasts();
   }
 
@@ -490,8 +406,6 @@ export default function App() {
     setProjects([]);
     setRecentActivity([]);
     setActivityLog([]);
-    setTrackedBuildIds([]);
-    trackedBuildMetaRef.current.clear();
     clearAllToasts();
   }
 
@@ -501,16 +415,6 @@ export default function App() {
       closeLabel={COPY[effectiveLocale].close}
       onDismiss={dismissToast}
       onOpenProject={(pid) => setActiveProjectId(pid)}
-      onDownloadBuild={(buildId, token) => {
-        void api.downloadBuildArtifact(buildId, token).catch((err) => {
-          pushToast({
-            id: `toast_dl_err_${buildId}`,
-            type: 'error',
-            title: COPY[effectiveLocale].apkStartBuildFail,
-            message: err instanceof Error ? err.message : COPY[effectiveLocale].apkStartBuildFail,
-          });
-        });
-      }}
     />
   );
 
@@ -587,7 +491,6 @@ export default function App() {
             onSelectModelKey={setSelectedModelKey}
             initialPromptToRun={pendingPrompt}
             onConsumedInitialPrompt={() => setPendingPrompt(null)}
-            onTrackBuild={handleTrackBuild}
             onBack={() => {
               setActiveProjectId(null);
               void loadProjects();

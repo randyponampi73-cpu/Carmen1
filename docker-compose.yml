@@ -42,7 +42,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    profiles: ["apk-queue"]
+    profiles: ["redis"]
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
     volumes:
@@ -76,7 +76,6 @@ services:
       PGBOUNCER_ENABLED: ${PGBOUNCER_ENABLED:-true}
       PGBOUNCER_POOL_MODE: ${PGBOUNCER_POOL_MODE:-transaction}
       REDIS_URL: ${REDIS_URL:-}
-      APK_MAX_CONCURRENT_PER_USER: ${APK_MAX_CONCURRENT_PER_USER:-2}
       SANDBOX_MAX_CPU: ${SANDBOX_MAX_CPU:-0.5}
       SANDBOX_MAX_MEMORY_MB: ${SANDBOX_MAX_MEMORY_MB:-512}
       PREVIEW_IDLE_TIMEOUT_MS: ${PREVIEW_IDLE_TIMEOUT_MS:-900000}
@@ -93,42 +92,6 @@ services:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 20s
       timeout: 5s
-      retries: 3
-
-  apk-worker:
-    build:
-      context: .
-      dockerfile: Dockerfile.android
-    profiles: ["apk-queue"]
-    restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    command: ["npm", "run", "worker:apk"]
-    depends_on:
-      redis:
-        condition: service_healthy
-      app:
-        condition: service_healthy
-    environment:
-      NODE_ENV: production
-      ENCRYPTION_SECRET: ${ENCRYPTION_SECRET:?Set ENCRYPTION_SECRET (32+ random chars)}
-      CARMEN_MASTER_KEY: ${CARMEN_MASTER_KEY:-}
-      CARMEN_DB_PATH: /app/data/carmen.db
-      CARMEN_DB_DRIVER: ${CARMEN_DB_DRIVER:-sqlite}
-      DATABASE_URL: ${DATABASE_URL:-}
-      PG_POOL_MAX: ${PG_POOL_MAX:-20}
-      PG_IDLE_TIMEOUT_MS: ${PG_IDLE_TIMEOUT_MS:-30000}
-      REDIS_URL: ${REDIS_URL:-}
-      APK_WORKER_CONCURRENCY: ${APK_WORKER_CONCURRENCY:-2}
-      SANDBOX_MAX_CPU: ${SANDBOX_MAX_CPU:-0.5}
-      SANDBOX_MAX_MEMORY_MB: ${SANDBOX_MAX_MEMORY_MB:-512}
-    volumes:
-      - carmen_data:/app/data
-    healthcheck:
-      test: ["CMD", "node", "scripts/apk-worker-healthcheck.mjs"]
-      interval: 20s
-      timeout: 10s
-      start_period: 20s
       retries: 3
 
   caddy:

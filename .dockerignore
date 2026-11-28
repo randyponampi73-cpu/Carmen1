@@ -1,6 +1,5 @@
 node_modules
 dist
-.android-ci
 data
 .env
 .env.*

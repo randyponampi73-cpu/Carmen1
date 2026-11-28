@@ -1,6 +1,5 @@
 import 'dotenv/config';
 import crypto from 'node:crypto';
-import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import cookieParser from 'cookie-parser';
@@ -10,7 +9,6 @@ import JSZip from 'jszip';
 import { createServer as createViteServer } from 'vite';
 import type {
   ActivityLogEntry,
-  ApkConfig,
   DashboardActivityItem,
   DeploymentTarget,
   ModelTier,
@@ -35,22 +33,7 @@ import {
   stopAllAgentSessions,
 } from './server/agent/orchestrator';
 import { providerHealthMonitor, type RouteCandidate } from './server/agent/router';
-import {
-  cancelApkBuildAsync,
-  cleanupExpiredBuildArtifactsAsync,
-  cleanupProjectBuildArtifactsAsync,
-  closeApkQueueConnections,
-  detectAndroidToolchain,
-  enqueueApkBuild,
-  getArtifactByTokenAsync,
-  getBuildJobStatusAsync,
-  getBuildOwnerUserIdAsync,
-  getBuildRecordAsync,
-  listProjectBuildsAsync,
-  recoverPendingApkBuildsAsync,
-  subscribeBuild,
-  validateRedisConfiguration,
-} from './server/builds/apkBuilder';
+import { validateRedisConfiguration } from './server/runtime/redisConfig';
 import {
   ACTIVE_DB_DRIVER,
   asyncDb,
@@ -130,7 +113,6 @@ import {
   sanitizeDownloadFilename,
   scrubSecrets,
   sha256,
-  validateApkConfig,
   validateCustomBaseUrl,
   validateProviderChatPath,
   validateProviderExtraHeaders,
@@ -427,7 +409,6 @@ const cleanupTimer = setInterval(() => {
     }
   }
   void import('./server/db').then((m) => m.cleanupExpiredSessionsAsync()).catch(() => {});
-  void cleanupExpiredBuildArtifactsAsync().catch(() => {});
 }, 5 * 60_000);
 cleanupTimer.unref();
 
@@ -461,14 +442,6 @@ const importRateLimiter = createCategoryRateLimiter({
   getMax: () => readRateLimitNumber('CARMEN_IMPORT_RATE_LIMIT_PER_5M', 20, 5, 500),
   keyBy: 'userOrIp',
   errorMessage: 'Batas permintaan impor ZIP tercapai. Coba lagi beberapa menit lagi.',
-});
-
-const buildRateLimiter = createCategoryRateLimiter({
-  category: 'build',
-  windowMs: 5 * 60_000,
-  getMax: () => readRateLimitNumber('CARMEN_BUILD_RATE_LIMIT_PER_5M', 20, 5, 500),
-  keyBy: 'userOrIp',
-  errorMessage: 'Batas antrean build APK per 5 menit tercapai. Tunggu sebentar sebelum memulai build baru.',
 });
 
 const skillWriteRateLimiter = createCategoryRateLimiter({
@@ -701,51 +674,9 @@ const requireProjectOwner = asyncHandler(async (req: AuthedRequest, res: Respons
   next();
 });
 
-/**
- * Centralized build ownership authorization middleware (prevents cross-user IDOR on /api/builds/:id/*).
- */
-const requireBuildOwner = asyncHandler(async (req: AuthedRequest, res: Response, next: NextFunction) => {
-  if (!req.user) {
-    res.status(401).json({ error: 'Sesi tidak ditemukan. Silakan masuk terlebih dahulu.' });
-    return;
-  }
-  const ownerUserId = await getBuildOwnerUserIdAsync(req.params.id);
-  if (!ownerUserId || ownerUserId !== req.user.id) {
-    res.status(404).json({ error: 'Build tidak ditemukan.' });
-    return;
-  }
-  next();
-});
-
 function safeParseStringArrayJson(raw: unknown): string[] {
   const parsed = parseJsonColumn<unknown>(raw, []);
   return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
-}
-
-function safeParseApkConfigJson(raw: unknown, fallbackAppName: string): ApkConfig {
-  const slug = fallbackAppName.toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 18) || 'app';
-  const defaults: ApkConfig = {
-    appName: fallbackAppName || 'CARMEN App',
-    packageId: `id.carmen.${slug}`,
-    versionName: '1.0.0',
-    versionCode: 1,
-    iconColor: '#C8324B',
-    buildType: 'debug',
-  };
-  const parsed = parseJsonColumn<Partial<ApkConfig> | null>(raw, null);
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return defaults;
-  return {
-    appName: typeof parsed.appName === 'string' && parsed.appName ? parsed.appName : defaults.appName,
-    packageId: typeof parsed.packageId === 'string' && parsed.packageId ? parsed.packageId : defaults.packageId,
-    versionName:
-      typeof parsed.versionName === 'string' && parsed.versionName ? parsed.versionName : defaults.versionName,
-    versionCode:
-      typeof parsed.versionCode === 'number' && Number.isFinite(parsed.versionCode)
-        ? parsed.versionCode
-        : defaults.versionCode,
-    iconColor: typeof parsed.iconColor === 'string' && parsed.iconColor ? parsed.iconColor : defaults.iconColor,
-    buildType: parsed.buildType === 'release' ? 'release' : 'debug',
-  };
 }
 
 function mapProviderKeyRow(row: Record<string, unknown>): ProviderKeyRecord {
@@ -1121,7 +1052,6 @@ app.delete('/api/auth/account', requireAuth, asyncHandler(async (req: AuthedRequ
     clearProjectCheckpoint(p.id);
     previewLifecycleManager.removeProjectSession(p.id);
     projectRuntime.cleanupProjectSandbox(p.id);
-    await cleanupProjectBuildArtifactsAsync(p.id);
   }
   await asyncDb.run('DELETE FROM users WHERE id = ?', u.id);
   const opts = getSessionCookieOptions(req);
@@ -1135,7 +1065,7 @@ app.delete('/api/auth/account', requireAuth, asyncHandler(async (req: AuthedRequ
 }));
 
 // ============================================================
-// SYSTEM STATUS & HEALTH (Health, Provider Health, Sandbox, Android Toolchain)
+// SYSTEM STATUS & HEALTH (Health, Provider Health, Sandbox)
 // ============================================================
 const SERVER_STARTED_AT = Date.now();
 
@@ -1176,10 +1106,6 @@ app.get('/api/health', asyncHandler(async (_req, res) => {
 
 app.get('/api/system/provider-health', requireAuth, (_req, res) => {
   return res.json({ health: providerHealthMonitor.snapshot() });
-});
-
-app.get('/api/system/android-toolchain', requireAuth, (_req, res) => {
-  return res.json({ toolchain: detectAndroidToolchain() });
 });
 
 app.get('/api/system/sandbox-status', requireAuth, (_req, res) => {
@@ -1888,11 +1814,10 @@ app.get('/api/projects', requireAuth, asyncHandler(async (req: AuthedRequest, re
   const projects = rows.map((r) => ({
     id: String(r.id),
     name: String(r.name),
-    type: String(r.type) as ProjectType,
+    type: 'web' as ProjectType,
     stack: String(r.stack),
     archived: toBooleanFlag(r.archived),
     rules: String(r.rules || ''),
-    apkConfig: safeParseApkConfigJson(r.apk_config_json, String(r.name || 'CARMEN App')),
     fileCount: Number(r.file_count || 0),
     versionCount: Number(r.version_count || 0),
     createdAt: toIsoTimestamp(r.created_at),
@@ -1913,7 +1838,7 @@ app.get('/api/activity', requireAuth, asyncHandler(async (req: AuthedRequest, re
   const projectRows = await asyncDb.all<{
     id: string;
     name: string;
-    type: ProjectType;
+    type: string;
     stack: string;
     created_at: string;
   }>(
@@ -1931,31 +1856,12 @@ app.get('/api/activity', requireAuth, asyncHandler(async (req: AuthedRequest, re
     label: string;
     created_at: string;
     project_name: string;
-    project_type: ProjectType;
   }>(
-    `SELECT v.id, v.project_id, v.label, v.created_at, p.name AS project_name, p.type AS project_type
+    `SELECT v.id, v.project_id, v.label, v.created_at, p.name AS project_name
      FROM project_versions v
      INNER JOIN projects p ON p.id = v.project_id
      WHERE p.user_id = ?
      ORDER BY v.created_at DESC, v.rowid DESC
-     LIMIT 30`,
-    userId
-  );
-
-  const buildRows = await asyncDb.all<{
-    id: string;
-    project_id: string;
-    build_type: 'apk' | 'aab';
-    status: 'queued' | 'running' | 'success' | 'failed';
-    created_at: string;
-    project_name: string;
-    project_type: ProjectType;
-  }>(
-    `SELECT b.id, b.project_id, b.type AS build_type, b.status, b.created_at, p.name AS project_name, p.type AS project_type
-     FROM builds b
-     INNER JOIN projects p ON p.id = b.project_id
-     WHERE p.user_id = ?
-     ORDER BY b.created_at DESC, b.rowid DESC
      LIMIT 30`,
     userId
   );
@@ -1968,9 +1874,8 @@ app.get('/api/activity', requireAuth, asyncHandler(async (req: AuthedRequest, re
     deployment_url: string | null;
     created_at: string;
     project_name: string;
-    project_type: ProjectType;
   }>(
-    `SELECT d.id, d.project_id, d.target, d.status, d.deployment_url, d.created_at, p.name AS project_name, p.type AS project_type
+    `SELECT d.id, d.project_id, d.target, d.status, d.deployment_url, d.created_at, p.name AS project_name
      FROM deployments d
      INNER JOIN projects p ON p.id = d.project_id
      WHERE p.user_id = ?
@@ -1985,26 +1890,10 @@ app.get('/api/activity', requireAuth, asyncHandler(async (req: AuthedRequest, re
       kind: 'edit' as const,
       projectId: String(row.project_id),
       projectName: String(row.project_name),
-      projectType: (row.project_type === 'android' ? 'android' : 'web') as ProjectType,
+      projectType: 'web' as ProjectType,
       title: String(row.label || 'Workspace edit'),
       detail: String(row.label || 'Snapshot'),
       status: 'info' as const,
-      createdAt: toIsoTimestamp(row.created_at),
-    })),
-    ...buildRows.map((row) => ({
-      id: `build_${row.id}`,
-      kind: 'build' as const,
-      projectId: String(row.project_id),
-      projectName: String(row.project_name),
-      projectType: (row.project_type === 'android' ? 'android' : 'web') as ProjectType,
-      title: `${String(row.build_type || 'apk').toUpperCase()} build`,
-      detail: `${String(row.build_type || 'apk').toUpperCase()} · ${row.status}`,
-      status:
-        row.status === 'success'
-          ? ('success' as const)
-          : row.status === 'failed'
-            ? ('failed' as const)
-            : ('running' as const),
       createdAt: toIsoTimestamp(row.created_at),
     })),
     ...deployRows.map((row) => ({
@@ -2012,7 +1901,7 @@ app.get('/api/activity', requireAuth, asyncHandler(async (req: AuthedRequest, re
       kind: 'deployment' as const,
       projectId: String(row.project_id),
       projectName: String(row.project_name),
-      projectType: (row.project_type === 'android' ? 'android' : 'web') as ProjectType,
+      projectType: 'web' as ProjectType,
       title: `Deploy · ${row.target}`,
       detail: row.deployment_url ? `${row.target} (${row.deployment_url})` : `${row.target} · ${row.status}`,
       status:
@@ -2033,24 +1922,9 @@ app.get('/api/activity', requireAuth, asyncHandler(async (req: AuthedRequest, re
       kind: 'project' as const,
       projectId: String(row.id),
       projectName: String(row.name),
-      projectType: (row.type === 'android' ? 'android' : 'web') as ProjectType,
-      detail: String(row.stack || row.type),
+      projectType: 'web' as ProjectType,
+      detail: String(row.stack || 'web'),
       status: 'info' as const,
-      createdAt: toIsoTimestamp(row.created_at),
-    })),
-    ...buildRows.map((row) => ({
-      id: `bld_${row.id}`,
-      kind: 'build' as const,
-      projectId: String(row.project_id),
-      projectName: String(row.project_name),
-      projectType: (row.project_type === 'android' ? 'android' : 'web') as ProjectType,
-      detail: `${String(row.build_type || 'apk').toUpperCase()} · ${row.status}`,
-      status:
-        row.status === 'success'
-          ? ('success' as const)
-          : row.status === 'failed'
-            ? ('failed' as const)
-            : ('running' as const),
       createdAt: toIsoTimestamp(row.created_at),
     })),
   ]
@@ -2061,7 +1935,7 @@ app.get('/api/activity', requireAuth, asyncHandler(async (req: AuthedRequest, re
 }));
 
 app.post('/api/projects', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
-  const { name, type = 'web', templateId, initialPrompt } = req.body as {
+  const { name, templateId, initialPrompt } = req.body as {
     name?: string;
     type?: ProjectType;
     templateId?: string;
@@ -2069,31 +1943,13 @@ app.post('/api/projects', requireAuth, asyncHandler(async (req: AuthedRequest, r
   };
 
   const tpl = templateId ? PROJECT_TEMPLATES.find((t) => t.id === templateId) : undefined;
-  const projectType: ProjectType = tpl ? tpl.type : type === 'android' ? 'android' : 'web';
+  const projectType: ProjectType = 'web';
   const cleanName =
     (name || '').trim().slice(0, 80) ||
     tpl?.name ||
-    (initialPrompt
-      ? initialPrompt.trim().slice(0, 42)
-      : projectType === 'android'
-        ? 'Aplikasi Android Baru'
-        : 'Proyek Web Baru');
+    (initialPrompt ? initialPrompt.trim().slice(0, 42) : 'Proyek Web Baru');
 
-  const stack =
-    tpl?.stack ||
-    (projectType === 'android'
-      ? 'React + Vite + Capacitor (Android) + SQLite'
-      : 'React + Vite + Tailwind + Node API + SQLite');
-
-  const slug = cleanName.toLowerCase().replace(/[^a-z0-9]+/g, '') || 'app';
-  const apkConfig: ApkConfig = tpl?.apkConfig ?? {
-    appName: cleanName,
-    packageId: `id.carmen.${slug.slice(0, 18)}`,
-    versionName: '1.0.0',
-    versionCode: 1,
-    iconColor: '#C8324B',
-    buildType: 'debug',
-  };
+  const stack = tpl?.stack || 'React + Vite + Tailwind + Node API + SQLite';
 
   const projectId = `prj_${crypto.randomUUID().slice(0, 10)}`;
   const files = tpl ? tpl.files : buildBlankProjectFiles(cleanName, projectType, initialPrompt);
@@ -2107,7 +1963,7 @@ app.post('/api/projects', requireAuth, asyncHandler(async (req: AuthedRequest, r
       projectType,
       stack,
       tpl?.defaultRules || '',
-      JSON.stringify(apkConfig)
+      '{}'
     );
 
     for (const [filePath, content] of Object.entries(files)) {
@@ -2133,7 +1989,6 @@ app.post('/api/projects', requireAuth, asyncHandler(async (req: AuthedRequest, r
       stack,
       archived: false,
       rules: tpl?.defaultRules || '',
-      apkConfig,
       fileCount: Object.keys(files).length,
       versionCount: 1,
       createdAt: new Date().toISOString(),
@@ -2197,7 +2052,7 @@ function isZipSystemJunkPath(rawPath: string): boolean {
 }
 
 app.post('/api/projects/import-zip', requireAuth, importRateLimiter, asyncHandler(async (req: AuthedRequest, res) => {
-  const { name, type = 'web', zipBase64 } = req.body as {
+  const { name, zipBase64 } = req.body as {
     name?: string;
     type?: ProjectType;
     zipBase64?: string;
@@ -2219,17 +2074,8 @@ app.post('/api/projects/import-zip', requireAuth, importRateLimiter, asyncHandle
     }
     const zip = await JSZip.loadAsync(buffer);
     const projectName = (name || 'Proyek Impor ZIP').trim().slice(0, 80);
-    const projectType: ProjectType = type === 'android' ? 'android' : 'web';
+    const projectType: ProjectType = 'web';
     const projectId = `prj_${crypto.randomUUID().slice(0, 10)}`;
-
-    const apkConfig: ApkConfig = {
-      appName: projectName,
-      packageId: `id.carmen.${projectName.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 16) || 'import'}`,
-      versionName: '1.0.0',
-      versionCode: 1,
-      iconColor: '#C8324B',
-      buildType: 'debug',
-    };
 
     const MAX_IMPORT_FILES = 2000;
     const MAX_IMPORT_DIR_DEPTH = 16;
@@ -2396,7 +2242,7 @@ app.post('/api/projects/import-zip', requireAuth, importRateLimiter, asyncHandle
           projectName,
           projectType,
           'Imported ZIP Project',
-          JSON.stringify(apkConfig)
+          '{}'
         );
 
         for (const file of textFiles) {
@@ -2451,34 +2297,22 @@ app.post('/api/projects/import-zip', requireAuth, importRateLimiter, asyncHandle
 
 app.patch('/api/projects/:id', requireAuth, requireProjectOwner, asyncHandler(async (req: AuthedRequest, res) => {
   const existing = req.project!;
-  const { name, archived, rules, apkConfig } = req.body as {
+  const { name, archived, rules } = req.body as {
     name?: string;
     archived?: boolean;
     rules?: string;
-    apkConfig?: ApkConfig;
   };
-
-  let nextApkConfigJson = String(existing.apk_config_json);
-  if (apkConfig !== undefined) {
-    const check = validateApkConfig(apkConfig);
-    if (!check.valid || !check.sanitized) {
-      return res.status(400).json({ error: check.error || 'Konfigurasi APK tidak valid.' });
-    }
-    nextApkConfigJson = JSON.stringify(check.sanitized);
-  }
 
   await asyncDb.run(
     `UPDATE projects SET
       name = ?,
       archived = ?,
       rules = ?,
-      apk_config_json = ?,
       updated_at = datetime('now')
      WHERE id = ? AND user_id = ?`,
     name !== undefined ? name.trim().slice(0, 80) || String(existing.name) : String(existing.name),
     dbBool(asyncDb.dialect, archived !== undefined ? archived : toBooleanFlag(existing.archived)),
     rules !== undefined ? String(rules).slice(0, 10_000) : String(existing.rules || ''),
-    nextApkConfigJson,
     req.params.id,
     req.user!.id
   );
@@ -2496,10 +2330,10 @@ app.post('/api/projects/:id/duplicate', requireAuth, requireProjectOwner, asyncH
       newId,
       req.user!.id,
       newName,
-      String(orig.type),
+      'web',
       String(orig.stack),
       String(orig.rules || ''),
-      typeof orig.apk_config_json === 'string' ? orig.apk_config_json : JSON.stringify(orig.apk_config_json)
+      '{}'
     );
 
     const files = await tx.all<{ path: string; content: string; hash: string }>(
@@ -2543,7 +2377,6 @@ app.delete('/api/projects/:id', requireAuth, requireProjectOwner, asyncHandler(a
   clearProjectCheckpoint(req.params.id);
   previewLifecycleManager.removeProjectSession(req.params.id);
   projectRuntime.cleanupProjectSandbox(req.params.id);
-  await cleanupProjectBuildArtifactsAsync(req.params.id);
   await asyncDb.run('DELETE FROM projects WHERE id = ? AND user_id = ?', req.params.id, req.user!.id);
   return res.json({ ok: true });
 }));
@@ -2590,11 +2423,10 @@ app.get('/api/projects/:id/workspace', requireAuth, requireProjectOwner, asyncHa
     project: {
       id: String(proj.id),
       name: String(proj.name),
-      type: String(proj.type) as ProjectType,
+      type: 'web' as ProjectType,
       stack: String(proj.stack),
       archived: toBooleanFlag(proj.archived),
       rules: String(proj.rules || ''),
-      apkConfig: safeParseApkConfigJson(proj.apk_config_json, String(proj.name || 'CARMEN App')),
       fileCount: files.length,
       versionCount: versions.length,
       createdAt: toIsoTimestamp(proj.created_at),
@@ -2651,7 +2483,6 @@ app.get('/api/projects/:id/workspace', requireAuth, requireProjectOwner, asyncHa
       updatedAt: toIsoTimestamp(e.updated_at),
     })),
     logs: await projectRuntime.getLogsAsync(req.params.id),
-    builds: await listProjectBuildsAsync(req.params.id),
     deployments: await listProjectDeploymentsAsync(req.params.id),
   });
 }));
@@ -3838,129 +3669,6 @@ app.get('/api/skills/:id/export.zip', requireAuth, asyncHandler(async (req: Auth
 }));
 
 // ============================================================
-// APK BUILD QUEUE & STREAMING LOGS (APK-3 .. APK-7) — WITH OWNER AUTHZ
-// ============================================================
-app.post('/api/projects/:id/builds', requireAuth, requireProjectOwner, buildRateLimiter, asyncHandler(async (req: AuthedRequest, res) => {
-  const { config, keystoreBase64, signingCredentials, format } = req.body as {
-    config?: ApkConfig;
-    keystoreBase64?: string;
-    signingCredentials?: { storePassword?: string; keyAlias?: string; keyPassword?: string };
-    format?: 'apk' | 'aab';
-  };
-  if (!config || !config.appName || !config.packageId) {
-    return res.status(400).json({ error: 'Nama aplikasi dan Package ID wajib diisi.' });
-  }
-  const targetFormat: 'apk' | 'aab' = format === 'aab' ? 'aab' : 'apk';
-  const result = await enqueueApkBuild(
-    req.params.id,
-    config,
-    keystoreBase64,
-    signingCredentials,
-    targetFormat,
-    req.user!.id
-  );
-  if (result.error || !result.build) {
-    return res.status(result.httpStatus || 400).json({
-      error: result.error || 'Konfigurasi build APK tidak valid.',
-      ...(result.code ? { code: result.code } : {}),
-    });
-  }
-  return res.status(201).json({ build: result.build });
-}));
-
-app.get('/api/builds/:id', requireAuth, requireBuildOwner, asyncHandler(async (req: AuthedRequest, res) => {
-  const build = await getBuildRecordAsync(req.params.id);
-  if (!build) return res.status(404).json({ error: 'Build tidak ditemukan.' });
-  return res.json({ build });
-}));
-
-app.get('/api/builds/:id/status', requireAuth, requireBuildOwner, asyncHandler(async (req: AuthedRequest, res) => {
-  const jobStatus = await getBuildJobStatusAsync(req.params.id);
-  if (!jobStatus) return res.status(404).json({ error: 'Build tidak ditemukan.' });
-  return res.json(jobStatus);
-}));
-
-app.post('/api/builds/:id/cancel', requireAuth, requireBuildOwner, asyncHandler(async (req: AuthedRequest, res) => {
-  const result = await cancelApkBuildAsync(req.params.id);
-  if (!result.ok) {
-    return res.status(result.httpStatus ?? 400).json({ error: result.error || 'Gagal membatalkan build.' });
-  }
-  return res.json({ build: result.build });
-}));
-
-app.get('/api/builds/:id/logs', requireAuth, requireBuildOwner, asyncHandler(async (req: AuthedRequest, res) => {
-  const build = await getBuildRecordAsync(req.params.id);
-  if (!build) return res.status(404).json({ error: 'Build tidak ditemukan.' });
-
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders?.();
-
-  res.write(`event: build\ndata: ${JSON.stringify(build)}\n\n`);
-  if (build.status === 'success' || build.status === 'failed') {
-    return res.end();
-  }
-
-  let closed = false;
-  const heartbeatTimer = setInterval(() => {
-    if (closed || res.writableEnded) {
-      clearInterval(heartbeatTimer);
-      return;
-    }
-    try {
-      res.write(': heartbeat\n\n');
-    } catch {
-      clearInterval(heartbeatTimer);
-    }
-  }, 15_000);
-  heartbeatTimer.unref?.();
-
-  const cleanup = () => {
-    closed = true;
-    clearInterval(heartbeatTimer);
-    unsub();
-  };
-
-  const unsub = subscribeBuild(build.id, (updated) => {
-    if (closed || res.writableEnded) {
-      cleanup();
-      return;
-    }
-    res.write(`event: build\ndata: ${JSON.stringify(updated)}\n\n`);
-    if (updated.status === 'success' || updated.status === 'failed') {
-      cleanup();
-      if (!res.writableEnded) res.end();
-    }
-  });
-
-  res.on('close', cleanup);
-}));
-
-app.get('/api/builds/:id/download', requireAuth, requireBuildOwner, asyncHandler(async (req: AuthedRequest, res) => {
-  const token = String(req.query.token || '');
-  const artifact = await getArtifactByTokenAsync(req.params.id, token);
-  if (!artifact) {
-    return res.status(404).send('Tautan unduh artefak build tidak valid atau sudah kedaluwarsa.');
-  }
-  res.setHeader('Cache-Control', 'no-store');
-  res.setHeader('Content-Type', artifact.contentType);
-  res.setHeader('Content-Disposition', `attachment; filename="${sanitizeDownloadFilename(artifact.fileName)}"`);
-  const stream = fs.createReadStream(artifact.filePath);
-  stream.on('error', () => {
-    if (!res.headersSent) {
-      res.status(404).send('Artefak build tidak tersedia untuk diunduh.');
-    } else {
-      res.destroy();
-    }
-  });
-  res.on('close', () => {
-    if (!stream.destroyed) stream.destroy();
-  });
-  return stream.pipe(res);
-}));
-
-// ============================================================
 // ZIP EXPORT (WEB-7)
 // ============================================================
 app.get('/api/projects/:id/export.zip', requireAuth, requireProjectOwner, asyncHandler(async (req: AuthedRequest, res) => {
@@ -4601,10 +4309,6 @@ async function startServer() {
   }
   await initDatabaseAsync();
   await ensureBuiltinSkillsSyncedAsync();
-  await recoverPendingApkBuildsAsync().catch((err) => {
-    console.warn('[CARMEN] Warning during APK build startup recovery:', err instanceof Error ? err.message : String(err));
-  });
-  await cleanupExpiredBuildArtifactsAsync().catch(() => {});
   const { port: PORT, host: HOST } = resolveServerListenOptions();
   const httpServer = http.createServer(app);
   let viteServer: Awaited<ReturnType<typeof createViteServer>> | null = null;
@@ -4692,7 +4396,6 @@ export function removeStyle(id) {
     shuttingDown = true;
     previewLifecycleManager.stopReaper();
     stopAllAgentSessions();
-    void closeApkQueueConnections();
     void closeSharedQuotaRedis();
     void closeRateLimiterRedis();
     projectRuntime.stopAllProcesses();

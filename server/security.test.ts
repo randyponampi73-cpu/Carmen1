@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import JSZip from 'jszip';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,7 +8,6 @@ import {
   createPreviewToken,
   decryptSecret,
   encryptSecret,
-  escapeXml,
   hashPassword,
   isMasterKeyConfigured,
   isPrivateOrReservedIp,
@@ -22,7 +20,6 @@ import {
   safeOutboundFetch,
   sanitizeDownloadFilename,
   scrubSecrets,
-  validateApkConfig,
   validateCustomBaseUrl,
   validateProviderChatPath,
   validateProviderExtraHeaders,
@@ -35,11 +32,7 @@ import {
 } from './security';
 import { isExcludedFromExport } from './export/zipExporter';
 import { resolveModelTier } from './providers/catalog';
-import {
-  buildSafeAndroidManifestXml,
-  validateReleaseSigningInput,
-  verifyNativeApkArtifact,
-} from './builds/apkBuilder';
+import { isRedisConfigured, validateRedisConfiguration } from './runtime/redisConfig';
 
 test('Secret Vault AES-256-GCM requires CARMEN_MASTER_KEY and encrypts/decrypts accurately', () => {
   const prevMaster = process.env.CARMEN_MASTER_KEY;
@@ -185,32 +178,6 @@ test('normalizeProjectPath rejects path traversal and null bytes while allowing 
   assert.equal(normalizeProjectPath('src/file..v2.js'), 'src/file..v2.js');
   assert.equal(normalizeProjectPath('a..b/c..d.ts'), 'a..b/c..d.ts');
   assert.equal(normalizeProjectPath('file..name..ext'), 'file..name..ext');
-});
-
-test('XML escaping and APK config validation prevent XML injection', () => {
-  assert.equal(escapeXml('My "App" <1> & Co'), 'My &quot;App&quot; &lt;1&gt; &amp; Co');
-  assert.equal(validateApkConfig({ appName: 'App', packageId: 'bad_pkg' }).valid, false);
-  assert.equal(
-    validateApkConfig({ appName: 'App', packageId: 'id.carmen.app', versionName: '1.0;evil' }).valid,
-    false
-  );
-  assert.equal(
-    validateApkConfig({ appName: 'App', packageId: 'id.carmen.app', versionName: '1.0.0', versionCode: -1 }).valid,
-    false
-  );
-
-  const validCfg = validateApkConfig({
-    appName: 'App "><uses-permission android:name="EVIL"/>',
-    packageId: 'id.carmen.demo',
-    versionName: '1.2.3',
-    versionCode: 2,
-    iconColor: '#C8324B',
-    buildType: 'debug',
-  });
-  assert.equal(validCfg.valid, true);
-  const xml = buildSafeAndroidManifestXml(validCfg.sanitized!);
-  assert.equal(xml.includes('<uses-permission android:name="EVIL"'), false);
-  assert.ok(xml.includes('&lt;uses-permission'));
 });
 
 test('validateSqlSchemaSafe blocks ATTACH, PRAGMA, and load_extension while allowing standard DDL', () => {
@@ -392,80 +359,22 @@ test('safeOutboundFetch blocks SSRF redirect attacks to metadata/loopback and st
   assert.equal(secondHopHeaders['Accept'] || secondHopHeaders['accept'], 'application/json');
 });
 
-test('Android release signing validator rejects malformed keystores and accepts valid JKS magic + credentials', () => {
-  const shortRes = validateReleaseSigningInput(Buffer.from('too-short', 'utf8').toString('base64'), {
-    storePassword: 'secret-store-pass',
-    keyAlias: 'upload',
-    keyPassword: 'secret-key-pass',
-  });
-  assert.equal(shortRes.valid, false);
+test('validateRedisConfiguration and isRedisConfigured validate redis:// and rediss:// URLs safely', () => {
+  assert.equal(isRedisConfigured({}), false);
+  assert.equal(validateRedisConfiguration({}, { requireRedis: true }).configured, false);
+  assert.match(validateRedisConfiguration({}, { requireRedis: true }).error || '', /REDIS_URL/i);
 
-  const invalidText = Buffer.from('not a valid keystore binary payload at all — definitely >= 32 bytes!', 'utf8').toString('base64');
-  const badRes = validateReleaseSigningInput(invalidText, {
-    storePassword: 'secret-store-pass',
-    keyAlias: 'upload',
-    keyPassword: 'secret-key-pass',
-  });
-  assert.equal(badRes.valid, false);
-  assert.match(badRes.error || '', /JKS|JCEKS|PKCS12/i);
+  assert.equal(validateRedisConfiguration({ REDIS_URL: 'http://redis.local:6379' }).configured, false);
+  assert.equal(validateRedisConfiguration({ REDIS_URL: 'redis://redis.local:6379/notanumber' }).configured, false);
 
-  // Build synthetic JKS magic header (0xFEEDFEED + 64 bytes)
-  const jksBuf = Buffer.concat([Buffer.from([0xfe, 0xed, 0xfe, 0xed]), Buffer.alloc(64, 1)]);
-  const missingCreds = validateReleaseSigningInput(jksBuf.toString('base64'), undefined);
-  assert.equal(missingCreds.valid, false);
+  const plain = validateRedisConfiguration({ REDIS_URL: 'redis://127.0.0.1:6379/0' });
+  assert.equal(plain.configured, true);
+  assert.equal(plain.tls, false);
+  assert.equal(isRedisConfigured({ REDIS_URL: 'redis://127.0.0.1:6379/0' }), true);
 
-  const okRes = validateReleaseSigningInput(jksBuf.toString('base64'), {
-    storePassword: 'changeit123',
-    keyAlias: 'release-key',
-    keyPassword: 'changeit123',
-  });
-  assert.equal(okRes.valid, true);
-  assert.ok(okRes.keystoreBuffer && okRes.keystoreBuffer.length === jksBuf.length);
-  assert.equal(okRes.sanitizedCreds?.keyAlias, 'release-key');
-});
-
-test('verifyNativeApkArtifact rejects invalid APK ZIPs and validates structural Android APK entries', async () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'carmen-apk-verify-'));
-  const noToolsToolchain = {
-    readyForNativeApk: false,
-    jdk: { available: false },
-    javac: { available: false },
-    gradle: { available: false },
-    androidSdk: { available: false },
-    apksigner: { available: false },
-    jarsigner: { available: false },
-    keytool: { available: false },
-    missing: ['JDK', 'Android SDK', 'Gradle'],
-    installInstructions: [],
-  };
-
-  try {
-    // 1) Non-APK text file fails
-    const badPath = path.join(tmpDir, 'fake.apk');
-    fs.writeFileSync(badPath, 'not a zip');
-    const badRes = await verifyNativeApkArtifact(badPath, noToolsToolchain);
-    assert.equal(badRes.validStructure, false);
-
-    // 2) Valid ZIP missing AndroidManifest.xml fails
-    const noManifestZip = new JSZip();
-    noManifestZip.file('README.txt', 'hello');
-    const noManifestPath = path.join(tmpDir, 'incomplete.apk');
-    fs.writeFileSync(noManifestPath, await noManifestZip.generateAsync({ type: 'nodebuffer' }));
-    const noManifestRes = await verifyNativeApkArtifact(noManifestPath, noToolsToolchain);
-    assert.equal(noManifestRes.validStructure, false);
-
-    // 3) Valid ZIP with AndroidManifest.xml + classes.dex passes structural check (unsigned when no apksigner/sig)
-    const structZip = new JSZip();
-    structZip.file('AndroidManifest.xml', Buffer.from([0x03, 0x00, 0x08, 0x00]));
-    structZip.file('classes.dex', Buffer.from('dex\n035\0'));
-    const structPath = path.join(tmpDir, 'struct-debug.apk');
-    fs.writeFileSync(structPath, await structZip.generateAsync({ type: 'nodebuffer' }));
-    const structRes = await verifyNativeApkArtifact(structPath, noToolsToolchain);
-    assert.equal(structRes.validStructure, true);
-    assert.equal(structRes.signed, false, 'Must never claim unsigned APK is signature-verified');
-  } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  }
+  const tls = validateRedisConfiguration({ REDIS_URL: 'rediss://default:secret@redis.example.com:6380/2' });
+  assert.equal(tls.configured, true);
+  assert.equal(tls.tls, true);
 });
 
 test('ENCRYPTION_SECRET is supported alongside CARMEN_MASTER_KEY and encrypts/decrypts round-trip', () => {

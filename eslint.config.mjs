@@ -9,8 +9,6 @@ export default tseslint.config(
       'dist/**',
       'node_modules/**',
       'data/**',
-      '.android-ci/**',
-      'android/**',
       'coverage/**',
     ],
   },

@@ -14,7 +14,6 @@ const EXCLUDED_DIRS = new Set([
   '.git',
   '.playwright-cli',
   '.aistudio',
-  '.android-ci',
   '.cache',
   'coverage',
 ]);

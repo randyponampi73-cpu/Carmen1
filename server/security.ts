@@ -6,7 +6,6 @@ import https from 'node:https';
 import net from 'node:net';
 import path from 'node:path';
 import { Readable } from 'node:stream';
-import type { ApkConfig } from '../src/types';
 
 export const MIN_MASTER_KEY_LENGTH = 32;
 
@@ -1138,70 +1137,6 @@ export function validateTenantWorkspacePath(
 
 export function sha256(content: string): string {
   return crypto.createHash('sha256').update(content, 'utf8').digest('hex').slice(0, 16);
-}
-
-/**
- * XML escaping for AndroidManifest.xml and other XML templates to prevent XML injection.
- */
-export function escapeXml(value: string): string {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
-
-/**
- * Strict validation for Android APK build configuration.
- */
-export function validateApkConfig(config: Partial<ApkConfig> | undefined): {
-  valid: boolean;
-  sanitized?: ApkConfig;
-  error?: string;
-} {
-  if (!config) {
-    return { valid: false, error: 'Konfigurasi build APK wajib diisi.' };
-  }
-  const appName = String(config.appName ?? '').trim();
-  if (!appName || appName.length > 80 || /[\r\n\0]/.test(appName)) {
-    return { valid: false, error: 'Nama aplikasi harus 1–80 karakter tanpa karakter kontrol.' };
-  }
-  const packageId = String(config.packageId ?? '').trim();
-  if (
-    !packageId ||
-    packageId.length > 128 ||
-    !/^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/.test(packageId)
-  ) {
-    return {
-      valid: false,
-      error: `Package ID "${packageId}" tidak valid. Gunakan format reverse-domain seperti id.carmen.aplikasi.`,
-    };
-  }
-  const versionName = String(config.versionName ?? '1.0.0').trim();
-  if (!/^[0-9]+(\.[0-9]+){0,2}(-[a-zA-Z0-9._-]+)?$/.test(versionName) || versionName.length > 32) {
-    return { valid: false, error: 'Version Name tidak valid. Gunakan format semver seperti 1.0.0.' };
-  }
-  const versionCode = Number(config.versionCode ?? 1);
-  if (!Number.isInteger(versionCode) || versionCode < 1 || versionCode > 2_100_000_000) {
-    return { valid: false, error: 'Version Code harus berupa bilangan bulat positif (1–2100000000).' };
-  }
-  const buildType = config.buildType === 'release' ? 'release' : 'debug';
-  const rawColor = String(config.iconColor ?? '#C8324B').trim();
-  const iconColor = /^#[0-9a-fA-F]{6}$/.test(rawColor) ? rawColor : '#C8324B';
-
-  return {
-    valid: true,
-    sanitized: {
-      appName,
-      packageId,
-      versionName,
-      versionCode,
-      iconColor,
-      buildType,
-      hasKeystore: Boolean(config.hasKeystore),
-    },
-  };
 }
 
 /**

@@ -4,7 +4,6 @@ bun.lock
 bun.lockb
 build/
 dist/
-.android-ci/
 coverage/
 
 # Runtime Data, SQLite Databases, WAL/SHM & Generated Build Artifacts

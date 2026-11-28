@@ -17,7 +17,6 @@ export interface RuntimeResourceBudget {
   sandboxMaxProcsPerProcess: number;
   maxConcurrentSandboxes: number;
   maxConcurrentAgentSessions: number;
-  maxConcurrentApkBuildsGlobal: number;
 }
 
 export interface CgroupLimits {
@@ -164,15 +163,6 @@ export function computeRuntimeResourceBudget(
     env
   );
 
-  const computedMaxApkBuilds = Math.max(1, Math.min(8, Math.floor(availableSandboxMemoryMb / 1024)));
-  const maxConcurrentApkBuildsGlobal = readBoundedIntEnv(
-    'CARMEN_MAX_CONCURRENT_APK_BUILDS',
-    computedMaxApkBuilds,
-    1,
-    16,
-    env
-  );
-
   return {
     hostCpuCount,
     hostTotalMemoryMb,
@@ -188,7 +178,6 @@ export function computeRuntimeResourceBudget(
     sandboxMaxProcsPerProcess,
     maxConcurrentSandboxes,
     maxConcurrentAgentSessions,
-    maxConcurrentApkBuildsGlobal,
   };
 }
 

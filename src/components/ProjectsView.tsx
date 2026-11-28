@@ -7,7 +7,6 @@ import {
   Loader2,
   Plus,
   Search,
-  Smartphone,
   Trash2,
   Upload,
   X,
@@ -15,7 +14,7 @@ import {
 import { useId, useMemo, useRef, useState } from 'react';
 import { COPY, formatDateTime } from '../i18n';
 import { api } from '../lib/api';
-import type { Locale, ProjectSummary, ProjectType } from '../types';
+import type { Locale, ProjectSummary } from '../types';
 import { ConfirmDialog, ModalShell } from './ConfirmDialog';
 
 interface ProjectsViewProps {
@@ -29,10 +28,9 @@ interface ProjectsViewProps {
 export function ProjectsView({ locale, projects, loading, onRefresh, onOpenProject }: ProjectsViewProps) {
   const t = COPY[locale];
   const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState<'all' | 'web' | 'android' | 'archived'>('all');
+  const [filter, setFilter] = useState<'all' | 'archived'>('all');
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState('');
-  const [newType, setNewType] = useState<ProjectType>('web');
   const [createError, setCreateError] = useState<string | null>(null);
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -55,8 +53,6 @@ export function ProjectsView({ locale, projects, loading, onRefresh, onOpenProje
     return projects.filter((p) => {
       if (filter === 'archived' && !p.archived) return false;
       if (filter !== 'archived' && p.archived) return false;
-      if (filter === 'web' && p.type !== 'web') return false;
-      if (filter === 'android' && p.type !== 'android') return false;
       if (q && !p.name.toLowerCase().includes(q) && !p.stack.toLowerCase().includes(q)) return false;
       return true;
     });
@@ -71,7 +67,7 @@ export function ProjectsView({ locale, projects, loading, onRefresh, onOpenProje
     setCreateError(null);
     setBusyId('create');
     try {
-      const res = await api.createProject({ name: newName.trim(), type: newType });
+      const res = await api.createProject({ name: newName.trim(), type: 'web' });
       setCreateOpen(false);
       setNewName('');
       await onRefresh();
@@ -217,7 +213,6 @@ export function ProjectsView({ locale, projects, loading, onRefresh, onOpenProje
               onClick={() => {
                 setCreateError(null);
                 setNewName('');
-                setNewType('web');
                 setCreateOpen(true);
               }}
               className="h-10 sm:h-8 px-3.5 rounded-[6px] bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-[13px] font-medium flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
@@ -253,8 +248,6 @@ export function ProjectsView({ locale, projects, loading, onRefresh, onOpenProje
             {(
               [
                 ['all', t.filterAll],
-                ['web', t.web],
-                ['android', t.android],
                 ['archived', t.filterArchived],
               ] as const
             ).map(([id, label]) => (
@@ -396,12 +389,8 @@ export function ProjectsView({ locale, projects, loading, onRefresh, onOpenProje
 
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12px] text-[var(--text-muted)]">
                         <span className="inline-flex items-center gap-1">
-                          {proj.type === 'android' ? (
-                            <Smartphone className="w-3.5 h-3.5" strokeWidth={1.5} />
-                          ) : (
-                            <Globe className="w-3.5 h-3.5" strokeWidth={1.5} />
-                          )}
-                          <span>{proj.type === 'android' ? t.android : t.web}</span>
+                          <Globe className="w-3.5 h-3.5" strokeWidth={1.5} />
+                          <span>{t.web}</span>
                         </span>
                         <span aria-hidden="true">·</span>
                         <span className="tabular-nums">{formatDateTime(proj.updatedAt, locale)}</span>
@@ -534,12 +523,8 @@ export function ProjectsView({ locale, projects, loading, onRefresh, onOpenProje
                         </td>
                         <td className="py-2.5 px-3 text-[var(--text-muted)] whitespace-nowrap">
                           <span className="inline-flex items-center gap-1.5">
-                            {proj.type === 'android' ? (
-                              <Smartphone className="w-3.5 h-3.5" strokeWidth={1.5} />
-                            ) : (
-                              <Globe className="w-3.5 h-3.5" strokeWidth={1.5} />
-                            )}
-                            <span>{proj.type === 'android' ? t.android : t.web}</span>
+                            <Globe className="w-3.5 h-3.5" strokeWidth={1.5} />
+                            <span>{t.web}</span>
                           </span>
                         </td>
                         <td className="py-2.5 px-3 text-[var(--text-muted)] hidden md:table-cell truncate max-w-[260px]">
@@ -645,33 +630,6 @@ export function ProjectsView({ locale, projects, loading, onRefresh, onOpenProje
               placeholder={t.projectNamePlaceholder}
               className="w-full h-10 sm:h-9 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-2)] px-3 text-[16px] sm:text-[13px] text-[var(--text)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)] focus:outline-none"
             />
-          </div>
-          <div>
-            <span className="block text-[12px] font-medium text-[var(--text-muted)] mb-1">
-              {t.targetPlatform}
-            </span>
-            <div className="grid grid-cols-2 gap-2">
-              {(['web', 'android'] as const).map((typeOpt) => (
-                <button
-                  key={typeOpt}
-                  type="button"
-                  aria-pressed={newType === typeOpt}
-                  onClick={() => setNewType(typeOpt)}
-                  className={`h-10 sm:h-9 rounded-[6px] border text-[13px] font-medium flex items-center justify-center gap-2 cursor-pointer ${
-                    newType === typeOpt
-                      ? 'border-[var(--accent)] bg-[var(--surface-2)] text-[var(--text)]'
-                      : 'border-[var(--border-strong)] bg-[var(--surface)] text-[var(--text-muted)]'
-                  }`}
-                >
-                  {typeOpt === 'android' ? (
-                    <Smartphone className="w-4 h-4" strokeWidth={1.5} />
-                  ) : (
-                    <Globe className="w-4 h-4" strokeWidth={1.5} />
-                  )}
-                  <span>{typeOpt === 'android' ? 'Android (APK)' : 'Web Fullstack'}</span>
-                </button>
-              ))}
-            </div>
           </div>
 
           {createError && (

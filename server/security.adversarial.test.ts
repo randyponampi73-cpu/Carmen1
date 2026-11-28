@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import JSZip from 'jszip';
 import {
   detectSandboxIsolation,
   processRegistry,
@@ -12,7 +11,6 @@ import {
   type SandboxQuotaExceededReason,
 } from './runtime/isolation';
 import { validateSandboxCommand, validateTenantWorkspacePath } from './security';
-import { verifyNativeApkArtifact } from './builds/apkBuilder';
 
 function runIsolatedCollect(
   opts: IsolatedSpawnOptions,
@@ -268,41 +266,6 @@ test('Adversarial: Command injection attempts are strictly rejected by command v
   for (const cmd of malicious) {
     const check = validateSandboxCommand(cmd);
     assert.equal(check.allowed, false, `Command injection payload MUST be blocked: ${cmd}`);
-  }
-});
-
-test('Adversarial: verifyNativeApkArtifact validates AAB structure and rejects spoofed unsigned AAB', async () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'carmen-aab-verify-'));
-  const noTools = {
-    readyForNativeApk: false,
-    jdk: { available: false },
-    javac: { available: false },
-    gradle: { available: false },
-    androidSdk: { available: false },
-    apksigner: { available: false },
-    jarsigner: { available: false },
-    keytool: { available: false },
-    missing: ['JDK', 'Android SDK', 'Gradle'],
-    installInstructions: [],
-  };
-  try {
-    const badAab = new JSZip();
-    badAab.file('index.html', '<h1>fake</h1>');
-    const badPath = path.join(tmpDir, 'fake.aab');
-    fs.writeFileSync(badPath, await badAab.generateAsync({ type: 'nodebuffer' }));
-    const badRes = await verifyNativeApkArtifact(badPath, noTools, 'aab');
-    assert.equal(badRes.validStructure, false);
-
-    const goodAab = new JSZip();
-    goodAab.file('BundleConfig.pb', Buffer.from([0x08, 0x01]));
-    goodAab.file('base/manifest/AndroidManifest.xml', Buffer.from([0x03, 0x00, 0x08, 0x00]));
-    const goodPath = path.join(tmpDir, 'app-debug.aab');
-    fs.writeFileSync(goodPath, await goodAab.generateAsync({ type: 'nodebuffer' }));
-    const goodRes = await verifyNativeApkArtifact(goodPath, noTools, 'aab');
-    assert.equal(goodRes.validStructure, true);
-    assert.equal(goodRes.signed, false);
-  } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
 
