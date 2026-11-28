@@ -148,6 +148,66 @@ export function extractMarkdownSections(body: string): SkillSections {
   };
 }
 
+const RECOMMENDED_SECTION_CHECKS: Array<{ label: string; pattern: RegExp }> = [
+  { label: 'Best Practices', pattern: /^##\s+(?:best practices|engineering standards|patterns)/im },
+  { label: 'Anti-Patterns', pattern: /^##\s+(?:anti-patterns|common pitfalls|pitfalls)/im },
+  { label: 'Security Considerations', pattern: /^##\s+(?:security considerations|safety constraints)/im },
+  { label: 'Performance Considerations', pattern: /^##\s+(?:performance considerations|optimization)/im },
+  { label: 'Testing Strategy', pattern: /^##\s+(?:testing strategy|verification)/im },
+  { label: 'Checklist', pattern: /^##\s+(?:checklist|readiness checklist)/im },
+];
+
+export function computeSkillQuality(
+  body: string,
+  manifest: Pick<SkillManifest, 'tags' | 'tools' | 'triggers' | 'verification' | 'examples' | 'frameworks'>,
+  sections: SkillSections
+): NonNullable<SkillManifest['quality']> {
+  const missingRecommendedSections: string[] = [];
+  let checksPassed = 0;
+  let checksTotal = 0;
+
+  const coreChecks: boolean[] = [
+    Boolean(sections.purpose && sections.purpose.length >= 24),
+    Boolean(sections.whenToUse && sections.whenToUse.length >= 20),
+    Boolean(sections.requiredContext && sections.requiredContext.length >= 16),
+    Boolean(sections.workflow && sections.workflow.length >= 60),
+    Boolean(sections.toolMapping && sections.toolMapping.length >= 12),
+    Boolean(sections.verification && sections.verification.length >= 20),
+    Boolean(sections.failureHandling && sections.failureHandling.length >= 20),
+    Boolean(sections.safetyConstraints && sections.safetyConstraints.length >= 20),
+    Boolean(sections.examples && sections.examples.length >= 20),
+    manifest.tags.length >= 2,
+    manifest.triggers.length >= 2,
+    manifest.tools.length >= 1,
+    manifest.verification.length >= 1,
+    /```[\s\S]*?```|`[^`]+`/.test(body),
+  ];
+
+  for (const ok of coreChecks) {
+    checksTotal += 1;
+    if (ok) checksPassed += 1;
+  }
+
+  for (const rec of RECOMMENDED_SECTION_CHECKS) {
+    checksTotal += 1;
+    if (rec.pattern.test(body)) {
+      checksPassed += 1;
+    } else {
+      missingRecommendedSections.push(rec.label);
+    }
+  }
+
+  const score = Math.round((checksPassed / Math.max(1, checksTotal)) * 100);
+  const grade: 'A' | 'B' | 'C' = score >= 85 ? 'A' : score >= 65 ? 'B' : 'C';
+  return {
+    score,
+    grade,
+    checksPassed,
+    checksTotal,
+    missingRecommendedSections,
+  };
+}
+
 export function parseSkillMarkdown(
   skillMd: string,
   options?: { hasReferences?: boolean; hasScripts?: boolean }
@@ -166,20 +226,58 @@ export function parseSkillMarkdown(
   const validPerms = rawPerms.filter((p): p is SkillPermission => PERMISSION_SET.has(p));
 
   const sections = extractMarkdownSections(body);
-  const manifest: SkillManifest = {
+  const frameworks = asStringList(rawFrontmatter.frameworks).map((f) => f.toLowerCase());
+  const licenseRaw = Array.isArray(rawFrontmatter.license) ? rawFrontmatter.license[0] : rawFrontmatter.license;
+  const researchedAtRaw = Array.isArray(rawFrontmatter.researched_at)
+    ? rawFrontmatter.researched_at[0]
+    : rawFrontmatter.researched_at;
+  const originRaw = Array.isArray(rawFrontmatter.provenance_origin)
+    ? rawFrontmatter.provenance_origin[0]
+    : rawFrontmatter.provenance_origin;
+  const sourceRepos = asStringList(rawFrontmatter.source_repos);
+
+  const resolvedOrigin: 'carmen-builtin' | 'community-inspired' | 'user-created' | 'imported' | 'remote' =
+    originRaw === 'community-inspired' ||
+    originRaw === 'user-created' ||
+    originRaw === 'imported' ||
+    originRaw === 'remote'
+      ? originRaw
+      : 'carmen-builtin';
+
+  const provenance =
+    originRaw || licenseRaw || sourceRepos.length > 0 || researchedAtRaw
+      ? {
+          origin: resolvedOrigin,
+          ...(sourceRepos.length > 0 ? { sourceRepos } : {}),
+          ...(licenseRaw ? { license: licenseRaw.trim() } : {}),
+          ...(researchedAtRaw ? { researchedAt: researchedAtRaw.trim() } : {}),
+        }
+      : {
+          origin: 'carmen-builtin' as const,
+          license: 'MIT',
+        };
+
+  const manifestBase = {
     category: asCategory(rawFrontmatter.category),
     version: (versionRaw || '1.0.0').trim(),
     tags: asStringList(rawFrontmatter.tags).map((t) => t.toLowerCase()),
+    frameworks,
     tools: asStringList(rawFrontmatter.tools),
     permissions: validPerms,
     triggers: asStringList(rawFrontmatter.triggers).map((t) => t.toLowerCase()),
     dependencies: asStringList(rawFrontmatter.dependencies),
     conflicts: asStringList(rawFrontmatter.conflicts),
-    executionMode: execModeRaw === 'parallel-safe' ? 'parallel-safe' : 'sequential',
+    executionMode: execModeRaw === 'parallel-safe' ? ('parallel-safe' as const) : ('sequential' as const),
     verification: asStringList(rawFrontmatter.verification),
     examples: asStringList(rawFrontmatter.examples),
     hasReferences: Boolean(options?.hasReferences),
     hasScripts: Boolean(options?.hasScripts),
+    provenance,
+  };
+
+  const manifest: SkillManifest = {
+    ...manifestBase,
+    quality: computeSkillQuality(body, manifestBase, sections),
   };
 
   return {

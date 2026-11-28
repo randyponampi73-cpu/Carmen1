@@ -24,6 +24,7 @@ import type {
   RegisteredAgentToolInfo,
   SkillAnalyticsSummary,
   SkillCategory,
+  SkillInstallHistoryItem,
   SkillMetadataItem,
   SkillPackageDetail,
   SkillPermission,
@@ -38,13 +39,20 @@ interface SkillsViewProps {
 type SkillsTab = 'installed' | 'create' | 'marketplace' | 'analytics';
 
 const SKILL_CATEGORY_LIST: SkillCategory[] = [
+  'frontend',
+  'backend',
   'development',
-  'debugging',
+  'architecture',
+  'database',
+  'api',
   'security',
   'testing',
-  'database',
+  'debugging',
   'devops',
-  'architecture',
+  'cloud',
+  'mobile',
+  'release',
+  'ai-engineering',
   'agents',
 ];
 
@@ -80,6 +88,11 @@ export function SkillsView({ locale }: SkillsViewProps) {
 
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<SkillCategory | 'all'>('all');
+  const [frameworkFilter, setFrameworkFilter] = useState<string>('all');
+  const [originFilter, setOriginFilter] = useState<'all' | 'builtin' | 'created' | 'imported'>('all');
+  const [marketSearch, setMarketSearch] = useState('');
+  const [marketCategory, setMarketCategory] = useState<SkillCategory | 'all'>('all');
+  const [marketFramework, setMarketFramework] = useState<string>('all');
   const [busySkillId, setBusySkillId] = useState<string | null>(null);
 
   // Inspect & Edit Modal
@@ -87,6 +100,7 @@ export function SkillsView({ locale }: SkillsViewProps) {
   const [inspectLoading, setInspectLoading] = useState(false);
   const [inspectDetail, setInspectDetail] = useState<SkillPackageDetail | null>(null);
   const [inspectVersions, setInspectVersions] = useState<SkillVersionItem[]>([]);
+  const [inspectHistory, setInspectHistory] = useState<SkillInstallHistoryItem[]>([]);
   const [inspectValidation, setInspectValidation] = useState<{
     valid: boolean;
     errors: string[];
@@ -177,19 +191,51 @@ export function SkillsView({ locale }: SkillsViewProps) {
     };
   }, [tab, marketplace]);
 
+  const availableFrameworks = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of skills) {
+      for (const fw of s.manifest.frameworks || []) {
+        if (fw) set.add(fw);
+      }
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [skills]);
+
   const filteredSkills = useMemo(() => {
     const q = search.trim().toLowerCase();
     return skills.filter((s) => {
       if (categoryFilter !== 'all' && s.category !== categoryFilter) return false;
+      if (originFilter !== 'all' && s.source !== originFilter) return false;
+      if (frameworkFilter !== 'all' && !(s.manifest.frameworks || []).includes(frameworkFilter)) return false;
       if (!q) return true;
       return (
         s.slug.toLowerCase().includes(q) ||
         s.name.toLowerCase().includes(q) ||
         s.description.toLowerCase().includes(q) ||
-        s.manifest.tags.some((tag) => tag.toLowerCase().includes(q))
+        s.category.toLowerCase().includes(q) ||
+        s.manifest.tags.some((tag) => tag.toLowerCase().includes(q)) ||
+        (s.manifest.frameworks || []).some((fw) => fw.toLowerCase().includes(q))
       );
     });
-  }, [skills, search, categoryFilter]);
+  }, [skills, search, categoryFilter, originFilter, frameworkFilter]);
+
+  const filteredMarketplaceItems = useMemo(() => {
+    const items = marketplace?.items || [];
+    const q = marketSearch.trim().toLowerCase();
+    return items.filter((item) => {
+      if (marketCategory !== 'all' && item.category !== marketCategory) return false;
+      if (marketFramework !== 'all' && !(item.frameworks || []).includes(marketFramework)) return false;
+      if (!q) return true;
+      return (
+        item.slug.toLowerCase().includes(q) ||
+        item.name.toLowerCase().includes(q) ||
+        item.description.toLowerCase().includes(q) ||
+        item.category.toLowerCase().includes(q) ||
+        (item.tags || []).some((tag) => tag.toLowerCase().includes(q)) ||
+        (item.frameworks || []).some((fw) => fw.toLowerCase().includes(q))
+      );
+    });
+  }, [marketplace, marketSearch, marketCategory, marketFramework]);
 
   const enabledCount = useMemo(() => skills.filter((s) => s.enabled).length, [skills]);
 
@@ -211,6 +257,7 @@ export function SkillsView({ locale }: SkillsViewProps) {
     setInspectOpen(true);
     setInspectLoading(true);
     setEditingMd(false);
+    setInspectHistory([]);
     setError(null);
     try {
       const detail = await api.getSkillDetail(skillIdOrSlug);
@@ -218,6 +265,10 @@ export function SkillsView({ locale }: SkillsViewProps) {
       setInspectVersions(detail.versions);
       setInspectValidation(detail.validation);
       setEditMdDraft(detail.skill.skillMd);
+      api
+        .getSkillInstallHistory(detail.skill.id)
+        .then((histRes) => setInspectHistory(histRes.history || []))
+        .catch(() => setInspectHistory([]));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Gagal memuat detail skill.');
       setInspectOpen(false);
@@ -480,20 +531,52 @@ export function SkillsView({ locale }: SkillsViewProps) {
       {/* TAB 1: INSTALLED SKILLS */}
       {tab === 'installed' && (
         <div className="space-y-4">
-          <div className="flex flex-col md:flex-row gap-3 md:items-center justify-between">
-            <div className="relative flex-1 max-w-md">
-              <Search className="w-4 h-4 text-[var(--text-muted)] absolute left-2.5 top-1/2 -translate-y-1/2" strokeWidth={1.5} />
-              <input
-                type="search"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder={t.skillsSearchPlaceholder}
-                aria-label={t.skillsSearchPlaceholder}
-                className="w-full h-10 sm:h-9 pl-8 pr-3 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface)] text-[16px] sm:text-[13px] text-[var(--text)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-              />
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-col sm:flex-row gap-2 sm:items-center justify-between">
+              <div className="relative flex-1 max-w-md">
+                <Search className="w-4 h-4 text-[var(--text-muted)] absolute left-2.5 top-1/2 -translate-y-1/2" strokeWidth={1.5} />
+                <input
+                  type="search"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder={t.skillsSearchPlaceholder}
+                  aria-label={t.skillsSearchPlaceholder}
+                  className="w-full h-10 sm:h-9 pl-8 pr-3 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface)] text-[16px] sm:text-[13px] text-[var(--text)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <select
+                  aria-label={locale === 'id' ? 'Filter framework' : 'Filter by framework'}
+                  value={frameworkFilter}
+                  onChange={(e) => setFrameworkFilter(e.target.value)}
+                  className="h-9 px-2.5 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface)] text-[12px] text-[var(--text)]"
+                >
+                  <option value="all">{locale === 'id' ? 'Semua Framework' : 'All Frameworks'}</option>
+                  {availableFrameworks.map((fw) => (
+                    <option key={fw} value={fw}>
+                      {fw}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  aria-label={locale === 'id' ? 'Filter asal skill' : 'Filter by origin'}
+                  value={originFilter}
+                  onChange={(e) => setOriginFilter(e.target.value as 'all' | 'builtin' | 'created' | 'imported')}
+                  className="h-9 px-2.5 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface)] text-[12px] text-[var(--text)]"
+                >
+                  <option value="all">{locale === 'id' ? 'Semua Sumber' : 'All Sources'}</option>
+                  <option value="builtin">Built-in</option>
+                  <option value="created">{locale === 'id' ? 'Dibuat' : 'Created'}</option>
+                  <option value="imported">{locale === 'id' ? 'Diimpor' : 'Imported'}</option>
+                </select>
+                <span className="text-[12px] font-mono tabular-nums text-[var(--text-muted)]">
+                  {filteredSkills.length}/{skills.length}
+                </span>
+              </div>
             </div>
 
-            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1">
+            <div className="flex items-center gap-1.5 overflow-x-auto sm:overflow-visible sm:flex-wrap no-scrollbar pb-1">
               <button
                 type="button"
                 onClick={() => setCategoryFilter('all')}
@@ -548,6 +631,8 @@ export function SkillsView({ locale }: SkillsViewProps) {
             <div className="rounded-[8px] border border-[var(--border)] bg-[var(--surface)] divide-y divide-[var(--border)]">
               {filteredSkills.map((skill) => {
                 const needsApproval = skill.trustLevel === 'UNTRUSTED' || skill.trustLevel === 'DRAFT';
+                const quality = skill.manifest.quality;
+                const frameworks = skill.manifest.frameworks || [];
                 return (
                   <div
                     key={skill.id}
@@ -567,11 +652,21 @@ export function SkillsView({ locale }: SkillsViewProps) {
                         <span className={`text-[12px] font-medium ${trustTextClass(skill.trustLevel)}`}>
                           {skill.trustLevel}
                         </span>
+                        {quality && (
+                          <span className="text-[12px] font-mono tabular-nums text-[var(--text-muted)]">
+                            {quality.grade} ({quality.score}/100)
+                          </span>
+                        )}
                         <span className="text-[12px] font-mono text-[var(--text-muted)]">
                           {skill.manifest.permissions.join(' · ') || 'READ'}
                         </span>
                       </div>
                       <p className="text-[13px] text-[var(--text-muted)] line-clamp-2">{skill.description}</p>
+                      {frameworks.length > 0 && (
+                        <div className="text-[11px] font-mono text-[var(--text-muted)] truncate">
+                          {frameworks.join(' · ')}
+                        </div>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-2 shrink-0 flex-wrap">
@@ -795,25 +890,79 @@ export function SkillsView({ locale }: SkillsViewProps) {
             </div>
           )}
 
+          <div className="flex flex-col sm:flex-row gap-2 sm:items-center justify-between">
+            <div className="relative flex-1 max-w-md">
+              <Search className="w-4 h-4 text-[var(--text-muted)] absolute left-2.5 top-1/2 -translate-y-1/2" strokeWidth={1.5} />
+              <input
+                type="search"
+                value={marketSearch}
+                onChange={(e) => setMarketSearch(e.target.value)}
+                placeholder={locale === 'id' ? 'Cari katalog skill, tag, atau framework...' : 'Search skill catalog, tags, or frameworks...'}
+                aria-label={locale === 'id' ? 'Cari katalog skill' : 'Search skill catalog'}
+                className="w-full h-9 pl-8 pr-3 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface)] text-[13px] text-[var(--text)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+              />
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <select
+                aria-label={locale === 'id' ? 'Kategori katalog' : 'Catalog category'}
+                value={marketCategory}
+                onChange={(e) => setMarketCategory(e.target.value as SkillCategory | 'all')}
+                className="h-9 px-2.5 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface)] text-[12px] text-[var(--text)]"
+              >
+                <option value="all">{t.skillsCategoryAll}</option>
+                {(marketplace?.categories || SKILL_CATEGORY_LIST).map((cat) => (
+                  <option key={cat} value={cat}>
+                    {cat}
+                  </option>
+                ))}
+              </select>
+              <select
+                aria-label={locale === 'id' ? 'Framework katalog' : 'Catalog framework'}
+                value={marketFramework}
+                onChange={(e) => setMarketFramework(e.target.value)}
+                className="h-9 px-2.5 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface)] text-[12px] text-[var(--text)]"
+              >
+                <option value="all">{locale === 'id' ? 'Semua Framework' : 'All Frameworks'}</option>
+                {(marketplace?.frameworks || availableFrameworks).map((fw) => (
+                  <option key={fw} value={fw}>
+                    {fw}
+                  </option>
+                ))}
+              </select>
+              <span className="text-[12px] font-mono tabular-nums text-[var(--text-muted)]">
+                {filteredMarketplaceItems.length}/{marketplace?.items.length || 0}
+              </span>
+            </div>
+          </div>
+
           <div className="rounded-[8px] border border-[var(--border)] bg-[var(--surface)] overflow-x-auto">
             <table className="w-full text-left border-collapse text-[13px]">
               <thead>
                 <tr className="border-b border-[var(--border)] text-[12px] text-[var(--text-muted)]">
                   <th className="py-2.5 px-3.5 font-medium">Skill</th>
                   <th className="py-2.5 px-3.5 font-medium">{t.skillsCreateCategoryLabel}</th>
+                  <th className="py-2.5 px-3.5 font-medium">Quality</th>
                   <th className="py-2.5 px-3.5 font-medium">Trust</th>
                   <th className="py-2.5 px-3.5 font-medium">Permissions</th>
                   <th className="py-2.5 px-3.5 font-medium text-right">{t.colAction}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--border)]">
-                {(marketplace?.items || []).map((item) => (
+                {filteredMarketplaceItems.map((item) => (
                   <tr key={item.slug} className="hover:bg-[var(--surface-2)]/50">
                     <td className="py-2.5 px-3.5">
                       <div className="font-mono text-[12px] font-semibold text-[var(--text)]">{item.slug}</div>
                       <div className="text-[12px] text-[var(--text-muted)] line-clamp-1">{item.description}</div>
+                      {(item.frameworks && item.frameworks.length > 0) && (
+                        <div className="text-[11px] font-mono text-[var(--text-muted)] mt-0.5">
+                          {item.frameworks.join(' · ')}
+                        </div>
+                      )}
                     </td>
                     <td className="py-2.5 px-3.5 capitalize text-[12px] text-[var(--text-muted)]">{item.category}</td>
+                    <td className="py-2.5 px-3.5 font-mono tabular-nums text-[12px] text-[var(--text)]">
+                      {item.quality ? `${item.quality.grade} (${item.quality.score})` : '—'}
+                    </td>
                     <td className="py-2.5 px-3.5 font-mono text-[12px] text-[var(--success-text)]">{item.trustBadge}</td>
                     <td className="py-2.5 px-3.5 font-mono text-[12px] text-[var(--text-muted)]">
                       {item.permissions.join(', ') || 'READ'}
@@ -964,6 +1113,55 @@ export function SkillsView({ locale }: SkillsViewProps) {
               </div>
             </div>
 
+            {/* Deterministic Quality, Provenance, Frameworks & Relations */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-[12px] rounded-[6px] border border-[var(--border)] bg-[var(--surface-2)]/60 p-3">
+              <div>
+                <span className="text-[var(--text-muted)]">Quality: </span>
+                <span className="font-mono text-[var(--text)]">
+                  {inspectDetail.manifest.quality
+                    ? `Grade ${inspectDetail.manifest.quality.grade} · ${inspectDetail.manifest.quality.score}/100 (${inspectDetail.manifest.quality.checksPassed}/${inspectDetail.manifest.quality.checksTotal} checks)`
+                    : 'Validated'}
+                </span>
+              </div>
+              <div>
+                <span className="text-[var(--text-muted)]">Provenance: </span>
+                <span className="font-mono text-[var(--text)]">
+                  {inspectDetail.manifest.provenance?.origin || inspectDetail.source}
+                  {inspectDetail.manifest.provenance?.license ? ` · ${inspectDetail.manifest.provenance.license}` : ''}
+                </span>
+              </div>
+              {(inspectDetail.manifest.frameworks && inspectDetail.manifest.frameworks.length > 0) && (
+                <div>
+                  <span className="text-[var(--text-muted)]">Frameworks: </span>
+                  <span className="font-mono text-[var(--text)]">{inspectDetail.manifest.frameworks.join(', ')}</span>
+                </div>
+              )}
+              {(inspectDetail.manifest.provenance?.sourceRepos && inspectDetail.manifest.provenance.sourceRepos.length > 0) && (
+                <div>
+                  <span className="text-[var(--text-muted)]">References: </span>
+                  <span className="font-mono text-[var(--text)]">
+                    {inspectDetail.manifest.provenance.sourceRepos.join(', ')}
+                  </span>
+                </div>
+              )}
+              {(inspectDetail.manifest.dependencies.length > 0 || inspectDetail.manifest.conflicts.length > 0) && (
+                <div className="sm:col-span-2">
+                  {inspectDetail.manifest.dependencies.length > 0 && (
+                    <span className="mr-3">
+                      <span className="text-[var(--text-muted)]">Dependencies: </span>
+                      <span className="font-mono text-[var(--text)]">{inspectDetail.manifest.dependencies.join(', ')}</span>
+                    </span>
+                  )}
+                  {inspectDetail.manifest.conflicts.length > 0 && (
+                    <span>
+                      <span className="text-[var(--text-muted)]">Conflicts: </span>
+                      <span className="font-mono text-[var(--warning-text)]">{inspectDetail.manifest.conflicts.join(', ')}</span>
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+
             {inspectValidation && !inspectValidation.valid && (
               <div role="alert" className="rounded-[6px] border border-[var(--error)] bg-[var(--surface-2)] p-2.5 text-[12px] text-[var(--error-text)]">
                 {inspectValidation.errors.join('; ')}
@@ -1047,6 +1245,29 @@ export function SkillsView({ locale }: SkillsViewProps) {
                 </div>
               )}
             </div>
+
+            {inspectHistory.length > 0 && (
+              <div className="space-y-2 border-t border-[var(--border)] pt-3">
+                <div className="text-[12px] font-semibold text-[var(--text)] flex items-center gap-1.5">
+                  <History className="w-3.5 h-3.5" />
+                  <span>{locale === 'id' ? 'Riwayat Aktivitas & Instalasi' : 'Install & Lifecycle History'}</span>
+                </div>
+                <div className="divide-y divide-[var(--border)] rounded-[6px] border border-[var(--border)]">
+                  {inspectHistory.slice(0, 10).map((ev) => (
+                    <div key={ev.id} className="px-3 py-2 flex items-center justify-between gap-2 text-[12px]">
+                      <div className="min-w-0">
+                        <span className="font-mono font-medium text-[var(--text)] uppercase">{ev.action}</span>
+                        <span className="text-[var(--text-muted)] ml-2">v{ev.version}</span>
+                        {ev.detail && <span className="text-[var(--text-muted)] ml-2">· {ev.detail}</span>}
+                      </div>
+                      <span className="font-mono tabular-nums text-[var(--text-muted)] shrink-0">
+                        {formatDateTime(ev.createdAt, locale)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </>
         )}
       </ModalShell>

@@ -21,6 +21,7 @@ import type {
   SandboxIsolationStatus,
   SkillAnalyticsSummary,
   SkillCategory,
+  SkillInstallHistoryItem,
   SkillMetadataItem,
   SkillPackageDetail,
   SkillPermission,
@@ -282,6 +283,27 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  getModelIdentityCatalog: () =>
+    request<{
+      creators: Array<{
+        id: string;
+        displayName: string;
+        shortName: string;
+        logoPath: string;
+        monochrome: boolean;
+        fallbackMonogram: string;
+        accentColor: string;
+      }>;
+      providers: Array<{
+        id: string;
+        displayName: string;
+        shortName: string;
+        logoPath: string;
+        monochrome: boolean;
+        fallbackMonogram: string;
+        accentColor: string;
+      }>;
+    }>('/api/models/identity'),
 
   // Projects & Templates
   listTemplates: () =>
@@ -518,6 +540,10 @@ export const api = {
   getSkillAnalytics: (projectId?: string) =>
     request<{ analytics: SkillAnalyticsSummary }>(
       `/api/skills/analytics${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`
+    ),
+  getSkillInstallHistory: (skillId?: string) =>
+    request<{ history: SkillInstallHistoryItem[] }>(
+      `/api/skills/history${skillId ? `?skillId=${encodeURIComponent(skillId)}` : ''}`
     ),
 };
 

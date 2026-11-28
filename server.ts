@@ -67,9 +67,11 @@ import {
   getProviderAdapter,
   invalidateCachedModels,
   isNonChatModel,
+  getAllBrandCatalogSummary,
   listAvailablePlatformFallbackProviders,
   loadModelCatalog,
   resolveEffectiveProviderConfig,
+  resolveModelIdentity,
   resolveModelTier,
   setCachedModels,
   type ProviderAdapterConfig,
@@ -132,9 +134,11 @@ import {
   getSkillPackage,
   getSkillPermissionSummary,
   inspectAndImportSkillZip,
+  listSkillInstallHistory,
   listSkillsForContext,
   listSkillVersions,
   MAX_SKILL_IMPORT_ZIP_BYTES,
+  recordSkillInstallHistory,
   rollbackSkillVersion,
   saveUserSkillPackage,
   setProjectSkillConfig,
@@ -1646,6 +1650,33 @@ app.post('/api/providers/models/ephemeral', requireAuth, asyncHandler(async (req
     return res.json({ models: deduplicateModels(fallbackModels), warnings: [`${config.label}: ${msg}`] });
   }
 }));
+
+// Static local brand SVG logos with strong caching (available in both dev and production)
+app.use(
+  '/logos',
+  express.static(path.resolve(process.cwd(), 'public/logos'), {
+    maxAge: '1d',
+    immutable: false,
+    setHeaders: (res) => {
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+    },
+  })
+);
+
+app.get('/api/models/identity', requireAuth, (req, res) => {
+  const catalog = getAllBrandCatalogSummary();
+  const provider = typeof req.query.provider === 'string' ? req.query.provider.trim() : '';
+  const modelId = typeof req.query.modelId === 'string' ? req.query.modelId.trim() : '';
+  const modelName = typeof req.query.modelName === 'string' ? req.query.modelName.trim() : undefined;
+  const resolved =
+    provider && modelId
+      ? resolveModelIdentity({ provider, modelId, modelName })
+      : null;
+  return res.json({
+    ...catalog,
+    ...(resolved ? { resolved, identity: resolved } : {}),
+  });
+});
 
 app.get('/api/providers/models', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
   const forceRefresh = req.query.refresh === '1';
@@ -3396,6 +3427,18 @@ app.get('/api/skills/analytics', requireAuth, asyncHandler(async (req: AuthedReq
   return res.json({ analytics });
 }));
 
+app.get('/api/skills/history', requireAuth, asyncHandler(async (req: AuthedRequest, res) => {
+  const skillId = typeof req.query.skillId === 'string' && req.query.skillId.trim() ? req.query.skillId.trim() : undefined;
+  const rawLimit = typeof req.query.limit === 'string' ? Number(req.query.limit) : 40;
+  const limit = Number.isFinite(rawLimit) ? Math.min(100, Math.max(1, Math.round(rawLimit))) : 40;
+  const history = await listSkillInstallHistory({
+    userId: req.user!.id,
+    skillId,
+    limit,
+  });
+  return res.json({ history });
+}));
+
 app.post('/api/skills/import', requireAuth, importRateLimiter, asyncHandler(async (req: AuthedRequest, res) => {
   const { zipBase64 } = req.body as { zipBase64?: string };
   if (typeof zipBase64 !== 'string' || !zipBase64.trim()) {
@@ -3413,6 +3456,16 @@ app.post('/api/skills/import', requireAuth, importRateLimiter, asyncHandler(asyn
   if (!imported.ok || !imported.skill) {
     return res.status(400).json({ error: imported.error || 'Gagal mengimpor paket skill.', warnings: imported.warnings || [] });
   }
+  await recordSkillInstallHistory({
+    userId: req.user!.id,
+    skillId: imported.skill.id,
+    skillSlug: imported.skill.slug,
+    skillName: imported.skill.name,
+    action: 'import',
+    version: imported.skill.currentVersion,
+    source: imported.skill.source,
+    detail: 'Diimpor dari arsip ZIP (status karantina UNTRUSTED hingga disetujui)',
+  });
   return res.status(201).json({ skill: imported.skill, warnings: imported.warnings || [] });
 }));
 

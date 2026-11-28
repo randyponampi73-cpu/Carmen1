@@ -130,3 +130,4 @@ export function getProviderAdapter(provider: ProviderType): ProviderAdapter {
 export * from './catalog';
 export * from './coarena';
 export * from './types';
+export * from '../../shared/modelIdentity';

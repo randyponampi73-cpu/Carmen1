@@ -2775,4 +2775,67 @@ test('Security hardening: CSRF bearer/cookie precedence, protected env var rejec
   assert.equal(goodPatchHeader.status, 200);
 });
 
+test('Model Identity API, Local SVG Logos & Expanded Skills Marketplace/History HTTP Integration', async () => {
+  resetRateLimitsForTest();
+
+  const reg = await apiJson('/api/auth/register', {
+    method: 'POST',
+    body: { email: 'identity-api@example.com', password: 'password123', name: 'IdentityUser' },
+  });
+  assert.equal(reg.status, 201);
+  const token = String(reg.json.sessionToken);
+
+  // 1. /api/models/identity brand catalog + query resolution
+  const catalogRes = await apiJson('/api/models/identity', { token });
+  assert.equal(catalogRes.status, 200);
+  assert.ok(Array.isArray(catalogRes.json.creators) && (catalogRes.json.creators as unknown[]).length >= 14);
+  assert.ok(Array.isArray(catalogRes.json.providers) && (catalogRes.json.providers as unknown[]).length === 7);
+
+  const resolveRes = await apiJson(
+    '/api/models/identity?provider=openrouter&modelId=anthropic/claude-3.7-sonnet',
+    { token }
+  );
+  assert.equal(resolveRes.status, 200);
+  const resolved = resolveRes.json.identity as {
+    modelCreator: string;
+    provider: string;
+    modelCreatorLogo: string;
+    providerLogo: string;
+    isAggregated: boolean;
+  };
+  assert.equal(resolved.modelCreator, 'anthropic');
+  assert.equal(resolved.provider, 'openrouter');
+  assert.equal(resolved.modelCreatorLogo, '/logos/claude-color.svg');
+  assert.equal(resolved.providerLogo, '/logos/openrouter.svg');
+  assert.equal(resolved.isAggregated, true);
+
+  // 2. Local SVG logo assets served cleanly with nosniff header
+  const svgRes = await fetch(`${baseUrl}/logos/openai.svg`);
+  assert.equal(svgRes.status, 200);
+  assert.equal(svgRes.headers.get('x-content-type-options'), 'nosniff');
+  const svgBody = await svgRes.text();
+  assert.match(svgBody, /<svg[\s>]/i);
+
+  // 3. Skill toggle writes lifecycle entry visible in /api/skills/history
+  const skillsRes = await apiJson('/api/skills', { token });
+  assert.equal(skillsRes.status, 200);
+  const skillsArr = skillsRes.json.skills as Array<{ id: string; slug: string; enabled: boolean }>;
+  assert.equal(skillsArr.length, 71);
+  const firstSkill = skillsArr[0];
+
+  const toggleRes = await apiJson(`/api/skills/${firstSkill.id}/toggle`, {
+    method: 'POST',
+    token,
+    body: { enabled: !firstSkill.enabled },
+  });
+  assert.equal(toggleRes.status, 200);
+
+  const historyRes = await apiJson(`/api/skills/history?skillId=${encodeURIComponent(firstSkill.id)}`, { token });
+  assert.equal(historyRes.status, 200);
+  const historyArr = historyRes.json.history as Array<{ action: string; skillSlug: string }>;
+  assert.ok(historyArr.length >= 1, 'Expected install/lifecycle history entry after skill toggle');
+  assert.equal(historyArr[0].skillSlug, firstSkill.slug);
+});
+
+
 

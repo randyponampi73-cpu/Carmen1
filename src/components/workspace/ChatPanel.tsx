@@ -28,6 +28,7 @@ import type {
   VerificationGateSummary,
 } from '../../types';
 import { ModelSelect } from '../CustomSelect';
+import { ModelCreatorLogo, ModelIdentityInline } from '../ModelIdentityBadge';
 import { TierBadge } from '../ProviderBadge';
 
 // Matches the server notice emitted when a turn stops because the per-turn step budget ran out.
@@ -427,9 +428,16 @@ export function ChatPanel({
         {messages.map((msg) => (
           <div key={msg.id} className="space-y-2">
             <div className="flex items-center justify-between gap-2 text-[12px] text-[var(--text-muted)]">
-              <span className="font-medium text-[var(--text)]">
-                {msg.role === 'user' ? t.chatRoleYou : msg.model || 'Model'}
-              </span>
+              {msg.role === 'user' ? (
+                <span className="font-medium text-[var(--text)]">{t.chatRoleYou}</span>
+              ) : (
+                <ModelIdentityInline
+                  provider={msg.provider || activeModel?.provider || 'custom'}
+                  modelId={msg.model || 'Model'}
+                  modelName={msg.model || 'Model'}
+                  size={14}
+                />
+              )}
               {msg.mode === 'discuss' && msg.role === 'assistant' && <span>{t.modeDiscuss}</span>}
             </div>
 
@@ -521,6 +529,23 @@ export function ChatPanel({
                 {[...lastVerificationGate.failedChecks, ...lastVerificationGate.passedChecks].join(' · ')}
               </div>
             )}
+            {lastVerificationGate.stages && (
+              <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] font-mono text-[var(--text-muted)] pt-0.5">
+                {(
+                  [
+                    ['Code', lastVerificationGate.stages.codeWritten],
+                    ['Build', lastVerificationGate.stages.compiled],
+                    ['Tests', lastVerificationGate.stages.testsPassed],
+                    ['Preview', lastVerificationGate.stages.previewRunning],
+                    ['Runtime', lastVerificationGate.stages.runtimeVerified],
+                  ] as const
+                ).map(([label, ok]) => (
+                  <span key={label} className={ok ? 'text-[var(--success-text)]' : 'text-[var(--text-muted)] opacity-60'}>
+                    {ok ? '✓' : '·'} {label}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -530,9 +555,14 @@ export function ChatPanel({
             <div className="flex flex-wrap items-center justify-between gap-2 text-[12px] text-[var(--text-muted)]">
               <div className="flex items-center gap-2 min-w-0">
                 <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--accent-text)] shrink-0" strokeWidth={1.5} />
-                <span className="font-medium text-[var(--text)] truncate">
-                  {fallbackNotice ? fallbackNotice.toModel : activeModel?.name || 'Model'}
-                </span>
+                <ModelIdentityInline
+                  identity={fallbackNotice ? undefined : activeModel?.identity}
+                  provider={fallbackNotice ? fallbackNotice.toProvider : activeModel?.provider || 'custom'}
+                  modelId={fallbackNotice ? fallbackNotice.toModel : activeModel?.id || 'Model'}
+                  modelName={fallbackNotice ? fallbackNotice.toModel : activeModel?.name || 'Model'}
+                  providerLabel={fallbackNotice ? undefined : activeModel?.providerLabel}
+                  size={14}
+                />
                 {streamingTaskState !== 'idle' && (
                   <span className="font-mono text-[11px] text-[var(--accent-text)] shrink-0">
                     {streamingTaskState === 'planning'
@@ -568,8 +598,17 @@ export function ChatPanel({
             {fallbackNotice && (
               <div className="rounded-[6px] border border-[var(--warning)] bg-[var(--surface-2)] px-2.5 py-1.5 text-[12px] text-[var(--warning-text)] flex items-start gap-2">
                 <RefreshCw className="w-3.5 h-3.5 shrink-0 mt-0.5" strokeWidth={1.6} />
-                <span>
-                  {fallbackNotice.fromProvider}/{fallbackNotice.fromModel} → {fallbackNotice.toProvider}/{fallbackNotice.toModel} ({fallbackNotice.reason})
+                <span className="flex flex-wrap items-center gap-1.5">
+                  <span className="inline-flex items-center gap-1">
+                    <ModelCreatorLogo provider={fallbackNotice.fromProvider} modelId={fallbackNotice.fromModel} size={13} />
+                    <span className="font-mono text-[11px]">{fallbackNotice.fromModel}</span>
+                  </span>
+                  <span aria-hidden="true">→</span>
+                  <span className="inline-flex items-center gap-1 font-medium">
+                    <ModelCreatorLogo provider={fallbackNotice.toProvider} modelId={fallbackNotice.toModel} size={13} />
+                    <span className="font-mono text-[11px]">{fallbackNotice.toModel}</span>
+                  </span>
+                  <span className="text-[var(--text-muted)]">({fallbackNotice.reason})</span>
                 </span>
               </div>
             )}

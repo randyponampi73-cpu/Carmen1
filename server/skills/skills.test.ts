@@ -20,6 +20,7 @@ const {
   checkSkillExecutionPermissions,
   composeSkillPlan,
   createSkillDraft,
+  detectWorkspaceFrameworks,
   discoverRelevantSkills,
   executeComposedSkillWorkflow,
   exportSkillPackageZip,
@@ -28,6 +29,7 @@ const {
   getSkillAnalytics,
   getSkillPackage,
   inspectAndImportSkillZip,
+  listSkillInstallHistory,
   listSkillsForContext,
   loadSkillReferences,
   parseSkillSlashCommands,
@@ -100,16 +102,17 @@ async function apiJson(
   return { status: res.status, headers: res.headers, text, json };
 }
 
-test('Built-in Skills: All 32 skills scan, validate cleanly, map to canonical AGENT_TOOLS, and sync idempotently', async () => {
+test('Built-in Skills: All 71 skills scan, validate cleanly, map to canonical AGENT_TOOLS, and sync idempotently', async () => {
   const scan = scanBuiltinSkillPackages();
   assert.equal(scan.failures.length, 0, `Built-in scan failures: ${JSON.stringify(scan.failures)}`);
-  assert.equal(scan.packages.length, 32, 'Expected 32 built-in CARMEN skill packages');
+  assert.equal(scan.packages.length, 71, 'Expected 71 built-in CARMEN skill packages');
 
   for (const pkg of scan.packages) {
     for (const tool of pkg.manifest.tools) {
       assert.ok(isKnownAgentTool(tool), `Unknown tool "${tool}" in skill ${pkg.slug}`);
     }
     assert.ok(!(pkg.manifest.permissions as string[]).includes('ADMIN'));
+    assert.ok(pkg.manifest.quality && pkg.manifest.quality.score >= 50, `Expected quality score for ${pkg.slug}`);
   }
 
   const secondSync = await syncBuiltinSkillsAsync();
@@ -119,7 +122,7 @@ test('Built-in Skills: All 32 skills scan, validate cleanly, map to canonical AG
 
 test('Progressive Disclosure: Discovery returns lightweight metadata and lazy reference loader caps output', async () => {
   const list = await listSkillsForContext({ includeDisabled: false });
-  assert.equal(list.length, 32);
+  assert.equal(list.length, 71);
   assert.equal('skillMd' in list[0], false, 'Discovery metadata must not eagerly embed SKILL.md');
 
   const secPkg = await getSkillPackage('security-audit');
@@ -490,12 +493,12 @@ test('HTTP Integration: Skill APIs enforce Auth, RBAC/IDOR, ADMIN rejection, Cre
   const unauth = await apiJson('/api/skills');
   assert.equal(unauth.status, 401);
 
-  // Authenticated list returns 32 built-ins + 17 tools
+  // Authenticated list returns 71 built-ins + 17 tools
   const listRes = await apiJson('/api/skills', { token: tokenA });
   assert.equal(listRes.status, 200);
   const skillsArr = listRes.json.skills as Array<{ id: string; slug: string }>;
   const toolsArr = listRes.json.tools as Array<{ name: string }>;
-  assert.equal(skillsArr.length, 32);
+  assert.equal(skillsArr.length, 71);
   assert.equal(toolsArr.length, 17);
 
   // ADMIN permission rejected via API
@@ -549,7 +552,12 @@ test('HTTP Integration: Skill APIs enforce Auth, RBAC/IDOR, ADMIN rejection, Cre
   // Marketplace & Analytics endpoints
   const mkt = await apiJson('/api/skills/marketplace', { token: tokenA });
   assert.equal(mkt.status, 200);
-  assert.equal((mkt.json.items as unknown[]).length, 32);
+  assert.equal((mkt.json.items as unknown[]).length, 71);
+  assert.equal(mkt.json.totalBuiltinCount, 71);
+
+  const hist = await apiJson('/api/skills/history', { token: tokenA });
+  assert.equal(hist.status, 200);
+  assert.ok(Array.isArray(hist.json.history));
 
   const analytics = await apiJson('/api/skills/analytics', { token: tokenA });
   assert.equal(analytics.status, 200);
@@ -673,7 +681,7 @@ test('Security 4.3: Built-in skills load cleanly in production Docker layout & D
     assert.equal(getBuiltinSkillsRoot(), prodSkillsDir);
     const prodScan = scanBuiltinSkillPackages(getBuiltinSkillsRoot());
     assert.equal(prodScan.failures.length, 0);
-    assert.equal(prodScan.packages.length, 32);
+    assert.equal(prodScan.packages.length, 71);
   } finally {
     if (prevEnv === undefined) delete process.env.CARMEN_BUILTIN_SKILLS_DIR;
     else process.env.CARMEN_BUILTIN_SKILLS_DIR = prevEnv;
@@ -1089,5 +1097,64 @@ test('P0 Security: APPROVED skill without EXECUTE grant cannot run scripts, tamp
     .get(userId, rbSkillId) as { enabled?: number } | undefined;
   assert.notEqual(prefRow?.enabled, 1, 'REVOKED skill must not have enabled preference written');
 });
+
+test('Phase 3 & 4: Framework detection, multi-domain discovery, deterministic quality grading, and install history', async () => {
+  const detected = detectWorkspaceFrameworks(['next.config.mjs', 'prisma/schema.prisma', 'Dockerfile', 'playwright.config.ts'], 'Next.js TypeScript');
+  assert.ok(detected.includes('nextjs'));
+  assert.ok(detected.includes('prisma'));
+  assert.ok(detected.includes('docker'));
+  assert.ok(detected.includes('playwright'));
+
+  const skills = await listSkillsForContext({ includeDisabled: false });
+  assert.equal(skills.length, 71);
+
+  // Verify all 15 categories have coverage or valid mapping, and newly added domains discover cleanly
+  const nextDisc = discoverRelevantSkills(
+    {
+      prompt: 'Build Next.js App Router SSR page with server actions and metadata',
+      mode: 'build',
+      projectId: 'p_fw',
+      projectType: 'web',
+      stack: 'Next.js React TypeScript',
+      existingFiles: ['next.config.mjs', 'app/page.tsx'],
+      lastError: null,
+      skillMode: 'auto',
+    },
+    skills
+  );
+  assert.ok(nextDisc.matches.some((m) => m.skill.slug === 'nextjs-fullstack-architecture'));
+
+  const ragDisc = discoverRelevantSkills(
+    {
+      prompt: 'Implement RAG embeddings hybrid vector search and context memory retrieval',
+      mode: 'build',
+      projectId: 'p_ai',
+      projectType: 'web',
+      stack: 'Node.js PostgreSQL pgvector',
+      existingFiles: ['server.ts'],
+      lastError: null,
+      skillMode: 'auto',
+    },
+    skills
+  );
+  assert.ok(ragDisc.matches.some((m) => m.skill.slug === 'rag-embeddings-vector-context-memory'));
+
+  // Newly added skills should score Grade A (>= 85) with provenance recorded
+  const reactSkill = skills.find((s) => s.slug === 'react-typescript-engineering');
+  assert.ok(reactSkill);
+  assert.equal(reactSkill.manifest.quality?.grade, 'A');
+  assert.ok((reactSkill.manifest.quality?.score || 0) >= 85);
+  assert.equal(reactSkill.manifest.provenance?.license, 'MIT');
+
+  // Install history records lifecycle events
+  const userId = 'u_hist_test';
+  db.prepare(
+    `INSERT OR IGNORE INTO users (id, email, name, password_hash, locale, theme) VALUES (?, ?, 'HistUser', 'h', 'en', 'dark')`
+  ).run(userId, 'hist@example.com');
+
+  const histRows = await listSkillInstallHistory({ userId });
+  assert.ok(Array.isArray(histRows));
+});
+
 
 

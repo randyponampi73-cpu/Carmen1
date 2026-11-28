@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { enrichProviderModel } from '../../shared/modelIdentity';
 import type { ModelTier, ProviderModel, ProviderType, TriState } from '../../src/types';
 
 export interface CatalogEntry {
@@ -227,7 +228,8 @@ export function getCachedModels(providerKeyId: string): ProviderModel[] | null {
 }
 
 export function setCachedModels(providerKeyId: string, models: ProviderModel[]): void {
-  modelCache.set(providerKeyId, { fetchedAt: Date.now(), models });
+  const enriched = models.map((m) => enrichProviderModel(m));
+  modelCache.set(providerKeyId, { fetchedAt: Date.now(), models: enriched });
 }
 
 export function invalidateCachedModels(providerKeyId: string): void {
@@ -251,14 +253,18 @@ export function isNonChatModel(modelId: string, modelName?: string): boolean {
   );
 }
 
-export function deduplicateModels(models: ProviderModel[]): ProviderModel[] {
+export function deduplicateModels(
+  models: ProviderModel[],
+  customLogoByKeyId?: Map<string, string | null>
+): ProviderModel[] {
   const seen = new Set<string>();
   const out: ProviderModel[] = [];
   for (const m of models) {
     const key = `${m.providerKeyId}::${m.id}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push(m);
+    const customLogoUrl = customLogoByKeyId?.get(m.providerKeyId) ?? null;
+    out.push(enrichProviderModel(m, { customLogoUrl }));
   }
   return out;
 }

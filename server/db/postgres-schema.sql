@@ -239,6 +239,19 @@ CREATE TABLE IF NOT EXISTS skill_executions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS skill_install_history (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  skill_id TEXT NOT NULL,
+  skill_slug TEXT NOT NULL,
+  skill_name TEXT NOT NULL,
+  action TEXT NOT NULL,
+  version TEXT NOT NULL DEFAULT '1.0.0',
+  source TEXT NOT NULL DEFAULT 'builtin',
+  detail TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);
 CREATE INDEX IF NOT EXISTS idx_project_files_project_id ON project_files(project_id);
 CREATE INDEX IF NOT EXISTS idx_project_versions_project_id ON project_versions(project_id);
@@ -252,6 +265,8 @@ CREATE INDEX IF NOT EXISTS idx_skills_slug ON skills(slug);
 CREATE INDEX IF NOT EXISTS idx_skill_versions_skill_id ON skill_versions(skill_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_skill_executions_project ON skill_executions(project_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_skill_executions_user ON skill_executions(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_skill_install_history_user ON skill_install_history(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_skill_install_history_skill ON skill_install_history(skill_id, created_at);
 
 INSERT INTO schema_migrations (version, name)
 VALUES
@@ -261,7 +276,8 @@ VALUES
   ('004_tenant_schema_isolation', 'Provision strict per-project tenant_<id> PostgreSQL schema isolation separate from core platform tables'),
   ('005_hash_session_tokens', 'Store SHA-256 digest in sessions.token instead of plaintext tokens'),
   ('006_shared_key_usage_metering', 'Add tokens_used and estimated_cost_usd metering columns to shared_key_usage'),
-  ('007_skills_system', 'Add CARMEN Skill Intelligence System tables')
+  ('007_skills_system', 'Add CARMEN Skill Intelligence System tables'),
+  ('008_skill_install_history', 'Add skill_install_history audit table')
 ON CONFLICT (version) DO NOTHING;
 
 -- Core platform tables remain strictly in the platform schema (`users`, `sessions`, `projects`, `provider_keys`).

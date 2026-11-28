@@ -276,6 +276,11 @@ export function validateSkillPackage(input: {
       errors.push(`Tag skill tidak aman atau melampaui batas format: "${tag.slice(0, 40)}".`);
     }
   }
+  for (const fw of parsed.manifest.frameworks || []) {
+    if (!SAFE_TAG_RE.test(fw)) {
+      errors.push(`Framework skill tidak aman atau melampaui batas format: "${fw.slice(0, 40)}".`);
+    }
+  }
   for (const trig of parsed.manifest.triggers) {
     if (trig.length > 64 || /[<>"'\r\n\0]/.test(trig)) {
       errors.push(`Trigger skill mengandung karakter tidak diizinkan atau melebihi 64 karakter.`);

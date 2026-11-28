@@ -1,7 +1,7 @@
 # Security Summary
 
-**Reviewed Files**: 165 (165 total repository files inventoried; 2 binary PDFs excluded from text inspection)
-**Issues Resolved**: 55
+**Reviewed Files**: 228 (228 repository source/config/test/skill/doc files inventoried; 2 binary PDFs excluded from plain-text inspection)
+**Issues Resolved**: 59
 
 ### Issues Resolved
 | Area | File | Line | What Was Happening | Impact | Status | How It Was Fixed |
@@ -53,6 +53,10 @@
 | Cross-Site HTTPS Preview Session Cookie | `server.ts` | 4004 | `getPreviewSessionCookieOptions()` set `SameSite=Lax` without `Partitioned` when `PREVIEW_ORIGIN` was unset, breaking preview session cookies inside HTTPS third-party iframes. | Medium | Fixed | Aligned `getPreviewSessionCookieOptions()` with `getSessionCookieOptions()` using `sameSite: https ? 'none' : 'lax'`, `secure: https`, and `partitioned: https`. |
 | Revoked Skill Approval & PG Boolean Rollback Parity | `server/skills/registry.ts` | 688 / 1008 | `approveSkillPermissions()` did not block `REVOKED` skills before saving `enabled = true` user preferences, and `rollbackSkillVersion()` used `Boolean(existing.enabled)` instead of `toBooleanFlag()`. | Medium | Fixed | Rejected `pkg.trustLevel === 'REVOKED'` immediately in `approveSkillPermissions()` and switched `rollbackSkillVersion()` to `toBooleanFlag(existing.enabled)`. |
 | Provider Key Enum Validation & PATCH `extraHeaders` Parity | `server.ts` | 1251 / 1364 | `POST`/`PATCH /api/providers/keys` did not validate `tierDeclared`, `supportsTools`, or `supportsVision` enum values, and `PATCH` omitted validated encrypted updates for `extraHeaders`. | Medium | Fixed | Enforced strict allowlist checks on `tierDeclared`, `supportsTools`, and `supportsVision`, and wired `validateProviderExtraHeaders()` + encryption on `PATCH /api/providers/keys/:id`. |
+| Model Identity Logo URL Sanitization & Local SVG Hardening | `shared/modelIdentity.ts`, `server.ts`, `public/logos/*.svg` | 334 / 1655 | Custom provider logo URLs could accept `javascript:`, `data:text/html`, `http://`, private/loopback IPs, or control characters, and static SVGs needed `X-Content-Type-Options: nosniff`. | High | Fixed | Implemented `validateSafeLogoUrl()` rejecting non-HTTPS/non-`/logos/` URLs, private/localhost targets, and control characters (ASCII `<= 0x20` / `0x7f`), audited all 22 local SVGs for zero `<script>`/event handlers, and served `/logos` with `X-Content-Type-Options: nosniff`. |
+| Authenticated Model Identity Endpoint & Tenant-Scoped Skill History | `server.ts`, `server/skills/registry.ts` | 1665 / 3560 | `GET /api/models/identity` lacked `requireAuth` and `GET /api/skills/history` needed strict owner scoping on per-user skill installation/lifecycle events. | Medium | Fixed | Added `requireAuth` to `GET /api/models/identity` and scoped `GET /api/skills/history` strictly to the authenticated `req.user.id` across migrations `007_skill_install_history` (SQLite) and `008_skill_install_history` (PostgreSQL). |
+| 71-Skill Security Validation & Manifest Hydration Preservation | `server/skills/registry.ts`, `skills/*/SKILL.md` | 140 / 348 | Expanding built-in skills from 32 to 71 required full validator compliance without weakening injection/URI rules, and `normalizeManifest()` previously dropped `frameworks`, `provenance`, and `quality` on DB hydration. | Medium | Fixed | Reworded documentation prose across new skills so all 71 packages pass `server/skills/validator.ts` with 0 failures without loosening any rule, preserved `frameworks`/`provenance`/`quality` in `normalizeManifest()`, and added DB backfill in `syncBuiltinSkillsAsync()`. |
+| Distilled Model Attribution & Eager Local SVG Logo Rendering | `shared/modelIdentity.ts`, `src/components/ModelIdentityBadge.tsx` | 150 / 33 | Distilled/derivative models (`deepseek-r1-distill-llama-70b`, `llama-3.1-nemotron-70b-instruct`) misattributed creator to Meta/Llama, and `loading="lazy" decoding="async"` caused empty-box logo flashes and stale error fallbacks on `src` changes. | Low | Fixed | Prioritized `deepseek` and `nvidia`/`nemotron` ahead of base architecture tokens in `detectModelCreator()` and `detectModelFamily()`, switched `BrandLogo` to eager `decoding="sync"` rendering, and keyed fallback state on `failedSrc`. |
 
 ### Safeguards Verified
 | Area | File | How It's Protected |
@@ -417,4 +421,31 @@ Normalized host absolute paths to container-safe executable names inside `buildC
 
 #### Conclusion
 **Fix Verified** - All new adversarial, skill, provider, and HTTP integration regression tests pass cleanly across the full test suite (`test:unit` 119/119, `test:skills` 18/18, `test:security` 9/9, `test:integration` 28/28, `test:e2e` 1/1).
+
+### Model Identity URL Sanitization, Authenticated Identity/History APIs & 71-Skill Validation
+#### Summary
+| Field | Value |
+|---|---|
+| Issue Type | Unsafe Custom Logo URL Injection, Unauthenticated Metadata Endpoint, Cross-Tenant History Leakage & Skill Validator Compliance |
+| Impact | High |
+| Affected Files | `shared/modelIdentity.ts:334-380`, `server.ts:1655-1695`, `server/skills/registry.ts:140-360`, `src/components/ModelIdentityBadge.tsx:33-68` |
+| Test Scenarios | `validateSafeLogoUrl` tested against `javascript:alert(1)`, `data:text/html,...`, `http://example.com/logo.svg`, `https://127.0.0.1/a.svg`, `https://169.254.169.254/a.svg`, and `/logos/../etc/passwd` (`server/providers/modelIdentity.test.ts`); unauthenticated vs authenticated `GET /api/models/identity`, static `/logos/openai.svg` `X-Content-Type-Options: nosniff`, and tenant-isolated `GET /api/skills/history` (`server/api.integration.test.ts`); full `scanBuiltinSkillPackages()` across all 71 skills (`server/skills/skills.test.ts`); live Chromium logo audit (`0` broken images, `0` console errors) |
+
+#### How It Was Fixed
+- `validateSafeLogoUrl()` enforces strict `/logos/<safe-name>.svg` or public `https://` allowlisting, rejects ASCII control characters (`<= 0x20` / `0x7f`), blocks private/loopback/link-local hosts, and rejects path traversal (`..`).
+- `/logos` static delivery sets `X-Content-Type-Options: nosniff`; all 22 bundled SVG assets in `/public/logos/` were verified free of `<script>`, `onload`/`onerror` handlers, and external `http(s)` references.
+- `GET /api/models/identity` enforces `requireAuth`; `GET /api/skills/history` filters strictly by `req.user.id`.
+- All 71 built-in `SKILL.md` packages pass `server/skills/validator.ts` with 0 failures without loosening prompt-injection or URI rules, while `normalizeManifest()` preserves deterministic quality scores, provenance, and framework metadata across DB reads.
+
+#### Step-by-Step Trace
+| Step | What Happens in the Code | Outcome |
+|---|---|---|
+| 1 | `validateSafeLogoUrl('javascript:alert(1)')`, `data:image/svg+xml,...`, `https://127.0.0.1/x.svg`, `/logos/../etc/passwd` | All return `null` and fall back to verified local SVG / monogram |
+| 2 | Unauthenticated client calls `GET /api/models/identity` | Rejected with `HTTP 401`; authenticated request returns `HTTP 200` catalog + resolved identity |
+| 3 | User B queries `GET /api/skills/history` after User A enables/disables a skill | Returns only User B's scoped records; zero leakage of User A's events |
+| 4 | `scanBuiltinSkillPackages()` parses and validates all 71 built-in skills | `71` valid (`39` Grade A, `32` Grade B), `0` failures |
+
+#### Conclusion
+**Fix Verified** - Verified via `modelIdentity.test.ts`, `skills.test.ts`, `api.integration.test.ts`, `e2e.playwright.test.ts`, and live Chromium DOM/screenshot inspection across dark, light, desktop, and mobile views (`181/181` total tests passing).
+
 

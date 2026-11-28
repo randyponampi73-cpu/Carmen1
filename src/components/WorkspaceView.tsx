@@ -724,6 +724,17 @@ export function WorkspaceView({
                     status: payload.status as VerificationGateSummary['status'],
                     passedChecks: Array.isArray(payload.passedChecks) ? payload.passedChecks.map(String) : [],
                     failedChecks: Array.isArray(payload.failedChecks) ? payload.failedChecks.map(String) : [],
+                    stages:
+                      payload.stages && typeof payload.stages === 'object'
+                        ? {
+                            codeWritten: Boolean(payload.stages.codeWritten),
+                            compiled: Boolean(payload.stages.compiled),
+                            testsPassed: Boolean(payload.stages.testsPassed),
+                            previewRunning: Boolean(payload.stages.previewRunning),
+                            runtimeVerified: Boolean(payload.stages.runtimeVerified),
+                            deployed: Boolean(payload.stages.deployed),
+                          }
+                        : undefined,
                   });
                 } else if (currentEvent === 'status') {
                   if (payload.warning) {

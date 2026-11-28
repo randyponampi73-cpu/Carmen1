@@ -1,3 +1,7 @@
+import type { ModelAvailability, ModelCreatorId, ModelIdentity } from '../shared/modelIdentity';
+
+export type { ModelAvailability, ModelCreatorId, ModelIdentity };
+
 export type Locale = 'id' | 'en';
 export type ThemeMode = 'dark' | 'light';
 export type AccentColorId = 'crimson' | 'cobalt' | 'emerald' | 'amber' | 'indigo';
@@ -48,6 +52,7 @@ export interface ProviderKeyRecord {
   localOnly?: boolean;
   lastTestStatus?: 'ok' | 'error' | null;
   lastTestMessage?: string | null;
+  logoUrl?: string | null;
   createdAt: string;
 }
 
@@ -61,6 +66,9 @@ export interface ProviderModel {
   tierNote?: string;
   toolCalling: TriState;
   vision: TriState;
+  streaming?: boolean;
+  structuredOutput?: TriState;
+  availability?: ModelAvailability;
   maxContext: number | 'unknown';
   maxOutput: number | 'unknown';
   promptPricePerMillion?: number | null;
@@ -68,6 +76,7 @@ export interface ProviderModel {
   source: string;
   lastVerified: string;
   isNonChat?: boolean;
+  identity?: ModelIdentity;
 }
 
 export interface ProjectSummary {
@@ -307,13 +316,20 @@ export interface ActivityLogEntry {
 }
 
 export type SkillCategory =
+  | 'frontend'
+  | 'backend'
   | 'development'
-  | 'debugging'
+  | 'architecture'
+  | 'database'
+  | 'api'
   | 'security'
   | 'testing'
-  | 'database'
+  | 'debugging'
   | 'devops'
-  | 'architecture'
+  | 'cloud'
+  | 'mobile'
+  | 'release'
+  | 'ai-engineering'
   | 'agents';
 
 export type SkillPermission = 'READ' | 'WRITE' | 'EXECUTE' | 'NETWORK' | 'DATABASE' | 'DEPLOY';
@@ -321,10 +337,38 @@ export type SkillTrustLevel = 'BUILTIN' | 'VERIFIED' | 'APPROVED' | 'DRAFT' | 'U
 export type SkillSource = 'builtin' | 'created' | 'imported' | 'marketplace';
 export type SkillInvocationMode = 'auto' | 'manual' | 'advanced';
 
+export interface SkillProvenance {
+  origin: 'carmen-builtin' | 'community-inspired' | 'user-created' | 'imported' | 'remote';
+  sourceRepos?: string[];
+  license?: string;
+  researchedAt?: string;
+}
+
+export interface SkillQualitySummary {
+  score: number;
+  grade: 'A' | 'B' | 'C';
+  checksPassed: number;
+  checksTotal: number;
+  missingRecommendedSections: string[];
+}
+
+export interface SkillInstallHistoryItem {
+  id: string;
+  skillId: string;
+  skillSlug: string;
+  skillName: string;
+  action: 'install' | 'enable' | 'disable' | 'update' | 'import' | 'uninstall' | 'approve';
+  version: string;
+  source: string;
+  detail: string | null;
+  createdAt: string;
+}
+
 export interface SkillManifestSummary {
   category: SkillCategory;
   version: string;
   tags: string[];
+  frameworks?: string[];
   tools: string[];
   permissions: SkillPermission[];
   triggers: string[];
@@ -335,6 +379,8 @@ export interface SkillManifestSummary {
   examples: string[];
   hasReferences: boolean;
   hasScripts: boolean;
+  provenance?: SkillProvenance;
+  quality?: SkillQualitySummary;
 }
 
 export interface SkillMetadataItem {
@@ -425,6 +471,12 @@ export interface MarketplaceSkillItem {
   enabled: boolean;
   trustBadge: string;
   permissions: SkillPermission[];
+  tags?: string[];
+  frameworks?: string[];
+  dependencies?: string[];
+  conflicts?: string[];
+  quality?: SkillQualitySummary;
+  provenance?: SkillProvenance;
 }
 
 export interface MarketplaceCatalogData {
@@ -432,6 +484,9 @@ export interface MarketplaceCatalogData {
   remoteConfigured: boolean;
   remoteAvailable: boolean;
   remoteNotice: string;
+  totalBuiltinCount?: number;
+  categories?: SkillCategory[];
+  frameworks?: string[];
 }
 
 export interface SkillTurnTraceItem {
@@ -454,8 +509,18 @@ export type AgentTaskState =
   | 'failed'
   | 'cancelled';
 
+export interface VerificationStages {
+  codeWritten: boolean;
+  compiled: boolean;
+  testsPassed: boolean;
+  previewRunning: boolean;
+  runtimeVerified: boolean;
+  deployed: boolean;
+}
+
 export interface VerificationGateSummary {
   status: 'verified_pass' | 'verified_fail' | 'not_verified' | 'not_required';
   passedChecks: string[];
   failedChecks: string[];
+  stages?: VerificationStages;
 }

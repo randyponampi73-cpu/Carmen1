@@ -1,14 +1,19 @@
 import { Check, ChevronDown, Search } from 'lucide-react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { resolveModelIdentity } from '../../shared/modelIdentity';
 import { COPY } from '../i18n';
-import type { Locale, ModelTier, ProviderModel } from '../types';
+import type { Locale, ModelTier, ProviderModel, ProviderType } from '../types';
+import { ModelCreatorLogo, ProviderLogo } from './ModelIdentityBadge';
 import { TierBadge } from './ProviderBadge';
 
 export interface SelectOption {
   value: string;
   label: string;
   sublabel?: string;
+  sublabelNode?: React.ReactNode;
+  icon?: React.ReactNode;
   badge?: React.ReactNode;
+  searchKeywords?: string;
   disabled?: boolean;
 }
 
@@ -78,6 +83,7 @@ export function CustomSelect({
       (o) =>
         o.label.toLowerCase().includes(q) ||
         (o.sublabel && o.sublabel.toLowerCase().includes(q)) ||
+        (o.searchKeywords && o.searchKeywords.toLowerCase().includes(q)) ||
         o.value.toLowerCase().includes(q)
     );
   }, [options, query]);
@@ -283,13 +289,16 @@ export function CustomSelect({
                       <span className="w-3.5 h-3.5 shrink-0 flex items-center justify-center">
                         {isSelected && <Check className="w-3.5 h-3.5 text-[var(--accent-text)]" strokeWidth={2} />}
                       </span>
+                      {opt.icon && <span className="shrink-0 flex items-center justify-center">{opt.icon}</span>}
                       <div className="min-w-0 flex-1">
                         <div className={`truncate leading-tight ${isSelected ? 'font-medium' : ''}`}>{opt.label}</div>
-                        {opt.sublabel && (
+                        {opt.sublabelNode ? (
+                          <div className="mt-0.5 min-w-0">{opt.sublabelNode}</div>
+                        ) : opt.sublabel ? (
                           <div className="text-[12px] text-[var(--text-muted)] font-mono truncate leading-tight mt-0.5">
                             {opt.sublabel}
                           </div>
-                        )}
+                        ) : null}
                       </div>
                     </div>
                     {opt.badge && <div className="shrink-0">{opt.badge}</div>}
@@ -378,11 +387,22 @@ export function ModelSelect({
   const t = COPY[locale];
   const [showAllModels, setShowAllModels] = useState(false);
   const [tierFilter, setTierFilter] = useState<'all' | 'free' | 'paid'>('all');
+  const [providerFilter, setProviderFilter] = useState<'all' | ProviderType>('all');
 
-  const { visible, hiddenNonChatCount } = useMemo(
-    () => prepareModelList(models, { showAllModels, tierFilter: showTierFilter ? tierFilter : 'all' }),
-    [models, showAllModels, showTierFilter, tierFilter]
-  );
+  const availableProviders = useMemo(() => {
+    const seen = new Set<ProviderType>();
+    for (const m of models) seen.add(m.provider);
+    return Array.from(seen);
+  }, [models]);
+
+  const { visible, hiddenNonChatCount } = useMemo(() => {
+    const base = prepareModelList(models, { showAllModels, tierFilter: showTierFilter ? tierFilter : 'all' });
+    if (providerFilter === 'all') return base;
+    return {
+      visible: base.visible.filter((m) => m.provider === providerFilter),
+      hiddenNonChatCount: base.hiddenNonChatCount,
+    };
+  }, [models, showAllModels, showTierFilter, tierFilter, providerFilter]);
 
   // Always keep currently selected model selectable even if it was hidden
   const effectiveModels = useMemo(() => {
@@ -398,10 +418,46 @@ export function ModelSelect({
       list.push({ value: '', label: allowEmptyLabel });
     }
     for (const m of effectiveModels) {
+      const identity =
+        m.identity ??
+        resolveModelIdentity({
+          provider: m.provider,
+          modelId: m.id,
+          modelName: m.name,
+        });
+      const contextShort =
+        typeof m.maxContext === 'number' && m.maxContext > 0
+          ? m.maxContext >= 1_000_000
+            ? `${(m.maxContext / 1_000_000).toFixed(m.maxContext % 1_000_000 === 0 ? 0 : 1)}M ctx`
+            : `${Math.round(m.maxContext / 1000)}k ctx`
+          : null;
+
       list.push({
         value: `${m.providerKeyId}::${m.id}`,
         label: m.name,
-        sublabel: `${m.providerLabel} · ${m.id}`,
+        sublabel: `${identity.modelCreatorName} · ${m.providerLabel} · ${m.id}`,
+        searchKeywords: `${identity.modelCreatorName} ${identity.modelFamily} ${identity.providerName} ${m.providerLabel} ${m.provider} ${m.id}`,
+        icon: <ModelCreatorLogo identity={identity} size={16} />,
+        sublabelNode: (
+          <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)] leading-tight truncate">
+            <span className="truncate">{identity.modelCreatorName}</span>
+            {identity.isAggregated && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="inline-flex items-center gap-1 shrink-0">
+                  <ProviderLogo provider={m.provider} size={11} />
+                  <span className="truncate max-w-[84px]">{m.providerLabel}</span>
+                </span>
+              </>
+            )}
+            {contextShort && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="font-mono tabular-nums shrink-0">{contextShort}</span>
+              </>
+            )}
+          </div>
+        ),
         badge: <TierBadge tier={m.tier as ModelTier} locale={locale} note={m.tierNote} />,
       });
     }
@@ -413,7 +469,21 @@ export function ModelSelect({
     [models, value]
   );
 
+  const activeIdentity = useMemo(
+    () =>
+      activeModel
+        ? activeModel.identity ??
+          resolveModelIdentity({
+            provider: activeModel.provider,
+            modelId: activeModel.id,
+            modelName: activeModel.name,
+          })
+        : null,
+    [activeModel]
+  );
+
   const hasAnyNonChat = hiddenNonChatCount > 0 || showAllModels;
+  const showHeaderFilters = showTierFilter || availableProviders.length > 1;
 
   return (
     <CustomSelect
@@ -436,9 +506,18 @@ export function ModelSelect({
       popoverClassName={popoverClassName}
       onChange={onChange}
       renderTriggerValue={() =>
-        activeModel ? (
+        activeModel && activeIdentity ? (
           <span className="flex items-center gap-1.5 min-w-0 flex-1">
+            <ModelCreatorLogo identity={activeIdentity} size={compact ? 14 : 15} />
             <span className="truncate font-medium text-[var(--text)]">{activeModel.name}</span>
+            {activeIdentity.isAggregated && !compact && (
+              <span
+                className="inline-flex items-center gap-1 text-[11px] text-[var(--text-muted)] shrink-0"
+                title={`Routed via ${activeModel.providerLabel}`}
+              >
+                <ProviderLogo provider={activeModel.provider} size={12} />
+              </span>
+            )}
             {!compact && <TierBadge tier={activeModel.tier} locale={locale} note={activeModel.tierNote} />}
           </span>
         ) : (
@@ -446,22 +525,56 @@ export function ModelSelect({
         )
       }
       headerSlot={
-        showTierFilter ? (
-          <div className="flex items-center gap-1">
-            {(['all', 'free', 'paid'] as const).map((f) => (
-              <button
-                key={f}
-                type="button"
-                onClick={() => setTierFilter(f)}
-                className={`h-7 px-2 rounded-[6px] text-[12px] font-medium cursor-pointer ${
-                  tierFilter === f
-                    ? 'bg-[var(--surface-2)] text-[var(--text)] border border-[var(--border)]'
-                    : 'text-[var(--text-muted)] hover:text-[var(--text)]'
-                }`}
-              >
-                {f === 'all' ? t.filterAll : f === 'free' ? t.filterFree : t.filterPaid}
-              </button>
-            ))}
+        showHeaderFilters ? (
+          <div className="space-y-1.5">
+            {showTierFilter && (
+              <div className="flex items-center gap-1">
+                {(['all', 'free', 'paid'] as const).map((f) => (
+                  <button
+                    key={f}
+                    type="button"
+                    onClick={() => setTierFilter(f)}
+                    className={`h-6 px-2 rounded-[5px] text-[11px] font-medium cursor-pointer ${
+                      tierFilter === f
+                        ? 'bg-[var(--surface-2)] text-[var(--text)] border border-[var(--border)]'
+                        : 'text-[var(--text-muted)] hover:text-[var(--text)]'
+                    }`}
+                  >
+                    {f === 'all' ? t.filterAll : f === 'free' ? t.filterFree : t.filterPaid}
+                  </button>
+                ))}
+              </div>
+            )}
+            {availableProviders.length > 1 && (
+              <div className="flex items-center gap-1 overflow-x-auto pb-0.5">
+                <button
+                  type="button"
+                  onClick={() => setProviderFilter('all')}
+                  className={`h-6 px-2 rounded-[5px] text-[11px] font-medium whitespace-nowrap cursor-pointer ${
+                    providerFilter === 'all'
+                      ? 'bg-[var(--surface-2)] text-[var(--text)] border border-[var(--border)]'
+                      : 'text-[var(--text-muted)] hover:text-[var(--text)]'
+                  }`}
+                >
+                  {t.filterAll}
+                </button>
+                {availableProviders.map((prov) => (
+                  <button
+                    key={prov}
+                    type="button"
+                    onClick={() => setProviderFilter(prov)}
+                    className={`h-6 px-2 rounded-[5px] text-[11px] font-medium whitespace-nowrap inline-flex items-center gap-1 cursor-pointer ${
+                      providerFilter === prov
+                        ? 'bg-[var(--surface-2)] text-[var(--text)] border border-[var(--border)]'
+                        : 'text-[var(--text-muted)] hover:text-[var(--text)]'
+                    }`}
+                  >
+                    <ProviderLogo provider={prov} size={12} />
+                    <span className="capitalize">{prov}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         ) : undefined
       }

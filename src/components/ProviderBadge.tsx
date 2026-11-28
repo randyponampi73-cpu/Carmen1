@@ -1,6 +1,7 @@
 import { useId, useState } from 'react';
 import { FREE_TIER_TOOLTIP, formatTierLabel } from '../i18n';
 import type { Locale, ModelTier, ProviderType } from '../types';
+import { ProviderLogo } from './ModelIdentityBadge';
 
 const PROVIDER_DISPLAY_NAMES: Record<ProviderType, string> = {
   anthropic: 'Anthropic',
@@ -15,14 +16,16 @@ const PROVIDER_DISPLAY_NAMES: Record<ProviderType, string> = {
 interface ProviderBadgeProps {
   provider: ProviderType;
   label?: string;
+  customLogoUrl?: string | null;
 }
 
-export function ProviderBadge({ provider, label }: ProviderBadgeProps) {
+export function ProviderBadge({ provider, label, customLogoUrl }: ProviderBadgeProps) {
   const text = label || PROVIDER_DISPLAY_NAMES[provider] || provider;
 
   return (
-    <span className="inline-flex items-center rounded-[6px] border border-[var(--border)] px-1.5 py-0 text-[12px] leading-[18px] font-mono font-medium text-[var(--text-muted)] whitespace-nowrap shrink-0">
-      {text}
+    <span className="inline-flex items-center gap-1.5 rounded-[6px] border border-[var(--border)] px-1.5 py-0.5 text-[12px] leading-[16px] font-mono font-medium text-[var(--text-muted)] whitespace-nowrap shrink-0">
+      <ProviderLogo provider={provider} customLogoUrl={customLogoUrl} size={13} />
+      <span>{text}</span>
     </span>
   );
 }

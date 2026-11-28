@@ -192,6 +192,32 @@ export const SQLITE_MIGRATIONS: DbMigration[] = [
       DROP TABLE IF EXISTS skills;
     `,
   },
+  {
+    version: '007_skill_install_history',
+    name: 'Add skill_install_history table for transparent skill install/enable/disable/update/import audit history',
+    upSql: `
+      CREATE TABLE IF NOT EXISTS skill_install_history (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        skill_id TEXT NOT NULL,
+        skill_slug TEXT NOT NULL,
+        skill_name TEXT NOT NULL,
+        action TEXT NOT NULL,
+        version TEXT NOT NULL DEFAULT '1.0.0',
+        source TEXT NOT NULL DEFAULT 'builtin',
+        detail TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_skill_install_history_user ON skill_install_history(user_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_skill_install_history_skill ON skill_install_history(skill_id, created_at);
+    `,
+    downSql: `
+      DROP INDEX IF EXISTS idx_skill_install_history_skill;
+      DROP INDEX IF EXISTS idx_skill_install_history_user;
+      DROP TABLE IF EXISTS skill_install_history;
+    `,
+  },
 ];
 
 export interface MigrationRunResult {

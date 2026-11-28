@@ -32,12 +32,95 @@ function tokenizePrompt(text: string): Set<string> {
   );
 }
 
+export function detectWorkspaceFrameworks(existingFiles: string[], stack: string): string[] {
+  const detected = new Set<string>();
+  const stackLower = (stack || '').toLowerCase();
+  const filesLower = existingFiles.map((f) => f.toLowerCase());
+  const joined = `${stackLower} ${filesLower.join(' ')}`;
+
+  if (/\breact\b/.test(stackLower) || filesLower.some((f) => f.endsWith('.tsx') || f.endsWith('.jsx'))) {
+    detected.add('react');
+  }
+  if (filesLower.some((f) => f.includes('next.config')) || /\bnext(\.?js)?\b/.test(stackLower)) {
+    detected.add('nextjs');
+  }
+  if (filesLower.some((f) => f.includes('vite.config')) || /\bvite\b/.test(stackLower)) {
+    detected.add('vite');
+  }
+  if (filesLower.some((f) => f.includes('tsconfig') || f.endsWith('.ts') || f.endsWith('.tsx')) || /\btypescript\b/.test(stackLower)) {
+    detected.add('typescript');
+  }
+  if (filesLower.some((f) => f.includes('tailwind')) || /\btailwind\b/.test(stackLower)) {
+    detected.add('tailwind');
+  }
+  if (filesLower.some((f) => f.endsWith('.vue')) || /\bvue\b/.test(stackLower)) {
+    detected.add('vue');
+  }
+  if (filesLower.some((f) => f.endsWith('.svelte')) || /\bsvelte\b/.test(stackLower)) {
+    detected.add('svelte');
+  }
+  if (/\bexpress\b/.test(joined) || filesLower.some((f) => f === 'server.ts' || f === 'server.js')) {
+    detected.add('express');
+    detected.add('nodejs');
+  }
+  if (/\bfastify\b/.test(joined)) {
+    detected.add('fastify');
+    detected.add('nodejs');
+  }
+  if (filesLower.some((f) => f === 'package.json')) {
+    detected.add('nodejs');
+  }
+  if (filesLower.some((f) => f.endsWith('.py') || f === 'requirements.txt' || f === 'pyproject.toml') || /\b(python|fastapi|django)\b/.test(stackLower)) {
+    detected.add('python');
+    if (/\bfastapi\b/.test(joined)) detected.add('fastapi');
+    if (/\bdjango\b/.test(joined)) detected.add('django');
+  }
+  if (filesLower.some((f) => f === 'go.mod' || f.endsWith('.go')) || /\bgolang\b/.test(stackLower)) {
+    detected.add('go');
+  }
+  if (filesLower.some((f) => f === 'cargo.toml' || f.endsWith('.rs')) || /\brust\b/.test(stackLower)) {
+    detected.add('rust');
+  }
+  if (filesLower.some((f) => f.includes('prisma')) || /\bprisma\b/.test(stackLower)) {
+    detected.add('prisma');
+  }
+  if (filesLower.some((f) => f.includes('drizzle')) || /\bdrizzle\b/.test(stackLower)) {
+    detected.add('drizzle');
+  }
+  if (filesLower.some((f) => f.endsWith('.sql')) || /\b(postgres|postgresql|sqlite|sql)\b/.test(stackLower)) {
+    detected.add('sql');
+    if (/\bpostgres/.test(joined)) detected.add('postgresql');
+    if (/\bsqlite/.test(joined)) detected.add('sqlite');
+  }
+  if (/\bredis\b/.test(joined)) detected.add('redis');
+  if (/\bmongo/.test(joined)) detected.add('mongodb');
+  if (/\bgraphql\b/.test(joined)) detected.add('graphql');
+  if (filesLower.some((f) => f.includes('playwright')) || /\bplaywright\b/.test(stackLower)) {
+    detected.add('playwright');
+  }
+  if (filesLower.some((f) => f.includes('vitest')) || /\bvitest\b/.test(stackLower)) {
+    detected.add('vitest');
+  }
+  if (filesLower.some((f) => f.includes('dockerfile') || f.includes('docker-compose'))) {
+    detected.add('docker');
+  }
+  if (filesLower.some((f) => f.includes('capacitor.config')) || /\bcapacitor\b/.test(stackLower)) {
+    detected.add('capacitor');
+  }
+  if (filesLower.some((f) => f.includes('manifest.json') || f.includes('manifest.webmanifest') || f.includes('sw.js'))) {
+    detected.add('pwa');
+  }
+
+  return Array.from(detected);
+}
+
 function scoreAutoSkill(
   skill: SkillMetadata,
   ctx: SkillDiscoveryContext,
   intent: ReturnType<typeof classifyAgentIntent>['intent'],
   promptLower: string,
-  tokens: Set<string>
+  tokens: Set<string>,
+  workspaceFrameworks: Set<string>
 ): { confidence: number; matchedTriggers: string[]; reasons: string[] } {
   let score = 0;
   const matchedTriggers: string[] = [];
@@ -71,6 +154,21 @@ function scoreAutoSkill(
     reasons.push(`${tagHits} tag relevan`);
   }
 
+  const skillFrameworks = skill.manifest.frameworks || [];
+  let frameworkHits = 0;
+  for (const fw of skillFrameworks) {
+    const f = fw.toLowerCase();
+    if (tokens.has(f) || promptLower.includes(f)) {
+      frameworkHits += 1;
+    } else if (workspaceFrameworks.has(f) && score > 0.15) {
+      score += 0.08;
+    }
+  }
+  if (frameworkHits > 0) {
+    score += Math.min(0.28, frameworkHits * 0.14);
+    reasons.push(`Cocok framework (${frameworkHits})`);
+  }
+
   const slugParts = skill.slug.split('-').filter((w) => w.length >= 3);
   const slugHits = slugParts.filter((w) => tokens.has(w)).length;
   if (slugHits >= 2 || (slugParts.length === 1 && slugHits === 1)) {
@@ -86,11 +184,45 @@ function scoreAutoSkill(
   if (skill.category === 'agents') {
     const asksSkillWork = /\b(skill|skill\.md|buat skill|validasi skill|create skill)\b/i.test(promptLower);
     if (!asksSkillWork) {
-      // Never activate meta-agent skill authoring skills during ordinary app building
       score = Math.min(score, 0.2);
     } else {
       score += 0.4;
       reasons.push('Permintaan terkait authoring/validasi Skill');
+    }
+  } else if (skill.category === 'ai-engineering') {
+    if (/\b(llm|rag|embedding|vector|prompt|agent|tool calling|function calling|streaming|openai|anthropic|gemini|context memory)\b/i.test(promptLower)) {
+      score += 0.38;
+      reasons.push('Konteks AI/LLM engineering');
+    }
+  } else if (skill.category === 'frontend') {
+    if (/\b(react|next\.?js|vue|svelte|tailwind|css|ui|ux|component|accessibility|wcag|a11y|responsive|hydration|vite)\b/i.test(promptLower)) {
+      score += 0.34;
+      reasons.push('Konteks frontend engineering');
+    }
+  } else if (skill.category === 'backend') {
+    if (/\b(express|fastify|fastapi|django|golang|rust|java|spring|queue|worker|bullmq|cron|cache|background job|middleware|server)\b/i.test(promptLower)) {
+      score += 0.34;
+      reasons.push('Konteks backend engineering');
+    }
+  } else if (skill.category === 'api') {
+    if (/\b(rest|openapi|swagger|graphql|websocket|sse|webhook|idempotency|rate limit|versioning|sdk|integration)\b/i.test(promptLower)) {
+      score += 0.36;
+      reasons.push('Konteks API & integrasi');
+    }
+  } else if (skill.category === 'cloud') {
+    if (/\b(aws|gcp|azure|cloudflare|serverless|edge|s3|r2|gcs|cloud run|lambda|workers|object storage)\b/i.test(promptLower)) {
+      score += 0.36;
+      reasons.push('Konteks cloud & edge infrastructure');
+    }
+  } else if (skill.category === 'mobile') {
+    if (/\b(pwa|service worker|offline|mobile|responsive|touch|capacitor|webview|manifest|ios|android)\b/i.test(promptLower)) {
+      score += 0.36;
+      reasons.push('Konteks mobile web / PWA / Capacitor');
+    }
+  } else if (skill.category === 'release') {
+    if (/\b(vercel|netlify|cloudflare pages|release|rollback|zero-downtime|production readiness|smoke test|go-live)\b/i.test(promptLower)) {
+      score += 0.36;
+      reasons.push('Konteks release & deployment');
     }
   } else if (skill.category === 'debugging') {
     if (intent === 'bug_repair' || Boolean(ctx.lastError)) {
@@ -98,7 +230,7 @@ function scoreAutoSkill(
       reasons.push(ctx.lastError ? 'Error runtime/build terdeteksi' : 'Intent perbaikan bug');
     }
   } else if (skill.category === 'database') {
-    if (/\b(sql|database|tabel|table|schema|migrasi|migration|sqlite|postgres|indeks|index|query)\b/i.test(promptLower)) {
+    if (/\b(sql|database|tabel|table|schema|migrasi|migration|sqlite|postgres|postgresql|redis|prisma|drizzle|mongo|mongodb|indeks|index|query)\b/i.test(promptLower)) {
       score += 0.36;
       reasons.push('Konteks skema/database');
     } else if (hasSchema && intent === 'fullstack_feature') {
@@ -106,7 +238,7 @@ function scoreAutoSkill(
     }
   } else if (skill.category === 'security') {
     if (
-      /\b(security|keamanan|audit|vulnerab|kerentanan|xss|sqli|sql injection|ssrf|csrf|secret|api key|auth|owasp|token|encrypt)\b/i.test(
+      /\b(security|keamanan|audit|vulnerab|kerentanan|xss|sqli|sql injection|ssrf|csrf|secret|api key|auth|oauth|oidc|jwt|rbac|owasp|token|encrypt|threat model|upload)\b/i.test(
         promptLower
       )
     ) {
@@ -114,7 +246,7 @@ function scoreAutoSkill(
       reasons.push('Permintaan keamanan/audit');
     }
   } else if (skill.category === 'testing') {
-    if (/\b(test|uji|pengujian|playwright|e2e|unit test|integration test|spec|coverage)\b/i.test(promptLower)) {
+    if (/\b(test|uji|pengujian|playwright|e2e|unit test|integration test|vitest|jest|tdd|mock|spec|coverage)\b/i.test(promptLower)) {
       score += 0.38;
       reasons.push('Permintaan pengujian otomatis');
     } else if (hasTests && intent === 'bug_repair') {
@@ -122,7 +254,7 @@ function scoreAutoSkill(
     }
   } else if (skill.category === 'devops') {
     if (
-      /\b(docker|container|deploy|deployment|ci|cd|github actions|env|environment|cloud run|caddy|nginx)\b/i.test(
+      /\b(docker|container|kubernetes|k8s|terraform|iac|observability|telemetry|deploy|deployment|ci|cd|github actions|env|environment|cloud run|caddy|nginx|linux)\b/i.test(
         promptLower
       ) ||
       (hasDockerfile && /\b(build|run|deploy|container)\b/i.test(promptLower))
@@ -133,7 +265,7 @@ function scoreAutoSkill(
   } else if (skill.category === 'architecture') {
     if (
       ctx.mode === 'discuss' ||
-      /\b(arsitektur|architecture|system design|desain sistem|api design|openapi|rest api|dokumentasi|readme)\b/i.test(
+      /\b(arsitektur|architecture|system design|desain sistem|monolith|microservices|event-driven|ddd|multi-tenant|saas|api design|openapi|rest api|dokumentasi|readme)\b/i.test(
         promptLower
       )
     ) {
@@ -242,6 +374,7 @@ export function discoverRelevantSkills(
   // Auto / Advanced discovery scoring
   const promptLower = ctx.prompt.toLowerCase();
   const tokens = tokenizePrompt(ctx.prompt);
+  const workspaceFrameworks = new Set(detectWorkspaceFrameworks(ctx.existingFiles, ctx.stack));
   const { intent } = classifyAgentIntent({
     prompt: ctx.prompt,
     mode: ctx.mode,
@@ -263,7 +396,8 @@ export function discoverRelevantSkills(
       ctx,
       intent,
       promptLower,
-      tokens
+      tokens,
+      workspaceFrameworks
     );
     if (confidence >= minScore) {
       autoCandidates.push({

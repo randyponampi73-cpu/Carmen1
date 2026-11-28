@@ -7,10 +7,12 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  Search,
   ShieldCheck,
   Trash2,
 } from 'lucide-react';
 import { useId, useMemo, useState } from 'react';
+import { resolveModelIdentity } from '../../shared/modelIdentity';
 import {
   COPY,
   PROVIDER_CATALOG_META,
@@ -32,6 +34,7 @@ import type {
 } from '../types';
 import { ConfirmDialog, ModalShell } from './ConfirmDialog';
 import { CustomSelect, isModelNonChat, ModelSelect } from './CustomSelect';
+import { ModelCreatorLogo, ProviderLogo } from './ModelIdentityBadge';
 import { ProviderBadge, TierBadge } from './ProviderBadge';
 
 interface SettingsViewProps {
@@ -98,6 +101,7 @@ export function SettingsView({
 
   // Model catalog filter (KEY-5)
   const [modelFilter, setModelFilter] = useState<'all' | 'free' | 'paid' | 'tools'>('all');
+  const [modelSearch, setModelSearch] = useState('');
   const [showAllCatalogModels, setShowAllCatalogModels] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState('');
 
@@ -109,6 +113,7 @@ export function SettingsView({
   const { filteredModels, hiddenNonChatCount } = useMemo(() => {
     let hidden = 0;
     const out: ProviderModel[] = [];
+    const q = modelSearch.trim().toLowerCase();
     for (const m of models) {
       if (isModelNonChat(m) && !showAllCatalogModels) {
         hidden += 1;
@@ -117,10 +122,21 @@ export function SettingsView({
       if (modelFilter === 'free' && m.tier !== 'free') continue;
       if (modelFilter === 'paid' && m.tier !== 'paid') continue;
       if (modelFilter === 'tools' && m.toolCalling !== 'yes') continue;
+      if (q) {
+        const identity =
+          m.identity ??
+          resolveModelIdentity({
+            provider: m.provider,
+            modelId: m.id,
+            modelName: m.name,
+          });
+        const haystack = `${m.name} ${m.id} ${m.providerLabel} ${m.provider} ${identity.modelCreatorName} ${identity.modelFamily}`.toLowerCase();
+        if (!haystack.includes(q)) continue;
+      }
       out.push(m);
     }
     return { filteredModels: out, hiddenNonChatCount: hidden };
-  }, [models, modelFilter, showAllCatalogModels]);
+  }, [models, modelFilter, modelSearch, showAllCatalogModels]);
 
   function openBuiltInModal(provider: ProviderType) {
     const meta = PROVIDER_CATALOG_META.find((p) => p.id === provider);
@@ -445,8 +461,10 @@ export function SettingsView({
                       <div>
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-2 min-w-0">
+                            <span className="w-7 h-7 rounded-[6px] border border-[var(--border)] bg-[var(--surface-2)] flex items-center justify-center shrink-0">
+                              <ProviderLogo provider={meta.id} size={16} />
+                            </span>
                             <h2 className="text-[14px] font-semibold text-[var(--text)] truncate">{meta.name}</h2>
-                            <ProviderBadge provider={meta.id} />
                           </div>
                           {meta.id !== 'custom' && (
                             <a
@@ -696,33 +714,46 @@ export function SettingsView({
               </div>
 
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div
-                  role="group"
-                  aria-label={t.filterModelsAria}
-                  className="inline-flex items-center gap-1 rounded-[6px] border border-[var(--border)] bg-[var(--surface)] p-0.5 overflow-x-auto max-w-full"
-                >
-                  {(
-                    [
-                      ['all', t.filterAll],
-                      ['free', t.filterFree],
-                      ['paid', t.filterPaid],
-                      ['tools', t.filterTools],
-                    ] as const
-                  ).map(([id, label]) => (
-                    <button
-                      key={id}
-                      type="button"
-                      aria-pressed={modelFilter === id}
-                      onClick={() => setModelFilter(id)}
-                      className={`h-7 px-2.5 rounded-[6px] text-[12px] font-medium whitespace-nowrap cursor-pointer ${
-                        modelFilter === id
-                          ? 'bg-[var(--surface-2)] text-[var(--text)] border border-[var(--border)]'
-                          : 'text-[var(--text-muted)] hover:text-[var(--text)]'
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  ))}
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="relative flex items-center">
+                    <Search className="w-3.5 h-3.5 text-[var(--text-muted)] absolute left-2.5 pointer-events-none" strokeWidth={1.5} />
+                    <input
+                      type="text"
+                      value={modelSearch}
+                      onChange={(e) => setModelSearch(e.target.value)}
+                      placeholder={t.searchModelsPlaceholder}
+                      aria-label={t.searchModelsPlaceholder}
+                      className="h-8 w-52 sm:w-64 rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface)] pl-8 pr-2.5 text-[12px] text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)] focus:outline-none"
+                    />
+                  </div>
+                  <div
+                    role="group"
+                    aria-label={t.filterModelsAria}
+                    className="inline-flex items-center gap-1 rounded-[6px] border border-[var(--border)] bg-[var(--surface)] p-0.5 overflow-x-auto max-w-full"
+                  >
+                    {(
+                      [
+                        ['all', t.filterAll],
+                        ['free', t.filterFree],
+                        ['paid', t.filterPaid],
+                        ['tools', t.filterTools],
+                      ] as const
+                    ).map(([id, label]) => (
+                      <button
+                        key={id}
+                        type="button"
+                        aria-pressed={modelFilter === id}
+                        onClick={() => setModelFilter(id)}
+                        className={`h-7 px-2.5 rounded-[6px] text-[12px] font-medium whitespace-nowrap cursor-pointer ${
+                          modelFilter === id
+                            ? 'bg-[var(--surface-2)] text-[var(--text)] border border-[var(--border)]'
+                            : 'text-[var(--text-muted)] hover:text-[var(--text)]'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <div className="flex items-center gap-3">
                   {(hiddenNonChatCount > 0 || showAllCatalogModels) && (
@@ -774,6 +805,7 @@ export function SettingsView({
                   <thead>
                     <tr className="border-b border-[var(--border)] text-[12px] text-[var(--text-muted)]">
                       <th scope="col" className="py-2.5 px-4 font-medium">Model</th>
+                      <th scope="col" className="py-2.5 px-3 font-medium">Creator</th>
                       <th scope="col" className="py-2.5 px-3 font-medium">Provider</th>
                       <th scope="col" className="py-2.5 px-3 font-medium">Tier</th>
                       <th scope="col" className="py-2.5 px-3 font-medium">Tool-calling</th>
@@ -784,34 +816,56 @@ export function SettingsView({
                   <tbody className="divide-y divide-[var(--border)]">
                     {filteredModels.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="py-6 px-4 text-center text-[13px] text-[var(--text-muted)]">
+                        <td colSpan={7} className="py-6 px-4 text-center text-[13px] text-[var(--text-muted)]">
                           {t.noModelsForFilter}
                         </td>
                       </tr>
                     ) : (
-                      filteredModels.map((m) => (
-                        <tr key={`${m.providerKeyId}::${m.id}`} className="hover:bg-[var(--surface-2)]">
-                          <td className="py-2 px-4">
-                            <div className="font-medium text-[var(--text)]">{m.name}</div>
-                            <div className="text-[12px] font-mono text-[var(--text-muted)]">{m.id}</div>
-                          </td>
-                          <td className="py-2 px-3">
-                            <ProviderBadge provider={m.provider} label={m.providerLabel} />
-                          </td>
-                          <td className="py-2 px-3">
-                            <TierBadge tier={m.tier} locale={user.locale} note={m.tierNote} />
-                          </td>
-                          <td className="py-2 px-3 text-[12px] text-[var(--text-muted)]">
-                            {m.toolCalling === 'yes' ? t.yes : m.toolCalling === 'no' ? t.no : t.unknown}
-                          </td>
-                          <td className="py-2 px-3 text-[12px] text-[var(--text-muted)]">
-                            {m.vision === 'yes' ? t.yes : m.vision === 'no' ? t.no : t.unknown}
-                          </td>
-                          <td className="py-2 px-4 text-right font-mono text-[12px] text-[var(--text-muted)] tabular-nums">
-                            {m.maxContext === 'unknown' ? t.unknown : formatCompactNumber(m.maxContext, user.locale)}
-                          </td>
-                        </tr>
-                      ))
+                      filteredModels.map((m) => {
+                        const identity =
+                          m.identity ??
+                          resolveModelIdentity({
+                            provider: m.provider,
+                            modelId: m.id,
+                            modelName: m.name,
+                          });
+                        return (
+                          <tr key={`${m.providerKeyId}::${m.id}`} className="hover:bg-[var(--surface-2)]">
+                            <td className="py-2.5 px-4">
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <span className="w-7 h-7 rounded-[6px] border border-[var(--border)] bg-[var(--surface-2)] flex items-center justify-center shrink-0">
+                                  <ModelCreatorLogo identity={identity} size={16} />
+                                </span>
+                                <div className="min-w-0">
+                                  <div className="font-medium text-[var(--text)] truncate">{m.name}</div>
+                                  <div className="text-[11px] font-mono text-[var(--text-muted)] truncate">{m.id}</div>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-3 text-[12px] text-[var(--text-muted)] whitespace-nowrap">
+                              <span className="text-[var(--text)]">{identity.modelCreatorName}</span>
+                              {identity.modelFamily && identity.modelFamily !== identity.modelCreatorName && (
+                                <span className="block text-[11px] text-[var(--text-muted)]">{identity.modelFamily}</span>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <ProviderBadge provider={m.provider} label={m.providerLabel} />
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <TierBadge tier={m.tier} locale={user.locale} note={m.tierNote} />
+                            </td>
+                            <td className="py-2.5 px-3 text-[12px] text-[var(--text-muted)]">
+                              {m.toolCalling === 'yes' ? t.yes : m.toolCalling === 'no' ? t.no : t.unknown}
+                            </td>
+                            <td className="py-2.5 px-3 text-[12px] text-[var(--text-muted)]">
+                              {m.vision === 'yes' ? t.yes : m.vision === 'no' ? t.no : t.unknown}
+                            </td>
+                            <td className="py-2.5 px-4 text-right font-mono text-[12px] text-[var(--text-muted)] tabular-nums">
+                              {m.maxContext === 'unknown' ? t.unknown : formatCompactNumber(m.maxContext, user.locale)}
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>

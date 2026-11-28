@@ -2313,10 +2313,23 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<ChatMess
           ? 'verified_pass'
           : 'not_verified';
 
+  const compiledPassed = passedChecks.some((c) => c.startsWith('build_project(') || c.startsWith('validate_project('));
+  const testsPassed = passedChecks.some((c) => c.startsWith('run_tests('));
+  const previewRunning = filesMutated && !projectRuntime.getLastError(projectId);
+  const runtimeVerified = verificationGateStatus === 'verified_pass' && (compiledPassed || testsPassed);
+
   emit('verification_gate', {
     status: verificationGateStatus,
     passedChecks,
     failedChecks,
+    stages: {
+      codeWritten: filesMutated,
+      compiled: compiledPassed,
+      testsPassed,
+      previewRunning,
+      runtimeVerified,
+      deployed: false,
+    },
   });
 
   const assistantMessageId = `msg_${crypto.randomUUID().slice(0, 10)}`;

@@ -403,7 +403,7 @@ describe('PostgreSQL Compatibility Layer & Dual-Mode Repositories', () => {
     assert.equal(mig2.alreadyApplied.length, POSTGRES_MIGRATIONS.length);
 
     const rolled = await rollbackLastPostgresMigration(pgClient, POSTGRES_MIGRATIONS);
-    assert.equal(rolled.rolledBack, '007_skills_system');
+    assert.equal(rolled.rolledBack, '008_skill_install_history');
 
     const tenantSchema = await pgClient.ensureTenantSchema('prj_alpha-1');
     assert.equal(tenantSchema, 'tenant_prj_alpha_1');

@@ -1,23 +1,39 @@
-import type { ProjectType } from '../../src/types';
+import type { ProjectType, SkillInstallHistoryItem, SkillProvenance, SkillQualitySummary } from '../../src/types';
+
+export type { SkillInstallHistoryItem, SkillProvenance, SkillQualitySummary };
 
 export type SkillCategory =
+  | 'frontend'
+  | 'backend'
   | 'development'
-  | 'debugging'
+  | 'architecture'
+  | 'database'
+  | 'api'
   | 'security'
   | 'testing'
-  | 'database'
+  | 'debugging'
   | 'devops'
-  | 'architecture'
+  | 'cloud'
+  | 'mobile'
+  | 'release'
+  | 'ai-engineering'
   | 'agents';
 
 export const SKILL_CATEGORIES: readonly SkillCategory[] = [
+  'frontend',
+  'backend',
   'development',
-  'debugging',
+  'architecture',
+  'database',
+  'api',
   'security',
   'testing',
-  'database',
+  'debugging',
   'devops',
-  'architecture',
+  'cloud',
+  'mobile',
+  'release',
+  'ai-engineering',
   'agents',
 ] as const;
 
@@ -40,6 +56,7 @@ export interface SkillManifest {
   category: SkillCategory;
   version: string;
   tags: string[];
+  frameworks?: string[];
   tools: string[];
   permissions: SkillPermission[];
   triggers: string[];
@@ -50,6 +67,8 @@ export interface SkillManifest {
   examples: string[];
   hasReferences: boolean;
   hasScripts: boolean;
+  provenance?: SkillProvenance;
+  quality?: SkillQualitySummary;
 }
 
 export interface SkillSections {

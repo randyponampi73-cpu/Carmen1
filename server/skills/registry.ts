@@ -289,10 +289,54 @@ function normalizeManifest(raw: unknown, category: SkillCategory): SkillManifest
         .map((p) => String(p || '').toUpperCase())
         .filter((p): p is SkillPermission => p !== 'ADMIN' && PERM_SET.has(p))
     : [];
+  const rawQuality = parsed.quality;
+  const quality =
+    rawQuality &&
+    typeof rawQuality === 'object' &&
+    typeof rawQuality.score === 'number' &&
+    (rawQuality.grade === 'A' || rawQuality.grade === 'B' || rawQuality.grade === 'C')
+      ? {
+          score: rawQuality.score,
+          grade: rawQuality.grade,
+          checksPassed: Number(rawQuality.checksPassed || 0),
+          checksTotal: Number(rawQuality.checksTotal || 0),
+          missingRecommendedSections: Array.isArray(rawQuality.missingRecommendedSections)
+            ? rawQuality.missingRecommendedSections.map(String)
+            : [],
+        }
+      : undefined;
+
+  const rawProv = parsed.provenance;
+  const provOrigin =
+    rawProv &&
+    typeof rawProv === 'object' &&
+    (rawProv.origin === 'carmen-builtin' ||
+      rawProv.origin === 'community-inspired' ||
+      rawProv.origin === 'user-created' ||
+      rawProv.origin === 'imported' ||
+      rawProv.origin === 'remote')
+      ? rawProv.origin
+      : undefined;
+  const provenance = provOrigin
+    ? {
+        origin: provOrigin,
+        ...(Array.isArray(rawProv?.sourceRepos) && rawProv.sourceRepos.length > 0
+          ? { sourceRepos: rawProv.sourceRepos.map(String) }
+          : {}),
+        ...(typeof rawProv?.license === 'string' && rawProv.license.trim()
+          ? { license: rawProv.license.trim() }
+          : {}),
+        ...(typeof rawProv?.researchedAt === 'string' && rawProv.researchedAt.trim()
+          ? { researchedAt: rawProv.researchedAt.trim() }
+          : {}),
+      }
+    : undefined;
+
   return {
     category: CATEGORY_SET.has(String(parsed.category || category)) ? (parsed.category as SkillCategory) : category,
     version: String(parsed.version || '1.0.0'),
     tags: Array.isArray(parsed.tags) ? parsed.tags.map(String) : [],
+    frameworks: Array.isArray(parsed.frameworks) ? parsed.frameworks.map(String) : [],
     tools: Array.isArray(parsed.tools) ? parsed.tools.map(String) : [],
     permissions: perms,
     triggers: Array.isArray(parsed.triggers) ? parsed.triggers.map(String) : [],
@@ -303,6 +347,8 @@ function normalizeManifest(raw: unknown, category: SkillCategory): SkillManifest
     examples: Array.isArray(parsed.examples) ? parsed.examples.map(String) : [],
     hasReferences: Boolean(parsed.hasReferences),
     hasScripts: Boolean(parsed.hasScripts),
+    ...(provenance ? { provenance } : {}),
+    ...(quality ? { quality } : {}),
   };
 }
 
@@ -371,8 +417,13 @@ export async function syncBuiltinSkillsAsync(options?: { rootDir?: string }): Pr
   let updated = 0;
 
   for (const pkg of scan.packages) {
-    const existing = await asyncDb.get<{ id: string; checksum: string; current_version: string }>(
-      `SELECT id, checksum, current_version FROM skills WHERE scope_key = 'system' AND slug = ?`,
+    const existing = await asyncDb.get<{
+      id: string;
+      checksum: string;
+      current_version: string;
+      manifest_json: unknown;
+    }>(
+      `SELECT id, checksum, current_version, manifest_json FROM skills WHERE scope_key = 'system' AND slug = ?`,
       pkg.slug
     );
 
@@ -416,7 +467,11 @@ export async function syncBuiltinSkillsAsync(options?: { rootDir?: string }): Pr
         );
       });
       synced += 1;
-    } else if (existing.checksum !== pkg.checksum || existing.current_version !== pkg.manifest.version) {
+    } else if (
+      existing.checksum !== pkg.checksum ||
+      existing.current_version !== pkg.manifest.version ||
+      !parseJsonColumn<Partial<SkillManifest>>(existing.manifest_json, {}).quality
+    ) {
       await asyncDb.transaction(async (tx) => {
         await tx.run(
           `UPDATE skills
@@ -514,7 +569,8 @@ export async function listSkillsForContext(params: {
         s.slug.toLowerCase().includes(needle) ||
         s.name.toLowerCase().includes(needle) ||
         s.description.toLowerCase().includes(needle) ||
-        s.manifest.tags.some((t) => t.toLowerCase().includes(needle))
+        s.manifest.tags.some((t) => t.toLowerCase().includes(needle)) ||
+        (s.manifest.frameworks || []).some((f) => f.toLowerCase().includes(needle))
     );
   }
 
@@ -615,6 +671,17 @@ export async function setUserSkillEnabled(
     enabled,
     JSON.stringify(pkg.approvedPermissions)
   );
+
+  await recordSkillInstallHistory({
+    userId,
+    skillId: pkg.id,
+    skillSlug: pkg.slug,
+    skillName: pkg.name,
+    action: enabled ? 'enable' : 'disable',
+    version: pkg.currentVersion,
+    source: pkg.source,
+    detail: enabled ? 'Diaktifkan untuk akun pengguna' : 'Dinonaktifkan untuk akun pengguna',
+  });
 
   const updated = await getSkillPackage(pkg.id, { userId });
   return updated;
@@ -1119,4 +1186,90 @@ export async function revokeSkillTrust(params: {
 
 export function getSkillPermissionSummary(skill: SkillMetadata): SkillPermission[] {
   return computeEffectivePermissions(skill);
+}
+
+export async function recordSkillInstallHistory(params: {
+  userId: string;
+  skillId: string;
+  skillSlug: string;
+  skillName: string;
+  action: 'install' | 'enable' | 'disable' | 'update' | 'import' | 'uninstall' | 'approve';
+  version: string;
+  source: string;
+  detail?: string | null;
+}): Promise<void> {
+  try {
+    const id = `shist_${crypto.randomUUID().slice(0, 12)}`;
+    await asyncDb.run(
+      `INSERT INTO skill_install_history (
+         id, user_id, skill_id, skill_slug, skill_name, action, version, source, detail
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id,
+      params.userId,
+      params.skillId,
+      params.skillSlug,
+      params.skillName,
+      params.action,
+      params.version,
+      params.source,
+      params.detail ?? null
+    );
+  } catch {
+    // Never block skill operation if history table is not yet migrated in ephemeral test DB
+  }
+}
+
+export async function listSkillInstallHistory(params: {
+  userId: string;
+  skillId?: string;
+  limit?: number;
+}): Promise<
+  Array<{
+    id: string;
+    skillId: string;
+    skillSlug: string;
+    skillName: string;
+    action: 'install' | 'enable' | 'disable' | 'update' | 'import' | 'uninstall' | 'approve';
+    version: string;
+    source: string;
+    detail: string | null;
+    createdAt: string;
+  }>
+> {
+  const limit = Math.min(100, Math.max(1, params.limit ?? 30));
+  try {
+    const rows = params.skillId
+      ? await asyncDb.all<Record<string, unknown>>(
+          `SELECT id, skill_id, skill_slug, skill_name, action, version, source, detail, created_at
+           FROM skill_install_history
+           WHERE user_id = ? AND skill_id = ?
+           ORDER BY created_at DESC
+           LIMIT ?`,
+          params.userId,
+          params.skillId,
+          limit
+        )
+      : await asyncDb.all<Record<string, unknown>>(
+          `SELECT id, skill_id, skill_slug, skill_name, action, version, source, detail, created_at
+           FROM skill_install_history
+           WHERE user_id = ?
+           ORDER BY created_at DESC
+           LIMIT ?`,
+          params.userId,
+          limit
+        );
+    return rows.map((r) => ({
+      id: String(r.id),
+      skillId: String(r.skill_id),
+      skillSlug: String(r.skill_slug),
+      skillName: String(r.skill_name),
+      action: String(r.action) as 'install' | 'enable' | 'disable' | 'update' | 'import' | 'uninstall' | 'approve',
+      version: String(r.version || '1.0.0'),
+      source: String(r.source || 'builtin'),
+      detail: r.detail ? String(r.detail) : null,
+      createdAt: String(r.created_at),
+    }));
+  } catch {
+    return [];
+  }
 }
